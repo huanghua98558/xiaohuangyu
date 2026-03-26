@@ -1,0 +1,2647 @@
+import { Router } from 'express'
+import adminController from '../controllers/adminController.js'
+import taskService from '../services/taskService.js'
+import taskTemplateService from '../services/taskTemplateService.js'
+import operationLogService from '../services/operationLogService.js'
+import walletService from '../services/walletService.js'
+import exposureService from '../services/exposureService.js'
+import onlineUserService from '../services/onlineUserService.js'
+import { authMiddleware, adminOnly } from '../middlewares/auth.js'
+import { success } from '../utils/response.js'
+import supabase from '../utils/supabaseToPrismaAdapter.js'
+import logger from '../utils/logger.js'
+import prisma from '../utils/prisma.js'
+import adminService from '../services/adminService.js'
+
+const router = Router()
+
+// 辅助函数：记录操作日志
+async function logOperation(req, action, targetType, targetId, targetName, oldValue, newValue, description) {
+  try {
+    // 获取管理员用户名
+    let adminName = 'admin'
+    if (req.userId) {
+      const { data: admin } = await supabase
+        .from('users')
+        .select('username')
+        .eq('id', req.userId)
+        .single()
+      adminName = admin?.username || 'admin'
+    }
+    
+    await operationLogService.log({
+      adminId: req.userId,
+      adminName,
+      action,
+      targetType,
+      targetId,
+      targetName,
+      oldValue,
+      newValue,
+      description,
+      ipAddress: req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress,
+      userAgent: req.headers['user-agent']
+    })
+  } catch (err) {
+    logger.error('记录操作日志失败:', err)
+  }
+}
+
+// 所有接口都需要管理员权限
+// 管理员登录（无需认证）
+router.post('/auth/login', async (req, res, next) => {
+  try {
+    const { username, password } = req.body
+    
+    if (!username || !password) {
+      return res.status(400).json({ code: 400, message: '用户名和密码不能为空', data: null })
+    }
+    
+    const result = await adminService.adminLogin(username, password)
+    success(res, result, '登录成功')
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 获取当前登录用户信息（需要认证）
+router.get('/auth/me', authMiddleware, async (req, res, next) => {
+  try {
+    const user = await adminService.getAdminById(req.userId)
+    success(res, user)
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.use(authMiddleware)
+router.use(adminOnly)
+
+// 统计数据
+router.get('/stats', adminController.getStats)
+
+// 趋势数据
+router.get('/stats/trend', async (req, res, next) => {
+  try {
+    const { days = 7 } = req.query
+    const trendData = await adminService.getTrendData(parseInt(days) || 7)
+    success(res, trendData)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 用户管理
+router.get('/users', adminController.getUsers)
+
+// 用户详情路由（内嵌，避免路由冲突）
+router.get('/users/:id', async (req, res, next) => {
+  const userId = req.params.id
+  try {
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', userId)
+      .single()
+    if (error || !user) return res.status(404).json({ code: 404, message: '用户不存在' })
+    
+    const [taskStats, pointStats] = await Promise.all([
+      supabase.from('claims').select('*', { count: 'exact', head: true }).eq('user_id', userId).then(r => ({ total: r.count || 0 })).catch(() => ({ total: 0 })),
+      supabase.from('records').select('points').eq('user_id', userId).then(r => {
+        const pts = (r.data || []).reduce((s, i) => s + (Number(i.points) || 0), 0)
+        return { earned: pts }
+      }).catch(() => ({ earned: 0 }))
+    ])
+    
+    success(res, {
+      ...user,
+      id: String(user.id),
+      taskStats,
+      pointStats
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+// 用户详情页子路由
+router.get('/users/:id/detail', async (req, res, next) => {
+  const userId = req.params.id
+  try {
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', userId)
+      .single()
+    if (error || !user) return res.status(404).json({ code: 404, message: '用户不存在' })
+    success(res, { ...user, id: String(user.id) })
+  } catch (err) { next(err) }
+})
+
+router.get('/users/:id/records', async (req, res, next) => {
+  const userId = req.params.id
+  const { page = 1, size = 20 } = req.query
+  try {
+    const offset = (parseInt(page) - 1) * parseInt(size)
+    const { data, count } = await supabase.from('records')
+      .select('*', { count: 'exact' })
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + parseInt(size) - 1)
+    success(res, { list: data || [], total: count || 0 })
+  } catch (err) {
+    success(res, { list: [], total: 0 })
+  }
+})
+
+router.get('/users/:id/claims', async (req, res, next) => {
+  const userId = req.params.id
+  const { page = 1, size = 20 } = req.query
+  try {
+    const offset = (parseInt(page) - 1) * parseInt(size)
+    const { data, count } = await supabase.from('claims')
+      .select('*, tasks(title, platform)', { count: 'exact' })
+      .eq('user_id', userId)
+      .order('claimed_at', { ascending: false })
+      .range(offset, offset + parseInt(size) - 1)
+    success(res, { list: data || [], total: count || 0 })
+  } catch (err) {
+    success(res, { list: [], total: 0 })
+  }
+})
+
+router.get('/users/:id/login-logs', async (req, res, next) => {
+  const userId = req.params.id
+  const { page = 1, size = 20 } = req.query
+  try {
+    const offset = (parseInt(page) - 1) * parseInt(size)
+    const { data, count } = await supabase.from('login_logs')
+      .select('*', { count: 'exact' })
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + parseInt(size) - 1)
+    success(res, { list: data || [], total: count || 0 })
+  } catch (err) {
+    success(res, { list: [], total: 0 })
+  }
+})
+
+
+
+// 更新用户状态 - 添加操作日志
+router.put('/users/:id/status', async (req, res, next) => {
+  try {
+    const userId = parseInt(req.params.id)
+    const { status } = req.body
+    
+    // 获取旧值
+    const { data: oldUser } = await supabase.from('users').select('status, username').eq('id', userId).single()
+    
+    const user = await adminService.updateUserStatus(userId, status)
+    
+    // 记录操作日志
+    await logOperation(req, 'update_status', 'user', userId, oldUser?.username || `用户${userId}`, oldUser?.status, status, `更新用户状态为 ${status}`)
+    
+    success(res, user, '更新成功')
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 更新用户等级 - 添加操作日志
+router.put('/users/:id/level', async (req, res, next) => {
+  try {
+    const userId = parseInt(req.params.id)
+    const { level } = req.body
+    
+    // 获取旧值
+    const { data: oldUser } = await supabase.from('users').select('level, username').eq('id', userId).single()
+    
+    const user = await adminService.updateUserLevel(userId, level)
+    
+    // 记录操作日志
+    await logOperation(req, 'update_level', 'user', userId, oldUser?.username || `用户${userId}`, oldUser?.level, level, `更新用户等级为 ${level}`)
+    
+    success(res, user, '更新成功')
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 更新用户角色 - 添加操作日志
+router.put('/users/:id/role', async (req, res, next) => {
+  try {
+    const userId = parseInt(req.params.id)
+    const { role } = req.body
+    
+    // 获取旧值
+    const { data: oldUser } = await supabase.from('users').select('role, username').eq('id', userId).single()
+    
+    const user = await adminService.updateUserRole(userId, role)
+    
+    // 记录操作日志
+    await logOperation(req, 'update_role', 'user', userId, oldUser?.username || `用户${userId}`, oldUser?.role, role, `更新用户角色为 ${role}`)
+    
+    logger.info(`管理员更新用户 ${userId} 角色为 ${role}`)
+    success(res, user, '更新成功')
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 调整用户积分 - 添加操作日志
+router.put('/users/:id/points', async (req, res, next) => {
+  try {
+    const userId = parseInt(req.params.id)
+    const { amount, reason } = req.body
+    const adminId = req.userId
+    
+    if (typeof amount !== 'number') {
+      return res.status(400).json({ code: 400, message: '积分变化值必须为数字', data: null })
+    }
+    
+    // 获取旧值
+    const { data: oldUser } = await supabase.from('users').select('points, username').eq('id', userId).single()
+    
+    const result = await adminService.updateUserPoints(userId, amount, reason, adminId)
+    
+    // 记录操作日志
+    await logOperation(req, 'update_points', 'user', userId, oldUser?.username || `用户${userId}`, oldUser?.points, oldUser?.points + amount, `调整积分: ${amount > 0 ? '+' : ''}${amount}，原因: ${reason || '无'}`)
+    
+    success(res, result, '积分调整成功')
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 调整用户余额 - 添加操作日志
+router.put('/users/:id/balance', async (req, res, next) => {
+  try {
+    const userId = parseInt(req.params.id)
+    const { amount, reason } = req.body
+    const adminId = req.userId
+    
+    if (typeof amount !== 'number') {
+      return res.status(400).json({ code: 400, message: '余额变化值必须为数字', data: null })
+    }
+    
+    // 获取旧值
+    const { data: oldUser } = await supabase.from('users').select('balance, username').eq('id', userId).single()
+    
+    const result = await adminService.updateUserBalance(userId, amount, reason, adminId)
+    
+    // 记录操作日志
+    await logOperation(req, 'update_balance', 'user', userId, oldUser?.username || `用户${userId}`, oldUser?.balance, oldUser?.balance + amount, `调整余额: ${amount > 0 ? '+' : ''}${amount}，原因: ${reason || '无'}`)
+    
+    success(res, result, '余额调整成功')
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 更新用户信息 - 添加操作日志
+router.put('/users/:id', async (req, res, next) => {
+  try {
+    const userId = parseInt(req.params.id)
+    const { username, phone, province, city } = req.body
+    
+    // 获取旧值
+    const { data: oldUser } = await supabase.from('users').select('username, phone, province, city').eq('id', userId).single()
+    
+    const updateData = {}
+    if (username !== undefined) updateData.username = username
+    if (phone !== undefined) updateData.phone = phone
+    if (province !== undefined) updateData.province = province
+    if (city !== undefined) updateData.city = city
+    
+    const { data: user, error } = await supabase
+      .from('users')
+      .update(updateData)
+      .eq('id', userId)
+      .select()
+      .single()
+    
+    if (error) {
+      return res.status(400).json({ code: 400, message: error.message, data: null })
+    }
+    
+    // 记录操作日志
+    await logOperation(req, 'update_info', 'user', userId, user?.username || `用户${userId}`, JSON.stringify(oldUser), JSON.stringify(updateData), `更新用户信息`)
+    
+    success(res, user, '更新成功')
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 修改用户密码 - 添加操作日志
+router.put('/users/:id/password', async (req, res, next) => {
+  try {
+    const userId = parseInt(req.params.id)
+    const { password } = req.body
+    
+    if (!password || password.length < 6) {
+      return res.status(400).json({ code: 400, message: '密码长度至少6位', data: null })
+    }
+    
+    // 获取用户信息
+    const { data: oldUser } = await supabase.from('users').select('username').eq('id', userId).single()
+    
+    // 导入密码哈希函数
+    const { hashPassword } = await import('../utils/password.js')
+    const passwordHash = await hashPassword(password)
+    
+    const { data: user, error } = await supabase
+      .from('users')
+      .update({ password_hash: passwordHash })
+      .eq('id', userId)
+      .select('id, username, phone, role, level, points, balance, status, created_at')
+      .single()
+    
+    if (error) {
+      return res.status(400).json({ code: 400, message: error.message, data: null })
+    }
+    
+    // 记录操作日志
+    await logOperation(req, 'update_password', 'user', userId, oldUser?.username || `用户${userId}`, '******', '******', `重置用户密码`)
+    
+    success(res, user, '密码修改成功')
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 角色管理
+router.get('/roles', adminController.getRoles)
+
+// 系统配置
+router.get('/configs', adminController.getSystemConfigs)
+router.put('/configs/:key', adminController.updateSystemConfig)
+
+// 任务管理
+router.get('/tasks', adminController.getTasks)
+
+// 创建任务 - 添加操作日志
+// 创建任务
+router.post("/tasks", adminController.createTask.bind(adminController))
+// 更新任务 - 添加操作日志
+router.put('/tasks/:id', async (req, res, next) => {
+  try {
+    const taskId = req.params.id
+    
+    // 获取旧值
+    const { data: oldTask } = await supabase.from('tasks').select('*').eq('id', taskId).single()
+    
+    await adminController.updateTask(req, res, next)
+    
+    // 记录操作日志
+    await logOperation(req, 'update', 'task', taskId, oldTask?.title || `任务${taskId}`, oldTask?.status, req.body.status, `更新任务`)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 删除任务 - 添加操作日志
+router.delete('/tasks/:id', async (req, res, next) => {
+  try {
+    const taskId = req.params.id
+    
+    // 获取旧值
+    const { data: oldTask } = await supabase.from('tasks').select('title, status').eq('id', taskId).single()
+    
+    await adminController.deleteTask(req, res, next)
+    
+    // 记录操作日志
+    await logOperation(req, 'delete', 'task', taskId, oldTask?.title || `任务${taskId}`, oldTask?.status, null, `删除任务: ${oldTask?.title}`)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 任务统计
+router.get('/tasks/overview', async (req, res, next) => {
+  try {
+    const { startDate, endDate, status, platform, completionStatus } = req.query
+    const overview = await taskService.getTasksOverview({
+      startDate: startDate || null,
+      endDate: endDate || null,
+      status: status || null,
+      platform: platform || null,
+      completionStatus: completionStatus || null
+    })
+    success(res, overview)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 今日统计
+router.get('/tasks/today-stats', async (req, res, next) => {
+  try {
+    const stats = await taskService.getTodayStats()
+    success(res, stats)
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.get('/tasks/with-stats', async (req, res, next) => {
+  try {
+    const { page = 1, size = 20, status, platform, sortField, sortOrder, completionStatus, startDate, endDate } = req.query
+    const result = await taskService.getTasksWithStats(parseInt(page), parseInt(size), {
+      status: status || null,
+      platform: platform || null,
+      sortField: sortField || null,
+      sortOrder: sortOrder || null,
+      completionStatus: completionStatus || null,
+      startDate: startDate || null,
+      endDate: endDate || null
+    })
+    success(res, result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.get('/tasks/:id/stats', async (req, res, next) => {
+  try {
+    const result = await taskService.getTaskStats(req.params.id)
+    success(res, result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 获取任务的领取列表
+router.get('/tasks/:id/claims', async (req, res, next) => {
+  try {
+    const { page = 1, size = 20, status } = req.query
+    const result = await taskService.getTaskClaims(req.params.id, {
+      page: parseInt(page),
+      size: parseInt(size),
+      status
+    })
+    success(res, result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 强制释放任务名额（管理员操作）
+router.post('/claims/:claimId/force-release', async (req, res, next) => {
+  try {
+    const { note } = req.body
+    const result = await taskService.forceReleaseClaim(
+      req.params.claimId,
+      req.adminId,
+      note || '管理员强制释放'
+    )
+    success(res, result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ============ 任务审核管理 ============
+
+// 获取任务审核统计
+router.get('/review/stats', async (req, res, next) => {
+  try {
+    const stats = await taskService.getReviewStats()
+    success(res, stats)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 获取待审核任务分组列表（按任务分组）
+router.get('/review/grouped', async (req, res, next) => {
+  try {
+    const { page = 1, size = 20 } = req.query
+    const result = await taskService.getPendingReviewGrouped(parseInt(page), parseInt(size))
+    success(res, result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 获取某个任务的所有提交
+router.get('/review/task/:taskId/claims', async (req, res, next) => {
+  try {
+    const { page = 1, size = 20, status } = req.query
+    const result = await taskService.getTaskClaims(
+      req.params.taskId,
+      parseInt(page),
+      parseInt(size),
+      status || null
+    )
+    success(res, result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 获取所有审核记录（支持按状态筛选）
+router.get('/review/all', async (req, res, next) => {
+  try {
+    const { page = 1, size = 20, status, taskId } = req.query
+    const result = await taskService.getAllReviewClaims(parseInt(page), parseInt(size), {
+      status: status || null,
+      taskId: taskId ? parseInt(taskId) : null
+    })
+    success(res, result)
+  } catch (err) {
+    if (err.message?.includes('BigInt') || err.code === 'P2010') {
+      success(res, { list: [], total: 0 })
+    } else {
+      next(err)
+    }
+  }
+})
+
+// 批量审核通过某个任务的所有待审核提交
+router.post('/review/task/:taskId/batch-approve', async (req, res, next) => {
+  try {
+    const { note = '' } = req.body
+    const result = await taskService.batchApproveTask(req.params.taskId, req.userId, note)
+    success(res, result, result.message)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 获取单个提交的审核记录
+router.get('/review/claim/:claimId/logs', async (req, res, next) => {
+  try {
+    const logs = await taskService.getTaskReviewLogs(req.params.claimId)
+    success(res, logs)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 获取单个提交的详情
+router.get('/review/claim/:claimId', async (req, res, next) => {
+  try {
+    const claim = await taskService.getClaimById(req.params.claimId)
+    success(res, claim)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ============ 提现审核管理 ============
+
+// 获取提现统计
+router.get('/withdrawal/stats', async (req, res, next) => {
+  try {
+    const stats = await walletService.getWithdrawalStats()
+    success(res, stats)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 获取所有提现记录（支持筛选）
+router.get('/withdrawal/list', async (req, res, next) => {
+  try {
+    const { page = 1, size = 20, status, startDate, endDate } = req.query
+    const result = await walletService.getAllWithdrawals(parseInt(page), parseInt(size), {
+      status,
+      startDate,
+      endDate
+    })
+    success(res, result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 获取单个提现的审核记录
+router.get('/withdrawal/:id/logs', async (req, res, next) => {
+  try {
+    const logs = await walletService.getWithdrawalReviewLogs(req.params.id)
+    success(res, logs)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 获取任务审核记录列表
+router.get('/review/logs', async (req, res, next) => {
+  try {
+    const { page = 1, size = 20, taskId, claimId, reviewerId, action } = req.query
+    const offset = (parseInt(page) - 1) * parseInt(size)
+    
+    // 构建查询条件 - 从 claims 表查询已审核的记录
+    let whereConditions = "c.status IN ('approved', 'rejected', 'done', 'image_rejected', 'link_rejected', 'image_approved', 'link_approved', 'released')"
+    if (taskId) whereConditions += ` AND c.task_id = ${parseInt(taskId)}`
+    if (claimId) whereConditions += ` AND c.id = ${parseInt(claimId)}`
+    
+    const countQuery = `SELECT COUNT(*) as total FROM claims c WHERE ${whereConditions}`
+    const dataQuery = `
+      SELECT c.id, c.user_id, c.task_id, c.status, c.screenshots, 
+             c.ai_review_status, c.ai_confidence, c.ai_reason, c.review_note,
+             c.claimed_at, c.submitted_at, c.reviewed_at, c.reviewer_id,
+             c.image_review_status, c.image_review_reason, 
+             c.link_review_status, c.link_review_reason,
+             c.reject_count, c.review_history,
+             u.username as reviewer_name,
+             t.title as task_title,
+             uu.username as user_name
+      FROM claims c
+      LEFT JOIN users u ON c.reviewer_id = u.id
+      LEFT JOIN tasks t ON c.task_id = t.id
+      LEFT JOIN users uu ON c.user_id = uu.id
+      WHERE ${whereConditions}
+      ORDER BY COALESCE(c.reviewed_at, c.submitted_at, c.claimed_at) DESC
+      LIMIT ${parseInt(size)} OFFSET ${offset}
+    `
+    
+    const [countResult, logs] = await Promise.all([
+      prisma.$queryRawUnsafe(countQuery),
+      prisma.$queryRawUnsafe(dataQuery)
+    ])
+    
+    success(res, {
+      list: logs.map(log => {
+        // 解析 review_history
+        let reviewHistory = log.review_history;
+        if (typeof reviewHistory === 'string') {
+          try {
+            reviewHistory = JSON.parse(reviewHistory);
+          } catch (e) {
+            reviewHistory = [];
+          }
+        }
+        
+        return {
+          id: log.id.toString(),
+          taskId: log.task_id ? log.task_id.toString() : null,
+          claimId: log.id.toString(),
+          reviewerId: log.reviewer_id ? log.reviewer_id.toString() : null,
+          reviewerName: log.reviewer_name,
+          userId: log.user_id ? log.user_id.toString() : null,
+          userName: log.user_name,
+          taskTitle: log.task_title,
+          action: log.status === 'approved' || log.status === 'done' ? 'approve' : 'reject',
+          status: log.status,
+          reason: log.review_note || log.ai_reason,
+          aiReviewStatus: log.ai_review_status,
+          aiConfidence: log.ai_confidence,
+          screenshots: log.screenshots,
+          image_review_status: log.image_review_status,
+          image_review_reason: log.image_review_reason,
+          link_review_status: log.link_review_status,
+          link_review_reason: log.link_review_reason,
+          reject_count: log.reject_count,
+          review_history: reviewHistory,
+          createdAt: log.reviewed_at || log.submitted_at || log.claimed_at,
+          reviewedAt: log.reviewed_at
+        };
+      }),
+      total: Number(countResult[0]?.total || 0),
+      page: parseInt(page),
+      size: parseInt(size)
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.get('/review/records', async (req, res, next) => {
+  try {
+    const { page = 1, size = 20, status } = req.query
+    const offset = (parseInt(page) - 1) * parseInt(size)
+    
+    // 构建查询条件
+    let statusCondition = "c.status IN ('approved', 'rejected', 'done', 'image_rejected', 'link_rejected')"
+    if (status && status !== 'all') {
+      statusCondition = `c.status = '${status}'`
+    }
+    
+    const countQuery = `SELECT COUNT(*) as total FROM claims c WHERE ${statusCondition}`
+    const dataQuery = `
+      SELECT c.id, c.user_id, c.task_id, c.status, c.screenshots, 
+             c.ai_review_status, c.ai_confidence, c.ai_reason, c.review_note,
+             c.claimed_at, c.submitted_at, c.reviewed_at,
+             u.username, t.title as task_title, t.reward
+      FROM claims c
+      LEFT JOIN users u ON c.user_id = u.id
+      LEFT JOIN tasks t ON c.task_id = t.id
+      WHERE ${statusCondition}
+      ORDER BY COALESCE(c.reviewed_at, c.submitted_at, c.claimed_at) DESC
+      LIMIT ${parseInt(size)} OFFSET ${offset}
+    `
+    
+    const [countResult, records] = await Promise.all([
+      prisma.$queryRawUnsafe(countQuery),
+      prisma.$queryRawUnsafe(dataQuery)
+    ])
+    
+    success(res, {
+      list: records.map(r => ({
+        id: r.id.toString(),
+        userId: r.user_id.toString(),
+        taskId: r.task_id.toString(),
+        username: r.username,
+        taskTitle: r.task_title,
+        status: r.status,
+        aiReviewStatus: r.ai_review_status,
+        aiConfidence: r.ai_confidence,
+        aiReason: r.ai_reason,
+        reviewNote: r.review_note,
+        reward: r.reward || 0,
+        screenshots: r.screenshots,
+        claimedAt: r.claimed_at,
+        submittedAt: r.submitted_at,
+        reviewedAt: r.reviewed_at
+      })),
+      total: Number(countResult[0]?.total || 0),
+      page: parseInt(page),
+      size: parseInt(size)
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.get('/withdrawal/review-logs', async (req, res, next) => {
+  try {
+    const { page = 1, size = 20, withdrawalId, reviewerId, action } = req.query
+    const result = await walletService.getWithdrawalReviewLogsList(parseInt(page), parseInt(size), {
+      withdrawalId: withdrawalId ? parseInt(withdrawalId) : null,
+      reviewerId: reviewerId ? parseInt(reviewerId) : null,
+      action
+    })
+    success(res, result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 获取提现历史记录（全量）
+router.get('/withdrawal/history', async (req, res, next) => {
+  try {
+    const { page = 1, size = 20, status, startDate, endDate, userId } = req.query
+    const result = await walletService.getWithdrawalHistory(parseInt(page), parseInt(size), {
+      status,
+      startDate,
+      endDate,
+      userId: userId ? parseInt(userId) : null
+    })
+    success(res, result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 导出提现记录为 CSV
+router.get('/withdrawal/export', async (req, res, next) => {
+  try {
+    const { status, startDate, endDate } = req.query
+    const csv = await walletService.exportWithdrawalsToCSV({ status, startDate, endDate })
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+    res.setHeader('Content-Disposition', 'attachment; filename=withdrawals.csv')
+    res.send('\ufeff' + csv) // BOM for Excel UTF-8
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ============ 曝光控制管理 ============
+
+// 获取曝光统计
+router.get('/exposure/stats', async (req, res, next) => {
+  try {
+    const { startDate, endDate } = req.query
+    const stats = await exposureService.getStats(startDate, endDate)
+    success(res, stats)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 获取曝光配置
+router.get('/exposure/config', async (req, res, next) => {
+  try {
+    const config = await exposureService.getConfig()
+    success(res, config)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 更新曝光配置
+router.put('/exposure/config', async (req, res, next) => {
+  try {
+    const config = await exposureService.updateConfig(req.body)
+    success(res, config, '配置更新成功')
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 获取任务曝光详情
+router.get('/exposure/tasks/:taskId', async (req, res, next) => {
+  try {
+    const detail = await exposureService.getTaskExposureDetail(req.params.taskId)
+    if (!detail) {
+      return res.status(404).json({ code: 404, message: '曝光记录不存在', data: null })
+    }
+    success(res, detail)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 获取曝光记录列表
+router.get('/exposure/list', async (req, res, next) => {
+  try {
+    const { page = 1, size = 20, status } = req.query
+    const offset = (parseInt(page) - 1) * parseInt(size)
+    const limit = parseInt(size)
+    
+    let statusCondition = ""
+    if (status) {
+      statusCondition = `AND e.status = '${status}'`
+    }
+    
+    // 请选择分数
+    const countResult = await prisma.$queryRawUnsafe(`
+      SELECT COUNT(*) as total FROM task_exposure e
+      WHERE 1=1 ${statusCondition}
+    `)
+    const total = Number(countResult[0]?.total || 0)
+    
+    // 迷頉择到窗口
+    const list = await prisma.$queryRawUnsafe(`
+      SELECT 
+        e.id, e.task_id, e.need_count, e.initial_exposure, e.current_exposure, 
+        e.max_exposure, e.accepted_count, e.submitted_count, e.status,
+        e.queue_position, e.unlocked_at, e.last_check_at, e.created_at, e.updated_at,
+        t.title, t.platform, t.action, t.reward, t.remain
+      FROM task_exposure e
+      LEFT JOIN tasks t ON e.task_id = t.id
+      WHERE 1=1 ${statusCondition}
+      ORDER BY e.created_at DESC
+      LIMIT ${limit} OFFSET ${offset}
+    `)
+    
+    // 正确数字状态化P
+    const formattedList = list.map(item => ({
+      ...item,
+      task: item.title ? {
+        title: item.title,
+        platform: item.platform,
+        action: item.action,
+        reward: item.reward,
+        remain: item.remain
+      } : null
+    }))
+    
+    success(res, {
+      list: formattedList,
+      total,
+      page: parseInt(page),
+      size: parseInt(size)
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 手动触发曝光检查
+router.post('/exposure/check', async (req, res, next) => {
+  try {
+    await exposureCron.triggerCheck()
+    success(res, { message: '曝光检查已触发' })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 手动解锁任务曝光
+router.post('/exposure/tasks/:taskId/unlock', async (req, res, next) => {
+  try {
+    const taskId = req.params.taskId
+    const result = await exposureService.unlockTask(taskId)
+    if (result) {
+      success(res, { taskId, unlocked: true }, '任务已解锁')
+    } else {
+      return res.status(400).json({ code: 400, message: '解锁失败', data: null })
+    }
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 获取任务队列状态
+router.get('/exposure/queue', async (req, res, next) => {
+  try {
+    const config = await exposureService.getConfig()
+    
+    // 使用 prisma 直接查询
+    const exposures = await prisma.$queryRawUnsafe(`
+      SELECT 
+        e.task_id, e.queue_position, e.unlocked_at, e.need_count, 
+        e.accepted_count, e.current_exposure, e.max_exposure, e.status,
+        t.id as task_id_val, t.title, t.platform, t.action, t.reward, t.remain, t.created_at as task_created_at
+      FROM task_exposure e
+      LEFT JOIN tasks t ON e.task_id = t.id
+      ORDER BY e.queue_position ASC
+    `)
+    
+    // 计算完成率
+    const queueList = (exposures || []).map(exp => {
+      const needCount = Number(exp.need_count || 0)
+      const acceptedCount = Number(exp.accepted_count || 0)
+      const currentExposure = Number(exp.current_exposure || 0)
+      const maxExposure = Number(exp.max_exposure || 0)
+      
+      const completionRate = needCount > 0 
+        ? (acceptedCount / needCount).toFixed(2)
+        : '0'
+      const exposureRate = maxExposure > 0 
+        ? (currentExposure / maxExposure).toFixed(2)
+        : '0' 
+      
+      return {
+        taskId: exp.task_id?.toString(),
+        queuePosition: exp.queue_position,
+        unlocked: !!exp.unlocked_at,
+        unlockedAt: exp.unlocked_at,
+        needCount: exp.need_count,
+        acceptedCount: exp.accepted_count || 0,
+        completionRate: parseFloat(completionRate),
+        currentExposure: exp.current_exposure || 0,
+        maxExposure: exp.max_exposure,
+        exposureRate: parseFloat(exposureRate),
+        status: exp.status,
+        task: {
+          id: exp.task_id_val?.toString(),
+          title: exp.title,
+          platform: exp.platform,
+          action: exp.action,
+          reward: Number(exp.reward || 0),
+          remain: Number(exp.remain || 0),
+          createdAt: exp.task_created_at
+        }
+      }
+    })
+    
+    success(res, {
+      exposureMode: config.exposureMode,
+      sequentialThreshold: config.sequentialThreshold,
+      exposureWindow: config.exposureWindow,
+      queue: queueList
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 初始化现有任务的曝光记录
+router.post('/exposure/init', async (req, res, next) => {
+  try {
+    const count = await exposureService.initExistingTasks()
+    success(res, { count, message: `已初始化 ${count} 个任务的曝光记录` })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 重新计算队列位置
+router.post('/exposure/recalculate-queue', async (req, res, next) => {
+  try {
+    const count = await exposureService.recalculateQueuePositions()
+    success(res, { count, message: `已重新计算 ${count} 个任务的队列位置` })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ============ 任务模板管理 ============
+
+// 获取任务模板列表
+router.get('/templates', async (req, res, next) => {
+  try {
+    const { page = 1, size = 20, platform } = req.query
+    const result = await taskTemplateService.getTemplates(parseInt(page), parseInt(size), {
+      platform: platform || null
+    })
+    success(res, result)
+  } catch (err) {
+    success(res, { list: [], total: 0, page: 1, size: 20 })
+  }
+})
+
+// 获取单个模板
+router.get('/templates/:id', async (req, res, next) => {
+  try {
+    const template = await taskTemplateService.getTemplate(req.params.id)
+    success(res, template)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 创建任务模板
+router.post('/templates', async (req, res, next) => {
+  try {
+    const template = await taskTemplateService.createTemplate(req.body)
+    success(res, template)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 更新任务模板
+router.put('/templates/:id', async (req, res, next) => {
+  try {
+    const template = await taskTemplateService.updateTemplate(req.params.id, req.body)
+    success(res, template)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 删除任务模板
+router.delete('/templates/:id', async (req, res, next) => {
+  try {
+    await taskTemplateService.deleteTemplate(req.params.id)
+    success(res, { message: '删除成功' })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 使用模板创建任务
+router.post('/templates/:id/use', async (req, res, next) => {
+  try {
+    const { title, remain } = req.body
+    const task = await taskTemplateService.useTemplateToCreateTask(
+      req.params.id,
+      { title, remain: remain || 100 }
+    )
+    success(res, task)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ============ 操作日志管理 ============
+
+// 获取操作日志列表
+router.get('/logs', async (req, res, next) => {
+  try {
+    const { page = 1, size = 20, adminId, action, targetType, startDate, endDate } = req.query
+    const result = await operationLogService.getLogs(parseInt(page), parseInt(size), {
+      adminId: adminId ? parseInt(adminId) : null,
+      action: action || null,
+      targetType: targetType || null,
+      startDate: startDate || null,
+      endDate: endDate || null
+    })
+    success(res, result)
+  } catch (err) {
+    success(res, { list: [], total: 0, page: 1, size: 20 })
+  }
+})
+
+// 获取特定目标的操作日志
+router.get('/logs/target/:targetType/:targetId', async (req, res, next) => {
+  try {
+    const { page = 1, size = 20 } = req.query
+    const result = await operationLogService.getTargetLogs(
+      req.params.targetType,
+      parseInt(req.params.targetId),
+      parseInt(page),
+      parseInt(size)
+    )
+    success(res, result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 获取操作日志统计
+router.get('/logs/stats', async (req, res, next) => {
+  try {
+    const { days = 7 } = req.query
+    const stats = await operationLogService.getActionStats(parseInt(days))
+    success(res, stats)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ============ 数据导出 ============
+
+
+// 导出用户数据
+router.get('/export/users', async (req, res, next) => {
+  try {
+    const { role, level, status } = req.query
+    const csv = await adminService.exportUsers({
+      role: role || null,
+      level: level || null,
+      status: status !== undefined ? status === 'true' : undefined
+    })
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+    res.setHeader('Content-Disposition', 'attachment; filename=users.csv')
+    res.send('\ufeff' + csv) // BOM for Excel UTF-8
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 导出任务数据
+router.get('/export/tasks', async (req, res, next) => {
+  try {
+    const { status, platform, startDate, endDate } = req.query
+    const csv = await adminService.exportTasks({
+      status: status || null,
+      platform: platform || null,
+      startDate: startDate || null,
+      endDate: endDate || null
+    })
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+    res.setHeader('Content-Disposition', 'attachment; filename=tasks.csv')
+    res.send('\ufeff' + csv)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 导出审核记录
+router.get('/export/reviews', async (req, res, next) => {
+  try {
+    const { status, startDate, endDate } = req.query
+    const csv = await adminService.exportReviewClaims({
+      status: status || null,
+      startDate: startDate || null,
+      endDate: endDate || null
+    })
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+    res.setHeader('Content-Disposition', 'attachment; filename=reviews.csv')
+    res.send('\ufeff' + csv)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ============ 追溯查询接口 ============
+
+// 获取任务完整追溯信息
+router.get('/trace/task/:taskId', async (req, res, next) => {
+  try {
+    const taskId = req.params.taskId
+    const trace = await operationLogService.getTaskTrace(taskId)
+    success(res, trace)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 获取任务快照历史
+router.get('/trace/task/:taskId/snapshots', async (req, res, next) => {
+  try {
+    const taskId = req.params.taskId
+    const { page = 1, size = 20 } = req.query
+    const taskSnapshotService = (await import('../services/taskSnapshotService.js')).default
+    const result = await taskSnapshotService.getTaskSnapshots(taskId, parseInt(page), parseInt(size))
+    success(res, result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 获取任务时间线
+router.get('/trace/task/:taskId/timeline', async (req, res, next) => {
+  try {
+    const taskId = req.params.taskId
+    const taskSnapshotService = (await import('../services/taskSnapshotService.js')).default
+    const timeline = await taskSnapshotService.getTaskTimeline(taskId)
+    success(res, timeline)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 对比两个版本
+router.get('/trace/task/:taskId/compare', async (req, res, next) => {
+  try {
+    const taskId = req.params.taskId
+    const { version1, version2 } = req.query
+    if (!version1 || !version2) {
+      return error(res, '请提供要对比的版本ID')
+    }
+    const taskSnapshotService = (await import('../services/taskSnapshotService.js')).default
+    const result = await taskSnapshotService.compareSnapshots(taskId, parseInt(version1), parseInt(version2))
+    success(res, result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 验证日志链完整性
+router.get('/trace/verify-chain', async (req, res, next) => {
+  try {
+    const result = await operationLogService.verifyChain()
+    success(res, result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ============ 统计分析接口 ============
+
+// 审核员绩效统计
+router.get('/stats/reviewer-performance', async (req, res, next) => {
+  try {
+    const { days = 7 } = req.query
+    const startDate = new Date()
+    startDate.setDate(startDate.getDate() - parseInt(days))
+    
+    // 获取审核记录
+    const { data: claims } = await supabase
+      .from('claims')
+      .select('reviewer_id, status, reviewed_at')
+      .in('status', ['done', 'rejected'])
+      .gte('reviewed_at', startDate.toISOString())
+    
+    // 获取审核员信息
+    const reviewerIds = [...new Set((claims || []).map(c => c.reviewer_id).filter(Boolean))]
+    const { data: reviewers } = await supabase
+      .from('users')
+      .select('id, username')
+      .in('id', reviewerIds)
+    
+    // 统计每个审核员的数据
+    const stats = {}
+    ;(claims || []).forEach(c => {
+      if (!c.reviewer_id) return
+      if (!stats[c.reviewer_id]) {
+        stats[c.reviewer_id] = {
+          reviewer_id: c.reviewer_id,
+          total: 0,
+          approved: 0,
+          rejected: 0
+        }
+      }
+      stats[c.reviewer_id].total++
+      if (c.status === 'done') stats[c.reviewer_id].approved++
+      if (c.status === 'rejected') stats[c.reviewer_id].rejected++
+    })
+    
+    // 合并审核员信息
+    const result = Object.values(stats).map(s => {
+      const reviewer = reviewers?.find(r => r.id === s.reviewer_id)
+      return {
+        ...s,
+        username: reviewer?.username || '未知',
+        approvalRate: s.total > 0 ? Math.round(s.approved / s.total * 100) : 0
+      }
+    }).sort((a, b) => b.total - a.total)
+    
+    success(res, { list: result, days: parseInt(days) })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 发布者任务质量统计
+router.get('/stats/publisher-quality', async (req, res, next) => {
+  try {
+    const { days = 30 } = req.query
+    const startDate = new Date()
+    startDate.setDate(startDate.getDate() - parseInt(days))
+    
+    // 获取任务
+    const { data: tasks } = await supabase
+      .from('tasks')
+      .select('id, title, publisher_id, status, created_at, need_count, remain')
+      .gte('created_at', startDate.toISOString())
+    
+    // 获取发布者信息
+    const publisherIds = [...new Set((tasks || []).map(t => t.publisher_id).filter(Boolean))]
+    const { data: publishers } = await supabase
+      .from('users')
+      .select('id, username')
+      .in('id', publisherIds)
+    
+    // 获取每个任务的领取统计
+    const taskIds = (tasks || []).map(t => t.id)
+    const { data: claims } = await supabase
+      .from('claims')
+      .select('task_id, status')
+      .in('task_id', taskIds)
+    
+    // 统计任务领取情况
+    const taskClaims = {}
+    ;(claims || []).forEach(c => {
+      if (!taskClaims[c.task_id]) {
+        taskClaims[c.task_id] = { total: 0, done: 0, pending: 0, rejected: 0 }
+      }
+      taskClaims[c.task_id].total++
+      if (c.status === 'done') taskClaims[c.task_id].done++
+      if (c.status === 'submitted') taskClaims[c.task_id].pending++
+      if (c.status === 'rejected') taskClaims[c.task_id].rejected++
+    })
+    
+    // 按发布者统计
+    const stats = {}
+    ;(tasks || []).forEach(t => {
+      if (!t.publisher_id) return
+      if (!stats[t.publisher_id]) {
+        stats[t.publisher_id] = {
+          publisher_id: t.publisher_id,
+          tasks_count: 0,
+          total_claims: 0,
+          done_claims: 0,
+          rejected_claims: 0,
+          completed_tasks: 0
+        }
+      }
+      stats[t.publisher_id].tasks_count++
+      const tc = taskClaims[t.id] || { total: 0, done: 0, rejected: 0 }
+      stats[t.publisher_id].total_claims += tc.total
+      stats[t.publisher_id].done_claims += tc.done
+      stats[t.publisher_id].rejected_claims += tc.rejected
+      if (t.status === 'completed') stats[t.publisher_id].completed_tasks++
+    })
+    
+    // 合并发布者信息
+    const result = Object.values(stats).map(s => {
+      const publisher = publishers?.find(p => p.id === s.publisher_id)
+      return {
+        ...s,
+        username: publisher?.username || '未知',
+        completionRate: s.tasks_count > 0 ? Math.round(s.completed_tasks / s.tasks_count * 100) : 0,
+        approvalRate: s.done_claims > 0 ? Math.round(s.done_claims / (s.done_claims + s.rejected_claims) * 100) : 0
+      }
+    }).sort((a, b) => b.tasks_count - a.tasks_count)
+    
+    success(res, { list: result, days: parseInt(days) })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ============ 告警管理 ============
+
+// 获取告警列表
+router.get('/alerts', async (req, res, next) => {
+  try {
+    const { page = 1, size = 20, isHandled, alertLevel, alertType } = req.query
+    const result = await operationLogService.getAlerts(parseInt(page), parseInt(size), {
+      isHandled: isHandled !== undefined ? isHandled === 'true' : undefined,
+      alertLevel: alertLevel || null,
+      alertType: alertType || null
+    })
+    success(res, result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 处理告警
+router.post('/alerts/:id/handle', async (req, res, next) => {
+  try {
+    const alertId = req.params.id
+    const result = await operationLogService.handleAlert(alertId, req.userId)
+    success(res, result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ============ 登录日志 ============
+
+import loginLogService from '../services/loginLogService.js'
+import systemLogService from '../services/systemLogService.js'
+
+// 获取登录日志
+router.get('/login-logs', async (req, res, next) => {
+  try {
+    const { page = 1, size = 20, userId, username, loginStatus, startDate, endDate } = req.query
+    const result = await loginLogService.getLogs(parseInt(page), parseInt(size), {
+      userId: userId ? parseInt(userId) : null,
+      username: username || null,
+      loginStatus: loginStatus || null,
+      startDate: startDate || null,
+      endDate: endDate || null
+    })
+    success(res, result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 获取用户登录统计
+router.get('/login-logs/stats/:userId', async (req, res, next) => {
+  try {
+    const userId = parseInt(req.params.userId)
+    const { days = 30 } = req.query
+    const result = await loginLogService.getUserLoginStats(userId, parseInt(days))
+    success(res, result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ============ 用户曝光管理 ============
+
+// 设置用户白名单
+router.post('/users/:id/whitelist', async (req, res, next) => {
+  try {
+    const userId = parseInt(req.params.id)
+    const { isWhitelist = true } = req.body
+    
+    // 获取用户信息
+    const { data: oldUser } = await supabase.from('users').select('username, is_whitelist').eq('id', userId).single()
+    
+    const result = await exposureService.setUserWhitelist(userId, isWhitelist)
+    
+    if (result) {
+      // 记录操作日志
+      await logOperation(
+        req,
+        'update_whitelist',
+        'user',
+        userId,
+        oldUser?.username || `用户${userId}`,
+        oldUser?.is_whitelist ? '在白名单' : '不在白名单',
+        isWhitelist ? '在白名单' : '不在白名单',
+        `${isWhitelist ? '加入' : '移出'}白名单`
+      )
+      
+      success(res, { userId, isWhitelist }, `已${isWhitelist ? '加入' : '移出'}白名单`)
+    } else {
+      return res.status(400).json({ code: 400, message: '操作失败', data: null })
+    }
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 设置用户黑名单
+router.post('/users/:id/blacklist', async (req, res, next) => {
+  try {
+    const userId = parseInt(req.params.id)
+    const { isBlacklist = true } = req.body
+    
+    // 获取用户信息
+    const { data: oldUser } = await supabase.from('users').select('username, is_blacklist').eq('id', userId).single()
+    
+    const result = await exposureService.setUserBlacklist(userId, isBlacklist)
+    
+    if (result) {
+      // 记录操作日志
+      await logOperation(
+        req,
+        'update_blacklist',
+        'user',
+        userId,
+        oldUser?.username || `用户${userId}`,
+        oldUser?.is_blacklist ? '在黑名单' : '不在黑名单',
+        isBlacklist ? '在黑名单' : '不在黑名单',
+        `${isBlacklist ? '加入' : '移出'}黑名单`
+      )
+      
+      success(res, { userId, isBlacklist }, `已${isBlacklist ? '加入' : '移出'}黑名单`)
+    } else {
+      return res.status(400).json({ code: 400, message: '操作失败', data: null })
+    }
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 获取白名单用户列表
+router.get('/whitelist', async (req, res, next) => {
+  try {
+    const { page = 1, size = 20 } = req.query
+    const offset = (parseInt(page) - 1) * parseInt(size)
+    
+    const { data, count, error } = await supabase
+      .from('users')
+      .select('id, username, phone, exposure_level, exposure_priority, total_tasks, total_approved_tasks, created_at', { count: 'exact' })
+      .eq('is_whitelist', true)
+      .order('exposure_priority', { ascending: false })
+      .range(offset, offset + parseInt(size) - 1)
+    
+    if (error) throw error
+    
+    success(res, {
+      list: data || [],
+      total: count || 0,
+      page: parseInt(page),
+      size: parseInt(size)
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 获取黑名单用户列表
+router.get('/blacklist', async (req, res, next) => {
+  try {
+    const { page = 1, size = 20 } = req.query
+    const offset = (parseInt(page) - 1) * parseInt(size)
+    
+    const { data, count, error } = await supabase
+      .from('users')
+      .select('id, username, phone, exposure_level, exposure_priority, total_tasks, total_approved_tasks, created_at', { count: 'exact' })
+      .eq('is_blacklist', true)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + parseInt(size) - 1)
+    
+    if (error) throw error
+    
+    success(res, {
+      list: data || [],
+      total: count || 0,
+      page: parseInt(page),
+      size: parseInt(size)
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 批量设置用户曝光等级
+router.post('/users/exposure-level/batch', async (req, res, next) => {
+  try {
+    const { userIds, exposureLevel } = req.body
+    
+    if (!Array.isArray(userIds) || userIds.length === 0) {
+      return res.status(400).json({ code: 400, message: '请提供用户ID列表', data: null })
+    }
+    
+    if (![1, 2, 3, 4].includes(exposureLevel)) {
+      return res.status(400).json({ code: 400, message: '曝光等级必须是1-4', data: null })
+    }
+    
+    const { data, error } = await supabase
+      .from('users')
+      .update({ 
+        exposure_level: exposureLevel,
+        updated_at: new Date().toISOString()
+      })
+      .in('id', userIds)
+      .select('id, username, exposure_level')
+    
+    if (error) throw error
+    
+    // 记录操作日志
+    await logOperation(
+      req,
+      'batch_update_exposure_level',
+      'user',
+      userIds.join(','),
+      `${userIds.length}个用户`,
+      null,
+      exposureLevel,
+      `批量更新${userIds.length}个用户曝光等级为${exposureLevel}`
+    )
+    
+    success(res, { count: data?.length || 0, users: data }, '批量更新成功')
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 获取用户曝光等级统计
+router.get('/users/exposure-level/stats', async (req, res, next) => {
+  try {
+    const { data, error } = await supabase
+      .from('users')
+      .select('exposure_level, is_whitelist, is_blacklist, status')
+    
+    if (error) throw error
+    
+    const stats = {
+      total: 0,
+      whitelist: 0,
+      blacklist: 0,
+      levels: {
+        1: 0, // 新手
+        2: 0, // 活跃
+        3: 0, // 高活跃
+        4: 0  // 核心
+      }
+    }
+    
+    ;(data || []).forEach(user => {
+      // 只统计活跃用户（status = 1 表示正常）
+      if (user.status !== 1 && user.status !== 'active') return
+      
+      stats.total++
+      if (user.is_whitelist) stats.whitelist++
+      if (user.is_blacklist) stats.blacklist++
+      if (user.exposure_level && stats.levels[user.exposure_level] !== undefined) {
+        stats.levels[user.exposure_level]++
+      }
+    })
+    
+    success(res, stats)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 获取用户优先级详情
+router.get('/users/:id/priority', async (req, res, next) => {
+  try {
+    const userId = parseInt(req.params.id)
+    
+    // 获取用户信息
+    const { data: user, error } = await supabase
+      .from('users')
+      .select(`
+        id,
+        username,
+        total_tasks,
+        total_approved_tasks,
+        exposure_level,
+        exposure_priority,
+        is_whitelist,
+        is_blacklist,
+        avg_submit_time,
+        last_task_date,
+        created_at
+      `)
+      .eq('id', userId)
+      .single()
+    
+    if (error || !user) {
+      return res.status(404).json({ code: 404, message: '用户不存在', data: null })
+    }
+    
+    // 计算优先级分数
+    const priority = await exposureService.calculateTaskPriority(userId)
+    
+    // 获取动态并发限制
+    const concurrencyLimit = await exposureService.getUserDynamicConcurrency(userId)
+    
+    const result = {
+      ...user,
+      calculatedPriority: priority,
+      concurrencyLimit,
+      completionRate: user.total_tasks > 0 
+        ? ((user.total_approved_tasks / user.total_tasks) * 100).toFixed(2) + '%'
+        : '0%',
+      levelName: {
+        1: '新手用户',
+        2: '活跃用户',
+        3: '高活跃用户',
+        4: '核心用户'
+      }[user.exposure_level] || '未知'
+    }
+    
+    success(res, result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ============ V2.0 曝光系统管理 ============
+
+// 获取供需统计
+router.get('/exposure/supply-demand', async (req, res, next) => {
+  try {
+    const stats = await exposureService.getSupplyDemandStats()
+    success(res, stats)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 获取在线用户统计
+router.get('/exposure/online-stats', async (req, res, next) => {
+  try {
+    const stats = await onlineUserService.getGlobalOnlineStats()
+    success(res, stats)
+  } catch (err) {
+    next(err)
+  }
+})
+// 获取24小时趋势数据
+router.get('/exposure/trend', async (req, res, next) => {
+  try {
+    const trendData = []
+    const now = new Date()
+    
+    // 获取过去24小时的数据
+    for (let i = 23; i >= 0; i--) {
+      const hourStart = new Date(now.getTime() - i * 60 * 60 * 1000)
+      hourStart.setMinutes(0, 0, 0)
+      const hourEnd = new Date(hourStart.getTime() + 60 * 60 * 1000)
+      
+      // 并行查询该小时的数据
+      const [claimsResult, exposuresResult] = await Promise.all([
+        // 该小时的领取数
+        supabase
+          .from('claims')
+          .select('*', { count: 'exact', head: true })
+          .gte('claimed_at', hourStart.toISOString())
+          .lt('claimed_at', hourEnd.toISOString()),
+        // 该小时的曝光数
+        supabase
+          .from('task_view_records')
+          .select('*', { count: 'exact', head: true })
+          .gte('created_at', hourStart.toISOString())
+          .lt('created_at', hourEnd.toISOString())
+      ])
+      
+      trendData.push({
+        time: `${hourStart.getHours()}:00`,
+        hour: hourStart.getHours(),
+        date: hourStart.toISOString().split('T')[0],
+        onlineUsers: 0, // 需要额外的在线用户历史统计
+        claims: claimsResult.count || 0,
+        exposures: exposuresResult.count || 0
+      })
+    }
+    
+    success(res, trendData)
+  } catch (err) {
+    next(err)
+  }
+})
+
+
+
+// 获取在线用户快照
+router.get('/exposure/online-snapshot', async (req, res, next) => {
+  try {
+    const snapshot = await onlineUserService.getOnlineUsersSnapshot()
+    success(res, {
+      total: snapshot.length,
+      users: snapshot
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 更新城市曝光限制
+router.put('/exposure/city-limit', async (req, res, next) => {
+  try {
+    const { limit } = req.body
+    if (!limit || limit < 1 || limit > 20) {
+      return res.status(400).json({ code: 400, message: '限制值必须在1-20之间', data: null })
+    }
+    
+    const result = await exposureService.updateCityExposureLimit(limit)
+    if (result) {
+      // 记录操作日志
+      await logOperation(
+        req,
+        'update_city_exposure_limit',
+        'system',
+        0,
+        '城市曝光限制',
+        null,
+        limit,
+        `更新城市曝光限制为${limit}`
+      )
+      
+      success(res, { limit }, '城市曝光限制更新成功')
+    } else {
+      return res.status(500).json({ code: 500, message: '更新失败', data: null })
+    }
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 获取用户曝光详情
+router.get('/exposure/user/:userId', async (req, res, next) => {
+  try {
+    const userId = parseInt(req.params.userId)
+    const stats = await exposureService.getUserExposureStats(userId)
+    const onlineInfo = await onlineUserService.getUserOnlineInfoWithExposure(userId)
+    
+    success(res, {
+      stats,
+      onlineInfo
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 获取任务曝光详情
+router.get('/exposure/task/:taskId', async (req, res, next) => {
+  try {
+    const taskId = req.params.taskId
+    const detail = await exposureService.getTaskExposureDetail(taskId)
+    success(res, detail)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 获取任务动态容量
+router.get('/exposure/task/:taskId/capacity', async (req, res, next) => {
+  try {
+    const taskId = req.params.taskId
+    const capacity = await exposureService.calculateDynamicCapacity(taskId)
+    success(res, capacity)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 刷新统计
+router.post('/exposure/refresh-stats', async (req, res, next) => {
+  try {
+    const stats = await onlineUserService.refreshGlobalStats()
+    success(res, stats, '统计已刷新')
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 触发曝光检查
+router.post('/exposure/trigger/check', async (req, res, next) => {
+  try {
+    const exposureCron = (await import('../services/exposureCron.js')).default
+    await exposureCron.triggerCheck()
+    success(res, null, '曝光检查已触发')
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 触发离线缓冲检查
+router.post('/exposure/trigger/offline-buffer', async (req, res, next) => {
+  try {
+    const exposureCron = (await import('../services/exposureCron.js')).default
+    await exposureCron.triggerOfflineBufferCheck()
+    success(res, null, '离线缓冲检查已触发')
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 触发质量评分计算
+router.post('/exposure/trigger/quality-score', async (req, res, next) => {
+  try {
+    const exposureCron = (await import('../services/exposureCron.js')).default
+    await exposureCron.triggerQualityScoreCalculation()
+    success(res, null, '质量评分计算已触发')
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 初始化现有任务曝光记录
+router.post('/exposure/init-existing-tasks', async (req, res, next) => {
+  try {
+    const count = await exposureService.initExistingTasks()
+    success(res, { count }, `已初始化 ${count} 个任务的曝光记录`)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ============ 任务领取配置管理 ============
+
+import levelService from '../services/levelService.js'
+
+// 获取任务领取配置汇总
+router.get('/task-claim-config', async (req, res, next) => {
+  try {
+    // 获取等级配置
+    const levels = await levelService.getLevelConfigs()
+    
+    // 获取系统配置
+    const systemConfig = await levelService.getSystemConfig()
+    
+    // 获取曝光配置
+    const { data: exposureConfig } = await supabase
+      .from('exposure_config')
+      .select('*')
+      .limit(1)
+      .single()
+    
+    const result = {
+      levels: levels.map(l => ({
+        level: l.level,
+        name: l.name,
+        icon: l.icon,
+        coefficient: l.coefficient,
+        minTasks: l.min_tasks,
+        minPoints: l.min_points,
+        minPassRate: l.min_pass_rate,
+        concurrentTasks: l.concurrent_tasks,
+        prioritySupport: l.priority_support,
+        isEnabled: l.is_enabled,
+        // V2.0 新增字段
+        exposureLimit: l.exposure_limit || 10,
+        regularExposureQuota: l.regular_exposure_quota || 7,
+        levelWeight: l.level_weight || 1
+      })),
+      system: {
+        defaultTimeLimitMinutes: parseInt(systemConfig.defaultTimeLimitMinutes || '10'),
+        maxConcurrentPerUser: parseInt(systemConfig.maxConcurrentPerUser || '5'),
+        cityLimitPerTask: parseInt(systemConfig.cityLimitPerTask || '1'),
+        provinceLimitPerTask: parseInt(systemConfig.provinceLimitPerTask || '4'),
+        pointsToYuan: parseInt(systemConfig.pointsToYuan || '10'),
+        minWithdrawAmount: parseInt(systemConfig.minWithdrawAmount || '10')
+      },
+      exposure: exposureConfig ? {
+        initialCoefficient: exposureConfig.initial_coefficient,
+        initialMinExtra: exposureConfig.initial_min_extra,
+        initialMaxExtra: exposureConfig.initial_max_extra,
+        maxCoefficient: exposureConfig.max_coefficient,
+        checkIntervalMinutes: exposureConfig.check_interval_minutes,
+        addRatioHigh: exposureConfig.add_ratio_high,
+        addRatioMid: exposureConfig.add_ratio_mid,
+        addRatioLow: exposureConfig.add_ratio_low,
+        rateThresholdHigh: exposureConfig.rate_threshold_high,
+        rateThresholdMid: exposureConfig.rate_threshold_mid,
+        rateThresholdLow: exposureConfig.rate_threshold_low,
+        exposureMode: exposureConfig.exposure_mode,
+        sequentialThreshold: exposureConfig.sequential_threshold,
+        exposureWindow: exposureConfig.exposure_window,
+        // V2.0 新增字段
+        cityExposureLimit: exposureConfig.city_exposure_limit || 3,
+        reservedExposureQuota: exposureConfig.reserved_exposure_quota || 3,
+        heartbeatTimeout: exposureConfig.heartbeat_timeout || 120,
+        offlineBufferTime: exposureConfig.offline_buffer_time || 300,
+        exposureAllocationInterval: exposureConfig.exposure_allocation_interval || 300,
+        priorityMode: exposureConfig.priority_mode || {
+          whitelistBonus: 100,
+          blacklistPenalty: -50,
+          activityWeight: 0.4,
+          speedWeight: 0.3,
+          completionWeight: 0.3
+        }
+      } : null
+    }
+    
+    success(res, result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 更新等级配置
+router.put('/task-claim-config/levels/:level', async (req, res, next) => {
+  try {
+    const level = parseInt(req.params.level)
+    const data = req.body
+    
+    // 获取旧配置用于日志
+    const { data: oldConfig } = await supabase
+      .from('level_configs')
+      .select('*')
+      .eq('level', level)
+      .single()
+    
+    const config = await levelService.updateLevelConfig(level, data)
+    
+    // 记录操作日志
+    await logOperation(
+      req,
+      'update_level_config',
+      'level',
+      level,
+      `Lv.${level} ${oldConfig?.name || ''}`,
+      JSON.stringify({
+        exposureLimit: oldConfig?.exposure_limit,
+        regularExposureQuota: oldConfig?.regular_exposure_quota,
+        levelWeight: oldConfig?.level_weight
+      }),
+      JSON.stringify({
+        exposureLimit: data.exposureLimit,
+        regularExposureQuota: data.regularExposureQuota,
+        levelWeight: data.levelWeight
+      }),
+      `更新等级 Lv.${level} 配置`
+    )
+    
+    success(res, config, '等级配置更新成功')
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 批量更新等级配置
+router.post('/task-claim-config/levels/batch', async (req, res, next) => {
+  try {
+    const { levels } = req.body
+    
+    if (!Array.isArray(levels) || levels.length === 0) {
+      return res.status(400).json({ code: 400, message: '请提供等级配置列表', data: null })
+    }
+    
+    const results = []
+    for (const item of levels) {
+      const config = await levelService.updateLevelConfig(item.level, item)
+      results.push(config)
+    }
+    
+    // 记录操作日志
+    await logOperation(
+      req,
+      'batch_update_level_config',
+      'level',
+      levels.map(l => l.level).join(','),
+      `${levels.length}个等级`,
+      null,
+      JSON.stringify(levels),
+      `批量更新${levels.length}个等级的配置`
+    )
+    
+    success(res, { count: results.length, levels: results }, '批量更新成功')
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 更新系统配置
+router.put('/task-claim-config/system', async (req, res, next) => {
+  try {
+    const data = req.body
+    
+    // 获取旧配置
+    const { data: oldConfigs } = await supabase
+      .from('system_configs')
+      .select('*')
+    
+    const oldMap = {}
+    ;(oldConfigs || []).forEach(c => {
+      oldMap[c.key] = c.value
+    })
+    
+    // 更新配置
+    const updates = []
+    const configMap = {
+      defaultTimeLimitMinutes: data.defaultTimeLimitMinutes?.toString(),
+      maxConcurrentPerUser: data.maxConcurrentPerUser?.toString(),
+      cityLimitPerTask: data.cityLimitPerTask?.toString(),
+      provinceLimitPerTask: data.provinceLimitPerTask?.toString(),
+      pointsToYuan: data.pointsToYuan?.toString(),
+      minWithdrawAmount: data.minWithdrawAmount?.toString()
+    }
+    
+    for (const [key, value] of Object.entries(configMap)) {
+      if (value !== undefined) {
+        const { error } = await supabase
+          .from('system_configs')
+          .upsert({ key, value, description: `${key} 配置` }, { onConflict: 'key' })
+        
+        if (!error) {
+          updates.push({ key, oldValue: oldMap[key], newValue: value })
+        }
+      }
+    }
+    
+    // 记录操作日志
+    await logOperation(
+      req,
+      'update_system_config',
+      'system',
+      0,
+      '任务领取系统配置',
+      JSON.stringify(oldMap),
+      JSON.stringify(configMap),
+      '更新任务领取系统配置'
+    )
+    
+    success(res, { updates }, '系统配置更新成功')
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 更新曝光配置
+router.put('/task-claim-config/exposure', async (req, res, next) => {
+  try {
+    const data = req.body
+    
+    // 获取旧配置
+    const { data: oldConfig } = await supabase
+      .from('exposure_config')
+      .select('*')
+      .limit(1)
+      .single()
+    
+    // 更新配置
+    const updateData = {
+      updated_at: new Date().toISOString()
+    }
+    
+    // 基础字段
+    if (data.initialCoefficient !== undefined) updateData.initial_coefficient = data.initialCoefficient
+    if (data.maxCoefficient !== undefined) updateData.max_coefficient = data.maxCoefficient
+    if (data.checkIntervalMinutes !== undefined) updateData.check_interval_minutes = data.checkIntervalMinutes
+    if (data.exposureMode !== undefined) updateData.exposure_mode = data.exposureMode
+    if (data.exposureWindow !== undefined) updateData.exposure_window = data.exposureWindow
+    
+    // V2.0 新增字段
+    if (data.cityExposureLimit !== undefined) updateData.city_exposure_limit = data.cityExposureLimit
+    if (data.reservedExposureQuota !== undefined) updateData.reserved_exposure_quota = data.reservedExposureQuota
+    if (data.heartbeatTimeout !== undefined) updateData.heartbeat_timeout = data.heartbeatTimeout
+    if (data.offlineBufferTime !== undefined) updateData.offline_buffer_time = data.offlineBufferTime
+    if (data.exposureAllocationInterval !== undefined) updateData.exposure_allocation_interval = data.exposureAllocationInterval
+    if (data.priorityMode !== undefined) updateData.priority_mode = data.priorityMode
+    
+    const { data: config, error } = await supabase
+      .from('exposure_config')
+      .update(updateData)
+      .eq('id', oldConfig?.id || 1)
+      .select()
+      .single()
+    
+    if (error) throw error
+    
+    // 记录操作日志
+    await logOperation(
+      req,
+      'update_exposure_config',
+      'system',
+      0,
+      '曝光配置',
+      JSON.stringify(oldConfig),
+      JSON.stringify(data),
+      '更新曝光配置'
+    )
+    
+    success(res, config, '曝光配置更新成功')
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// V3.0 新增：曝光系统监控API
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * 获取曝光系统统计
+ */
+router.get('/exposure/stats', async (req, res, next) => {
+  try {
+    const stats = await exposureService.getExposureSystemStats()
+    success(res, stats)
+  } catch (err) {
+    next(err)
+  }
+})
+
+/**
+ * 获取全局动态容量
+ */
+router.get('/exposure/capacity', async (req, res, next) => {
+  try {
+    const capacity = await exposureService.calculateGlobalExposureCapacity()
+    success(res, capacity)
+  } catch (err) {
+    next(err)
+  }
+})
+
+/**
+ * 获取用户曝光额度
+ */
+router.get('/exposure/users/:id/quota', async (req, res, next) => {
+  try {
+    const userId = parseInt(req.params.id)
+    const quota = await exposureService.checkUserExposureQuota(userId)
+    const score = await exposureService.calculateSelectionScore(userId)
+    
+    success(res, {
+      userId,
+      quota,
+      selectionScore: score
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+/**
+ * 调整用户曝光额度
+ */
+router.put('/exposure/users/:id/quota', async (req, res, next) => {
+  try {
+    const userId = parseInt(req.params.id)
+    const { delta, reason } = req.body
+    
+    if (delta > 0) {
+      await exposureService.releaseExposureQuota(userId, delta, reason || 'admin_adjust')
+    } else if (delta < 0) {
+      await exposureService.acquireExposureQuota(userId, Math.abs(delta), 'admin_adjust')
+    }
+    
+    const quota = await exposureService.checkUserExposureQuota(userId)
+    
+    // 记录操作日志
+    await logOperation(
+      req,
+      'adjust_exposure_quota',
+      'user',
+      userId,
+      '曝光额度',
+      null,
+      JSON.stringify({ delta, reason }),
+      '管理员调整曝光额度'
+    )
+    
+    success(res, quota, '曝光额度调整成功')
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════════
+// UI主题配置 API (使用Prisma连接CockroachDB)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// 获取UI主题配置
+router.get("/ui-theme", async (req, res, next) => {
+  try {
+    const configs = await prisma.system_configs.findMany({
+      where: {
+        key: { in: ["frontend_theme", "admin_theme"] }
+      }
+    })
+    
+    const configMap = {}
+    for (const c of configs) {
+      configMap[c.key] = c.value
+    }
+    
+    success(res, {
+      frontendTheme: configMap.frontend_theme || "professional",
+      adminTheme: configMap.admin_theme || "minimal"
+    })
+  } catch (err) {
+    logger.error("获取主题配置失败:", err)
+    next(err)
+  }
+})
+
+// 保存UI主题配置
+router.post("/ui-theme", async (req, res, next) => {
+  try {
+    const { frontendTheme, adminTheme } = req.body
+    
+    // 验证主题值
+    const validThemes = ["professional", "glassmorphism", "dark-tech", "soft-cure", "minimal"]
+    
+    if (frontendTheme !== undefined && !validThemes.includes(frontendTheme)) {
+      return res.status(400).json({ code: 400, message: "无效的前端主题值" })
+    }
+    
+    if (adminTheme !== undefined && !validThemes.includes(adminTheme)) {
+      return res.status(400).json({ code: 400, message: "无效的管理后台主题值" })
+    }
+    
+    // 更新或创建配置
+    if (frontendTheme !== undefined) {
+      await prisma.system_configs.upsert({
+        where: { key: "frontend_theme" },
+        update: { value: frontendTheme, updated_at: new Date() },
+        create: { key: "frontend_theme", value: frontendTheme, updated_at: new Date() }
+      })
+    }
+    
+    if (adminTheme !== undefined) {
+      await prisma.system_configs.upsert({
+        where: { key: "admin_theme" },
+        update: { value: adminTheme, updated_at: new Date() },
+        create: { key: "admin_theme", value: adminTheme, updated_at: new Date() }
+      })
+    }
+    
+    // 记录操作日志
+    await logOperation(
+      req,
+      "save_ui_theme",
+      "system",
+      0,
+      "UI主题配置",
+      "",
+      JSON.stringify(req.body),
+      "保存UI主题配置"
+    )
+    
+    success(res, { message: "主题配置保存成功" })
+  } catch (err) {
+    logger.error("保存主题配置失败:", err)
+    next(err)
+  }
+})
+
+// 任务默认配置 API
+// ═══════════════════════════════════════════════════════════════════════════
+
+// 获取任务默认配置
+router.get('/task-default-config', async (req, res, next) => {
+  try {
+    const { data: config, error } = await supabase
+      .from('system_configs')
+      .select('*')
+      .in('key', [
+        'task_default_description',
+        'task_default_requirements',
+        'task_default_reward',
+        'task_default_remain',
+        'task_default_time_limit',
+        'task_default_city_limit',
+        'task_default_province_limit',
+        'task_default_platform'
+      ])
+    
+    if (error) throw error
+    
+    const configMap = {}
+    for (const c of (config || [])) {
+      configMap[c.key] = c.value
+    }
+    
+    success(res, {
+      description: configMap.task_default_description || '',
+      requirements: configMap.task_default_requirements ? JSON.parse(configMap.task_default_requirements) : [],
+      reward: parseInt(configMap.task_default_reward) || 30,
+      remain: parseInt(configMap.task_default_remain) || 10,
+      timeLimitMinutes: parseInt(configMap.task_default_time_limit) || 15,
+      cityLimit: parseInt(configMap.task_default_city_limit) || 1,
+      provinceLimit: parseInt(configMap.task_default_province_limit) || 4,
+      platform: configMap.task_default_platform || 'douyin'
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 保存任务默认配置
+router.post('/task-default-config', async (req, res, next) => {
+  try {
+    const { description, requirements, reward, remain, timeLimitMinutes, cityLimit, provinceLimit, platform } = req.body
+    
+    const updates = [
+      { key: 'task_default_description', value: description || '' },
+      { key: 'task_default_requirements', value: JSON.stringify(requirements || []) },
+      { key: 'task_default_reward', value: String(reward || 30) },
+      { key: 'task_default_remain', value: String(remain || 10) },
+      { key: 'task_default_time_limit', value: String(timeLimitMinutes || 15) },
+      { key: 'task_default_city_limit', value: String(cityLimit || 1) },
+      { key: 'task_default_province_limit', value: String(provinceLimit || 4) },
+      { key: 'task_default_platform', value: platform || 'douyin' }
+    ]
+    
+    for (const item of updates) {
+      // 先检查是否存在
+      const { data: existing } = await supabase
+        .from('system_configs')
+        .select('id')
+        .eq('key', item.key)
+        .single()
+      
+      if (existing) {
+        await supabase
+          .from('system_configs')
+          .update({ value: item.value, updated_at: new Date().toISOString() })
+          .eq('key', item.key)
+      } else {
+        await supabase
+          .from('system_configs')
+          .insert({ key: item.key, value: item.value })
+      }
+    }
+    
+    // 记录操作日志
+    await logOperation(
+      req,
+      'save_task_default_config',
+      'system',
+      0,
+      '任务默认配置',
+      '',
+      JSON.stringify(req.body),
+      '保存任务默认配置'
+    )
+    
+    success(res, null, '默认配置保存成功')
+  } catch (err) {
+    next(err)
+  }
+})
+
+
+
+// 获取用户等级统计
+router.get('/users/level-stats', async (req, res, next) => {
+  try {
+    const stats = await adminService.getUserLevelStats()
+    success(res, stats)
+  } catch (err) {
+    next(err)
+  }
+})
+
+
+// 获取用户角色统计
+router.get('/users/role-stats', async (req, res, next) => {
+  try {
+    const stats = await adminService.getUserRoleStats()
+    success(res, stats)
+  } catch (err) {
+    next(err)
+  }
+})
+
+
+
+// 获取日志概览统计
+router.get('/logs/overview', async (req, res, next) => {
+  try {
+    const stats = await adminService.getLogOverviewStats()
+    success(res, stats)
+  } catch (err) {
+    next(err)
+  }
+})
+
+
+// 获取操作日志列表
+router.get('/logs/operation', async (req, res, next) => {
+  try {
+    const { page = 1, size = 20, adminId, action, targetType, startDate, endDate } = req.query
+    const result = await systemLogService.getOperationLogs({
+      page: parseInt(page),
+      size: parseInt(size),
+      adminId: adminId ? parseInt(adminId) : null,
+      action: action || null,
+      targetType: targetType || null,
+      startDate: startDate || null,
+      endDate: endDate || null
+    })
+    success(res, result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+
+// 获取登录日志列表
+router.get('/logs/login', async (req, res, next) => {
+  try {
+    const { page = 1, size = 20, userId, startDate, endDate } = req.query
+    const result = await loginLogService.getLogs(parseInt(page), parseInt(size), {
+      userId: userId ? parseInt(userId) : null,
+      startDate: startDate || null,
+      endDate: endDate || null
+    })
+    success(res, result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+
+
+// ============ 提现管理（兼容前端路径） ============
+router.get('/withdrawals', async (req, res, next) => {
+  try {
+    const { page = 1, size = 20, status } = req.query
+    const offset = (parseInt(page) - 1) * parseInt(size)
+    
+    let query = supabase.from('withdrawals').select('*', { count: 'exact' }).order('created_at', { ascending: false })
+    if (status && status !== 'all') query = query.eq('status', status)
+    query = query.range(offset, offset + parseInt(size) - 1)
+    
+    const { data: list, count, error } = await query
+    if (error) throw error
+    success(res, { list: list || [], total: count || 0, page: parseInt(page), size: parseInt(size) })
+  } catch (err) {
+    // 表可能不存在，返回空数据
+    success(res, { list: [], total: 0, page: 1, size: 20 })
+  }
+})
+
+router.get('/withdrawals/stats', async (req, res, next) => {
+  try {
+    const results = await Promise.all([
+      supabase.from('withdrawals').select('*', { count: 'exact', head: true }),
+      supabase.from('withdrawals').select('*', { count: 'exact', head: true }).eq('status', 'pending'),
+      supabase.from('withdrawals').select('*', { count: 'exact', head: true }).eq('status', 'approved'),
+    ])
+    success(res, { total: results[0].count || 0, pending: results[1].count || 0, approved: results[2].count || 0 })
+  } catch (err) {
+    success(res, { total: 0, pending: 0, approved: 0 })
+  }
+})
+
+// ============ 在线用户统计 ============
+router.get('/online-users', async (req, res, next) => {
+  try {
+    const count = await onlineUserService.getOnlineCount()
+    success(res, { count: count || 0 })
+  } catch (err) {
+    success(res, { count: 0 })
+  }
+})
+
+// ============ 任务默认配置 ============
+router.get('/task-defaults', async (req, res, next) => {
+  try {
+    const { data } = await supabase.from('system_configs').select('*').eq('key', 'task_defaults').single()
+    success(res, data?.value ? JSON.parse(data.value) : {})
+  } catch (err) {
+    success(res, {})
+  }
+})
+
+
+// 追踪搜索
+router.get('/trace/search', async (req, res, next) => {
+  try {
+    const { keyword, type } = req.query
+    if (!keyword) return success(res, { results: [] })
+    let results = []
+    if (type === 'user' || !type) {
+      const { data } = await supabase.from('users').select('id, username, phone, role, status')
+        .or(`username.ilike.%${keyword}%,phone.ilike.%${keyword}%`).limit(20)
+      results = results.concat((data || []).map(u => ({ ...u, id: String(u.id), type: 'user' })))
+    }
+    if (type === 'task' || !type) {
+      const { data } = await supabase.from('tasks').select('id, title, platform, status')
+        .ilike('title', `%${keyword}%`).limit(20)
+      results = results.concat((data || []).map(t => ({ ...t, id: String(t.id), type: 'task' })))
+    }
+    success(res, { results })
+  } catch (err) { success(res, { results: [] }) }
+})
+
+
+// ============ 用户详情子页面路由 ============
+router.get('/users/:id/detail', async (req, res, next) => {
+  try {
+    const userId = req.params.id
+    const { data: user, error } = await supabase.from('users').select('*').eq('id', userId).single()
+    if (error || !user) return res.status(404).json({ code: 404, message: '用户不存在' })
+    success(res, { ...user, id: String(user.id) })
+  } catch (err) { next(err) }
+})
+
+router.get('/users/:id/records', async (req, res, next) => {
+  try {
+    const page = parseInt(req.query.page) || 1
+    const size = parseInt(req.query.size) || 20
+    const offset = (page - 1) * size
+    const { data: list, count } = await supabase.from('records').select('*', { count: 'exact' }).eq('user_id', req.params.id).order('created_at', { ascending: false }).range(offset, offset + size - 1)
+    success(res, { list: list || [], total: count || 0 })
+  } catch (err) { success(res, { list: [], total: 0 }) }
+})
+
+router.get('/users/:id/claims', async (req, res, next) => {
+  try {
+    const page = parseInt(req.query.page) || 1
+    const size = parseInt(req.query.size) || 20
+    const offset = (page - 1) * size
+    const { data: list, count } = await supabase.from('claims').select('*, tasks(title, platform)', { count: 'exact' }).eq('user_id', req.params.id).order('claimed_at', { ascending: false }).range(offset, offset + size - 1)
+    success(res, { list: list || [], total: count || 0 })
+  } catch (err) { success(res, { list: [], total: 0 }) }
+})
+
+router.get('/users/:id/login-logs', async (req, res, next) => {
+  try {
+    const page = parseInt(req.query.page) || 1
+    const size = parseInt(req.query.size) || 20
+    const offset = (page - 1) * size
+    const { data: list, count } = await supabase.from('login_logs').select('*', { count: 'exact' }).eq('user_id', req.params.id).order('created_at', { ascending: false }).range(offset, offset + size - 1)
+    success(res, { list: list || [], total: count || 0 })
+  } catch (err) { success(res, { list: [], total: 0 }) }
+})
+
+// ============ 追踪 ============
+router.get('/trace/search', async (req, res, next) => {
+  try {
+    const { keyword, type } = req.query
+    if (!keyword) return res.json({ code: 400, message: '请输入搜索关键词' })
+    
+    let results = []
+    if (type === 'user' || !type) {
+      const { data } = await supabase.from('users').select('id, username, phone, status, role').or('username.ilike.%' + keyword + '%,phone.ilike.%' + keyword + '%').limit(20)
+      results = results.concat((data || []).map(u => ({ ...u, id: String(u.id), _type: 'user' })))
+    }
+    if (type === 'task' || !type) {
+      const { data } = await supabase.from('tasks').select('id, title, platform, status').ilike('title', '%' + keyword + '%').limit(20)
+      results = results.concat((data || []).map(t => ({ ...t, id: String(t.id), _type: 'task' })))
+    }
+    success(res, results)
+  } catch (err) { success(res, []) }
+})
+
+export default router

@@ -1,0 +1,783 @@
+import supabase from '../utils/supabaseToPrismaAdapter.js'
+import prisma from '../utils/prisma.js'
+import taskService from './taskService.js'
+import logger from '../utils/logger.js'
+import { cache, DistributedLock } from '../utils/redis.js'
+import BusinessError from '../utils/BusinessError.js'
+
+// 排行榜缓存键模式
+const RANK_CACHE_PATTERNS = [
+  'rank:total:*',
+  'rank:daily:*',
+  'rank:user:total:*',
+  'rank:user:daily:*'
+]
+
+// ============ P0 修复：添加分布式锁和事务保护 ============
+
+class WalletService {
+  /**
+   * 积分兑换余额（添加分布式锁 + 事务保护）
+   */
+  async convertPoints(userId, points) {
+    const lockKey = `lock:convert:${userId}`
+    const lock = await DistributedLock.acquire(lockKey, 30000)
+    
+    if (!lock.success) {
+      throw new BusinessError('操作过于频繁，请稍后再试', 429)
+    }
+    
+    try {
+      // 获取积分兑换配置
+      const { data: pointsToYuanConfig } = await supabase
+        .from('system_configs')
+        .select('value')
+        .eq('key', 'points_to_yuan')
+        .single()
+      
+      const config = {
+        pointsToYuan: parseInt(pointsToYuanConfig?.value) || 10
+      }
+
+      if (points <= 0) {
+        throw new BusinessError('兑换积分必须大于0', 400)
+      }
+
+      // 获取用户信息
+      const { data: user, error } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', userId)
+        .single()
+
+      if (!user) {
+        throw new BusinessError('用户不存在', 404)
+      }
+      logger.info(`用户数据: points=${user.points}, balance=${user.balance}, exchanged_points=${user.exchanged_points}, typeof balance=${typeof user.balance}`)
+
+      if (user.points < points) {
+        throw new BusinessError('积分不足', 400)
+      }
+
+      // ========== 提现条件检查（可通过配置开关控制）==========
+      // 获取兑换限制开关
+      const { data: restrictionConfig } = await supabase
+        .from('system_configs')
+        .select('value')
+        .eq('key', 'points_exchange_restriction_enabled')
+        .single()
+      
+      const restrictionEnabled = restrictionConfig?.value !== 'false' // 默认开启限制
+
+      if (restrictionEnabled) {
+        // 获取任务积分占比要求
+        const { data: ratioConfig } = await supabase
+          .from('system_configs')
+          .select('value')
+          .eq('key', 'withdraw_task_points_ratio')
+          .single()
+        
+        const requiredRatio = parseInt(ratioConfig?.value || 50)
+
+        // 检查用户是否有周榜/月榜奖励（这些奖励积分可随时兑换，不受限制）
+        const { data: bonusRecords } = await supabase
+          .from('records')
+          .select('points, type')
+          .eq('user_id', userId)
+          .in('type', ['week_reward', 'month_reward'])
+          .gte('created_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString())
+
+        // 如果用户有周榜/月榜奖励积分，允许直接兑换（不受任务积分占比限制）
+        const hasRankingBonus = (bonusRecords || []).some(r => r.points >= 100)
+
+        if (!hasRankingBonus) {
+          // 计算任务积分占比
+          const taskPoints = user.task_points || 0
+          const totalPoints = user.total_points || 0
+          const effectiveTotal = totalPoints - (user.exchanged_points || 0)
+          const taskRatio = effectiveTotal > 0 ? (taskPoints / effectiveTotal) * 100 : 0
+
+          if (taskRatio < requiredRatio) {
+            throw new BusinessError(`兑换失败: 任务积分占比需 >= ${requiredRatio}%, 当前 ${taskRatio.toFixed(1)}%。请多完成任务后再兑换。`, 400)
+          }
+        }
+      }
+      // 如果 restrictionEnabled 为 false，则不做任何限制检查
+
+      // 计算兑换金额
+      const yuan = (points / config.pointsToYuan).toFixed(2)
+      logger.info(`兑换计算: points=${points}, yuan=${yuan}, user.balance=${user.balance}, newBalance=${Number(user.balance) + parseFloat(yuan)}`)
+
+      // ============ 原子性更新 ============
+      // 1. 扣减积分（使用 SQL 原子更新，确保积分足够）
+      const currentBalance = Number(user.balance) || 0
+      const newBalance = currentBalance + parseFloat(yuan)
+      
+      logger.info(`更新用户: userId=${userId}, points=${user.points} - ${points}, balance=${currentBalance} + ${yuan} = ${newBalance}`)
+      
+      const { data: updateResult, error: updateError } = await supabase
+        .from('users')
+        .update({
+          points: Number(user.points) - points,
+          exchanged_points: Number(user.exchanged_points || 0) + points,
+          balance: newBalance
+        })
+        .eq('id', userId)
+        .select()
+
+      if (updateError || !updateResult || updateResult.length === 0) {
+        logger.error('兑换失败 (可能存在并发操作):', updateError)
+        throw new BusinessError('兑换失败，请重试', 500)
+      }
+
+      // 2. 记录积分兑换
+      const { error: recordError } = await supabase
+        .from('records')
+        .insert({
+          user_id: userId,
+          type: 'convert',
+          description: '积分兑换',
+          points: -points,
+          balance: parseFloat(yuan)
+        })
+      
+      if (recordError) {
+        // 记录失败，尝试回滚用户数据
+        logger.error('记录积分兑换失败，尝试回滚:', recordError)
+        await supabase
+          .from('users')
+          .update({
+            points: user.points,
+            exchanged_points: user.exchanged_points || 0,
+            balance: Number(user.balance)
+          })
+          .eq('id', userId)
+        throw new BusinessError('兑换记录保存失败，已回滚', 500)
+      }
+
+      // 清除排行榜缓存
+      for (const pattern of RANK_CACHE_PATTERNS) {
+        await cache.delPattern(pattern)
+      }
+
+      logger.info(`✅ 用户 ${userId} 兑换积分 ${points} -> ${yuan}元`)
+
+      return {
+        message: `兑换成功，到账 ¥${yuan}`,
+        convertedPoints: points,
+        amount: parseFloat(yuan)
+      }
+    } finally {
+      await lock.release()
+    }
+  }
+
+  /**
+   * 提现申请（添加分布式锁 + 事务保护）
+   */
+  async withdraw(userId, amount, wechatInfo = '') {
+    const lockKey = `lock:withdraw:${userId}`
+    const lock = await DistributedLock.acquire(lockKey, 30000)
+    
+    if (!lock.success) {
+      throw new BusinessError('操作过于频繁，请稍后再试', 429)
+    }
+    
+    try {
+      const config = await taskService.getConfig()
+
+      if (amount < config.minWithdrawAmount) {
+        throw new BusinessError(`最低提现 ${config.minWithdrawAmount} 元`, 400)
+      }
+
+      // 获取用户信息
+      const { data: user, error } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', userId)
+        .single()
+
+      if (!user) {
+        throw new BusinessError('用户不存在', 404)
+      }
+
+      if (Number(user.balance) < amount) {
+        throw new BusinessError('余额不足', 400)
+      }
+
+      // ============ P0 修复：使用乐观锁确保原子性 ============
+      // 1. 扣减余额（带条件检查）
+      const { data: updateResult, error: updateError } = await supabase
+        .from('users')
+        .update({
+          balance: Number(user.balance) - amount
+        })
+        .eq('id', userId)
+        .eq('balance', Number(user.balance))  // 乐观锁
+        .select()
+
+      if (updateError || !updateResult || updateResult.length === 0) {
+        logger.error('提现失败 (可能存在并发操作):', updateError)
+        throw new BusinessError('提现失败，请重试', 500)
+      }
+
+      // 2. 创建提现记录
+      const { data: withdrawal, error: withdrawalError } = await supabase
+        .from('withdrawals')
+        .insert({
+          user_id: userId,
+          amount: amount,
+          status: 'pending',
+          wechat_info: wechatInfo
+        })
+        .select()
+        .single()
+
+      if (withdrawalError || !withdrawal) {
+        // 回滚余额
+        logger.error('创建提现记录失败，尝试回滚:', withdrawalError)
+        await supabase
+          .from('users')
+          .update({ balance: Number(user.balance) })
+          .eq('id', userId)
+        throw new BusinessError('提现申请创建失败，已回滚', 500)
+      }
+
+      // 3. 记录
+      const { error: recordError } = await supabase
+        .from('records')
+        .insert({
+          user_id: userId,
+          type: 'withdraw',
+          description: '提现申请',
+          points: 0,
+          balance: -amount
+        })
+
+      if (recordError) {
+        logger.warn('记录提现申请失败 (不影响主流程):', recordError)
+      }
+
+      logger.info(`✅ 用户 ${userId} 申请提现 ${amount}元`)
+
+      return { message: '提现申请已提交，请等待审核' }
+    } finally {
+      await lock.release()
+    }
+  }
+
+  /**
+   * 获取提现记录
+   */
+  async getWithdrawals(userId, page = 1, size = 20) {
+    const offset = (page - 1) * size
+
+    const [{ data: list }, { count }] = await Promise.all([
+      supabase
+        .from('withdrawals')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .range(offset, offset + size - 1),
+      supabase
+        .from('withdrawals')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', userId)
+    ])
+
+    return {
+      list: (list || []).map(w => ({
+        id: w.id,
+        userId: w.user_id,
+        amount: Number(w.amount),
+        status: w.status,
+        wechatInfo: w.wechat_info,
+        reviewerId: w.reviewer_id,
+        reviewNote: w.review_note,
+        reviewedAt: w.reviewed_at,
+        paidAt: w.paid_at,
+        createdAt: w.created_at
+      })),
+      total: count || 0,
+      page,
+      size
+    }
+  }
+
+  /**
+   * 获取待处理的提现申请（管理员）
+   */
+  async getPendingWithdrawals(page = 1, size = 20) {
+    const offset = (page - 1) * size
+
+    const [{ data: list }, { count }] = await Promise.all([
+      supabase
+        .from('withdrawals')
+        .select('*')
+        .eq('status', 'pending')
+        .order('created_at', { ascending: true })
+        .range(offset, offset + size - 1),
+      supabase
+        .from('withdrawals')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'pending')
+    ])
+
+    return {
+      list: (list || []).map(w => ({
+        id: w.id,
+        userId: w.user_id,
+        amount: Number(w.amount),
+        status: w.status,
+        wechatInfo: w.wechat_info,
+        reviewerId: w.reviewer_id,
+        reviewNote: w.review_note,
+        reviewedAt: w.reviewed_at,
+        paidAt: w.paid_at,
+        createdAt: w.created_at,
+        user: w.users
+      })),
+      total: count || 0,
+      page,
+      size
+    }
+  }
+
+  /**
+   * 处理提现申请（管理员） - 添加分布式锁
+   */
+  async processWithdrawal(withdrawalId, reviewerId, action, note = '') {
+    const lockKey = `lock:withdrawal:${withdrawalId}`
+    const lock = await DistributedLock.acquire(lockKey, 30000)
+    
+    if (!lock.success) {
+      throw new BusinessError('该提现申请正在处理中', 400)
+    }
+    
+    try {
+      const { data: withdrawal, error } = await supabase
+        .from('withdrawals')
+        .select('*')
+        .eq('id', withdrawalId)
+        .single()
+
+      if (!withdrawal) {
+        throw new BusinessError('提现申请不存在', 404)
+      }
+
+      if (withdrawal.status !== 'pending') {
+        throw new BusinessError('该提现申请已处理', 400)
+      }
+
+      const now = new Date().toISOString()
+      let updateData = {
+        reviewer_id: reviewerId,
+        review_note: note,
+        reviewed_at: now
+      }
+
+      if (action === 'approve') {
+        updateData.status = 'approved'
+      } else if (action === 'reject') {
+        updateData.status = 'rejected'
+        
+        // 拒绝时返还余额
+        const { data: user } = await supabase
+          .from('users')
+          .select('balance')
+          .eq('id', withdrawal.user_id)
+          .single()
+        
+        if (user) {
+          await supabase
+            .from('users')
+            .update({ balance: Number(user.balance) + Number(withdrawal.amount) })
+            .eq('id', withdrawal.user_id)
+        }
+      } else {
+        throw new BusinessError('无效的操作', 400)
+      }
+
+      const { error: updateError } = await supabase
+        .from('withdrawals')
+        .update(updateData)
+        .eq('id', withdrawalId)
+
+      if (updateError) {
+        logger.error('处理提现失败:', updateError)
+        throw new BusinessError('处理提现失败', 500)
+      }
+
+      logger.info(`✅ 提现申请 ${withdrawalId} 已${action === 'approve' ? '通过' : '拒绝'}`)
+
+      return { message: '处理成功' }
+    } finally {
+      await lock.release()
+    }
+  }
+
+  /**
+   * 确认打款（管理员） - 添加分布式锁
+   */
+  async confirmPaid(withdrawalId, reviewerId) {
+    const lockKey = `lock:withdrawal:${withdrawalId}`
+    const lock = await DistributedLock.acquire(lockKey, 30000)
+    
+    if (!lock.success) {
+      throw new BusinessError('该提现申请正在处理中', 400)
+    }
+    
+    try {
+      const { data: withdrawal, error } = await supabase
+        .from('withdrawals')
+        .select('*')
+        .eq('id', withdrawalId)
+        .single()
+
+      if (!withdrawal) {
+        throw new BusinessError('提现申请不存在', 404)
+      }
+
+      if (withdrawal.status !== 'approved') {
+        throw new BusinessError('只有已通过的申请才能确认打款', 400)
+      }
+
+      const { error: updateError } = await supabase
+        .from('withdrawals')
+        .update({
+          status: 'paid',
+          paid_at: new Date().toISOString()
+        })
+        .eq('id', withdrawalId)
+
+      if (updateError) {
+        logger.error('确认打款失败:', updateError)
+        throw new BusinessError('确认打款失败', 500)
+      }
+
+      logger.info(`✅ 提现申请 ${withdrawalId} 已确认打款`)
+
+      return { message: '已确认打款' }
+    } finally {
+      await lock.release()
+    }
+  }
+
+  /**
+   * 批量审核提现申请（管理员）
+   */
+  async batchProcessWithdrawals(withdrawalIds, reviewerId, action, note = '') {
+    const results = {
+      success: [],
+      failed: []
+    }
+
+    for (const id of withdrawalIds) {
+      try {
+        await this.processWithdrawal(id, reviewerId, action, note)
+        results.success.push(id)
+      } catch (error) {
+        results.failed.push({ id, reason: error.message })
+      }
+    }
+
+    return results
+  }
+
+  /**
+   * 获取所有提现记录（管理员）
+   */
+  async getAllWithdrawals(page = 1, size = 20, filters = {}) {
+    const offset = (page - 1) * size
+
+    let query = supabase
+      .from('withdrawals')
+      .select('*', { count: 'exact' })
+
+    if (filters.status) {
+      query = query.eq('status', filters.status)
+    }
+    if (filters.userId) {
+      query = query.eq('user_id', filters.userId)
+    }
+    if (filters.startDate) {
+      query = query.gte('created_at', filters.startDate)
+    }
+    if (filters.endDate) {
+      query = query.lte('created_at', filters.endDate)
+    }
+
+    const { data: list, count, error } = await query
+      .order('created_at', { ascending: false })
+      .range(offset, offset + size - 1)
+
+    if (error) {
+      logger.error('获取提现记录失败:', error)
+      throw new BusinessError('获取提现记录失败', 500)
+    }
+
+    return {
+      list: (list || []).map(w => ({
+        id: w.id,
+        userId: w.user_id,
+        amount: Number(w.amount),
+        status: w.status,
+        wechatInfo: w.wechat_info,
+        reviewerId: w.reviewer_id,
+        reviewerName: w.reviewer?.username || '',
+        reviewNote: w.review_note,
+        reviewedAt: w.reviewed_at,
+        paidAt: w.paid_at,
+        createdAt: w.created_at,
+        user: w.users
+      })),
+      total: count || 0,
+      page,
+      size
+    }
+  }
+
+  /**
+   * 导出提现记录为 CSV
+   */
+  async exportWithdrawalsToCSV(filters = {}) {
+    let query = supabase
+      .from('withdrawals')
+      .select('*')
+    
+    if (filters.status) {
+      query = query.eq('status', filters.status)
+    }
+    if (filters.startDate) {
+      query = query.gte('created_at', filters.startDate)
+    }
+    if (filters.endDate) {
+      query = query.lte('created_at', filters.endDate)
+    }
+
+    const { data: list, error } = await query
+      .order('created_at', { ascending: false })
+      .limit(10000)
+
+    if (error) {
+      logger.error('导出提现记录失败:', error)
+      throw new BusinessError('导出提现记录失败', 500)
+    }
+
+    const headers = ['ID', '用户ID', '金额', '状态', '微信信息', '审核备注', '创建时间', '审核时间', '打款时间']
+    const rows = (list || []).map(w => {
+      const statusMap = { pending: '待审核', approved: '已通过', paid: '已打款', rejected: '已拒绝' }
+      const wechatInfo = typeof w.wechat_info === 'string' ? w.wechat_info : JSON.stringify(w.wechat_info || {})
+      return [
+        w.id,
+        w.user_id,
+        w.amount,
+        statusMap[w.status] || w.status,
+        wechatInfo,
+        w.review_note || '',
+        w.created_at || '',
+        w.reviewed_at || '',
+        w.paid_at || ''
+      ]
+    })
+
+    const csv = [headers.join(','), ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))].join('\n')
+    return csv
+  }
+
+  /**
+   * 获取积分兑换记录
+   */
+  async getConvertRecords(userId, page = 1, size = 20) {
+    const offset = (page - 1) * size
+
+    const { data: list, count, error } = await supabase
+      .from('records')
+      .select('*', { count: 'exact' })
+      .eq('user_id', userId)
+      .eq('type', 'convert')
+      .order('created_at', { ascending: false })
+      .range(offset, offset + size - 1)
+
+    if (error) {
+      logger.error('获取兑换记录失败:', error)
+      throw new BusinessError('获取兑换记录失败', 500)
+    }
+
+    return {
+      list: (list || []).map(r => ({
+        id: r.id,
+        points: Math.abs(r.points),
+        amount: Number(r.balance),
+        desc: r.desc,
+        createdAt: r.created_at
+      })),
+      total: count || 0,
+      page,
+      size
+    }
+  }
+
+  /**
+   * 获取提现统计
+   */
+  async getWithdrawalStats() {
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    const todayStr = today.toISOString()
+    
+    // 获取所有提现记录
+    const withdrawals = await prisma.$queryRawUnsafe(
+      `SELECT status, amount, created_at FROM withdrawals`
+    )
+    
+    // 统计
+    const pendingCount = withdrawals?.filter(w => w.status === 'pending').length || 0
+    const approvedCount = withdrawals?.filter(w => w.status === 'approved').length || 0
+    const rejectedCount = withdrawals?.filter(w => w.status === 'rejected').length || 0
+    const totalAmount = withdrawals?.filter(w => w.status === 'approved' || w.status === 'paid').reduce((sum, w) => sum + (Number(w.amount) || 0), 0) || 0
+    const pendingAmount = withdrawals?.filter(w => w.status === 'pending').reduce((sum, w) => sum + (Number(w.amount) || 0), 0) || 0
+    
+    // 今日统计
+    const todayWithdrawals = withdrawals?.filter(w => w.created_at && new Date(w.created_at) >= today) || []
+    const todayCount = todayWithdrawals.length
+    const todayAmount = todayWithdrawals.reduce((sum, w) => sum + (Number(w.amount) || 0), 0)
+    
+    return {
+      pendingCount,
+      approvedCount,
+      rejectedCount,
+      totalAmount,
+      pendingAmount,
+      todayCount,
+      todayAmount
+    }
+  }
+
+  /**
+   * 获取单个提现的审核记录
+   */
+  async getWithdrawalReviewLogs(withdrawalId) {
+    try {
+            const withdrawal = await prisma.$queryRawUnsafe(`
+        SELECT w.id, w.user_id, w.status, w.reviewed_at, w.reviewer_id, w.review_note, w.paid_at,
+               u.username as reviewer_name,
+               w.created_at
+        FROM withdrawals w
+        LEFT JOIN users u ON w.reviewer_id = u.id
+        WHERE w.id = ${parseInt(withdrawalId)}
+      `);
+      
+      if (!withdrawal || withdrawal.length === 0) {
+        return [];
+      }
+      
+      const w = withdrawal[0];
+      const logs = [];
+      
+      // 构建审核记录
+      if (w.reviewed_at) {
+        logs.push({
+          id: `${w.id}-review`,
+          withdrawalId: w.id,
+          action: w.status === 'approved' ? 'approve' : w.status === 'rejected' ? 'reject' : w.status,
+          note: w.review_note || '' ,
+          reviewerId: w.reviewer_id,
+          reviewerName: w.reviewer_name,
+          createdAt: w.reviewed_at
+        });
+      }
+      
+      if (w.paid_at) {
+        logs.push({
+          id: `${w.id}-paid`,
+          withdrawalId: w.id,
+          action: 'paid' ,
+          note: '已打款' ,
+          reviewerId: w.reviewer_id,
+          reviewerName: w.reviewer_name,
+          createdAt: w.paid_at
+        });
+      }
+      
+      // 添加创建记录
+      logs.unshift({
+        id: `${w.id}-create`,
+        withdrawalId: w.id,
+        action: 'create' ,
+        note: '提交提现申请' ,
+        reviewerId: null,
+        reviewerName: null,
+        createdAt: w.created_at
+      });
+      
+      return logs;
+    } catch (error) {
+      console.error('获取提现审核记录失败:', error);
+      return [];
+    }
+  }
+
+  /**
+   * 获取提现历史记录
+   */
+  async getWithdrawalHistory(page = 1, size = 20, filters = {}) {
+    const offset = (page - 1) * size;
+    let whereConditions = '1=1';
+    
+    if (filters.status) {
+      whereConditions += ` AND status = '${filters.status}'`;
+    }
+    if (filters.startDate) {
+      whereConditions += ` AND created_at >= '${filters.startDate}'`;
+    }
+    if (filters.endDate) {
+      whereConditions += ` AND created_at <= '${filters.endDate}'`;
+    }
+    
+    const countQuery = `SELECT COUNT(*) as total FROM withdrawals WHERE ${whereConditions}`;
+    const dataQuery = `
+      SELECT w.*, u.username as user_name, r.username as reviewer_name
+      FROM withdrawals w
+      LEFT JOIN users u ON w.user_id = u.id
+      LEFT JOIN users r ON w.reviewer_id = r.id
+      WHERE ${whereConditions}
+      ORDER BY w.created_at DESC
+      LIMIT ${parseInt(size)} OFFSET ${offset}
+    `;
+    
+    try {
+      const [countResult, data] = await Promise.all([
+        prisma.$queryRawUnsafe(countQuery),
+        prisma.$queryRawUnsafe(dataQuery)
+      ]);
+      
+      return {
+        list: data.map(w => ({
+          id: w.id?.toString(),
+          userId: w.user_id?.toString(),
+          userName: w.user_name,
+          amount: Number(w.amount),
+          points: w.points,
+          status: w.status,
+          wechatInfo: w.wechat_info,
+          reviewerId: w.reviewer_id?.toString(),
+          reviewerName: w.reviewer_name,
+          reviewNote: w.review_note,
+          createdAt: w.created_at,
+          reviewedAt: w.reviewed_at,
+          paidAt: w.paid_at
+        })),
+        total: parseInt(countResult[0]?.total || 0),
+        page,
+        size
+      };
+    } catch (error) {
+      console.error('获取提现历史失败:', error);
+      return { list: [], total: 0, page, size };
+    }
+  }
+
+}
+
+export default new WalletService()

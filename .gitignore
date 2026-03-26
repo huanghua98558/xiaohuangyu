@@ -1,0 +1,78 @@
+# 后端依赖
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 环境变量
+.env
+.env.local
+.env.production
+
+# 日志
+logs/
+*.log
+
+# 操作系统
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 临时文件
+tmp/
+temp/
+*.tmp
+*.bak*
+*.pre_*
+*.backup*
+
+# 上传文件
+uploads/
+public/uploads/
+
+# 构建产物（前端）
+.next/
+dist/
+build/
+
+# 测试覆盖率
+coverage/
+
+# PM2
+.pm2/
+
+# 备份
+backups/
+backup_*/
+
+# 测试文件
+test-*.js
+*_test.js
+tests/
+
+# 文档（可选）
+*.md
+!README.md
+
+# 图片
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.webp
+!public/
+
+# 模型文件
+*.pt
+*.onnx
+*.bin
+
+# 截图
+screenshots/
+*.ico

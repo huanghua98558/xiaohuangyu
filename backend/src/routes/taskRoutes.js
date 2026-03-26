@@ -1,0 +1,43 @@
+import { Router } from 'express'
+import taskController from '../controllers/taskController.js'
+import taskService from '../services/taskService.js'
+import { validate, claimTaskSchema, submitTaskSchema, createTaskSchema, updateTaskSchema } from '../utils/validator.js'
+import { authMiddleware, adminOrReviewer, adminOnly, clientOrAdmin, publisherOrAdmin, optionalAuth } from '../middlewares/auth.js'
+
+const router = Router()
+
+// 公开接口（可选认证，已登录用户可看到领取状态）
+router.get('/config', taskController.getConfig)
+router.get('/today-stats', async (req, res, next) => {
+  try {
+    const stats = await taskService.getTodayStats()
+    res.json({ code: 0, data: stats })
+  } catch (err) {
+    next(err)
+  }
+})
+// 首页推荐任务（随机排序）
+router.get('/home', optionalAuth, taskController.getHomeTasks)
+// 任务列表（按发布时间排序）
+router.get('/', optionalAuth, taskController.getTasks)
+
+// ⚠️ 重要：/my/* 路由必须在 /:id 之前定义，否则会被 /:id 捕获
+router.get('/my', authMiddleware, taskController.getMyTasks)
+router.get('/my/all', authMiddleware, taskController.getMyTasks)
+router.get('/my/:claimId', authMiddleware, taskController.getMyClaimById)
+router.post('/my/:claimId/submit', authMiddleware, validate(submitTaskSchema), taskController.submitTask)
+router.post('/my/:claimId/withdraw', authMiddleware, taskController.withdrawClaim)
+router.post('/my/:claimId/abandon', authMiddleware, taskController.abandonClaim)
+
+// 任务详情（放在 /my 路由之后）
+router.get('/:id', optionalAuth, taskController.getTaskById)
+
+// 需要登录的接口
+router.post('/:id/claim', authMiddleware, validate(claimTaskSchema), taskController.claimTask)
+
+// 管理员/发布者/审核员接口（发布任务）
+router.post('/', authMiddleware, publisherOrAdmin, validate(createTaskSchema), taskController.createTask)
+router.put('/:id', authMiddleware, publisherOrAdmin, validate(updateTaskSchema), taskController.updateTask)
+router.delete('/:id', authMiddleware, publisherOrAdmin, taskController.deleteTask)
+
+export default router

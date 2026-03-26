@@ -1,0 +1,313 @@
+<template>
+  <div class="my-tasks">
+    <header class="header">
+      <span class="back" @click="$router.back()">← 返回</span>
+      <h1>我的任务</h1>
+    </header>
+    <div class="tabs">
+      <span :class="{active: tab==='doing'}" @click="tab='doing'">进行中</span>
+      <span :class="{active: tab==='pending'}" @click="tab='pending'">待审核</span>
+      <span :class="{active: tab==='done'}" @click="tab='done'">已完成</span>
+    </div>
+    <div class="loading" v-if="loading">加载中...</div>
+    <div class="list" v-else>
+      <template v-if="tab==='doing'">
+        <div :class="['task', 'task-clickable', { 'highlight-rejected': t.isRejected }]" v-for="t in doing" :key="t.id" @click="$router.push(`/my/task/${t.id}`)">
+          <div class="task-info">
+            <span class="task-title">{{ t.title }}</span>
+            <div class="task-time-info">
+              <span class="time-item" v-if="t.claimedAt">
+                <span class="time-label">领取:</span>
+                <span class="time-value">{{ formatTime(t.claimedAt) }}</span>
+              </span>
+              <span class="time-item" v-if="!t.isRejected && t.expiresAt">
+                <span class="time-label">剩余:</span>
+                <CountdownTimer 
+                  :expiresAt="t.expiresAt" 
+                  :warningThreshold="2 * 60 * 60 * 1000"
+                  @expire="onTaskExpire(t)"
+                />
+              </span>
+            </div>
+            <span class="task-reason" v-if="t.isRejected && t.reviewNote">拒绝原因: {{ t.reviewNote }}</span>
+            <span class="task-meta" v-if="t.isNightBonusTask">🌙 夜间系数 x{{ Number(t.nightCoefficient || 1).toFixed(2) }}</span>
+            <div class="review-status" v-if="t.isRejected && t.reviewDetail">
+              <span class="status-item" v-if="t.reviewDetail.imageStatus === 'approved'">✅ 图片审核通过</span>
+              <span class="status-item warning" v-else-if="t.reviewDetail.imageStatus === 'rejected'">❌ 图片审核未通过</span>
+              <span class="status-item warning" v-if="t.reviewDetail.linkStatus === 'rejected'">⚠️ 链接验证失败(换号重试)</span>
+            </div>
+            <span class="task-tag rejected-tag" v-if="t.isRejected">已拒绝({{ t.reviewDetail?.rejectCount || 0 }}/3)</span>
+          </div>
+          <div class="actions">
+            <span class="reward">{{ t.estimatedReward || t.reward }} 积分</span>
+            <span class="arrow">></span>
+          </div>
+        </div>
+        <div class="empty" v-if="!doing.length">暂无进行中的任务，去任务大厅领取吧</div>
+      </template>
+      <template v-else-if="tab==='pending'">
+        <div class="task task-clickable" v-for="t in pending" :key="t.id" @click="$router.push(`/my/task/${t.id}`)">
+          <div class="task-info">
+            <span class="task-title">{{ t.title }}</span>
+            <div class="task-time-info">
+              <span class="time-item" v-if="t.claimedAt">
+                <span class="time-label">领取:</span>
+                <span class="time-value">{{ formatTime(t.claimedAt) }}</span>
+              </span>
+              <span class="time-item" v-if="t.submittedAt">
+                <span class="time-label">提交:</span>
+                <span class="time-value">{{ formatTime(t.submittedAt) }}</span>
+              </span>
+            </div>
+            <span class="task-tag pending-tag">{{ t.reviewDetail?.stageLabel || '待审核' }}</span>
+            <span class="task-meta" v-if="t.isNightBonusTask">🌙 夜间系数 x{{ Number(t.nightCoefficient || 1).toFixed(2) }}</span>
+          </div>
+          <div class="actions">
+            <span class="reward">{{ t.estimatedReward || t.reward }} 积分</span>
+            <span class="arrow">></span>
+          </div>
+        </div>
+        <div class="empty" v-if="!pending.length">暂无待审核的任务</div>
+      </template>
+      <template v-else>
+        <!-- 已完成统计 -->
+        <div class="done-stats" v-if="doneStats.totalCount > 0">
+          <div class="stat-item">
+            <span class="stat-value">{{ doneStats.totalCount }}</span>
+            <span class="stat-label">完成任务</span>
+          </div>
+          <div class="stat-divider"></div>
+          <div class="stat-item">
+            <span class="stat-value reward">+{{ doneStats.totalRewards }}</span>
+            <span class="stat-label">累计积分</span>
+          </div>
+        </div>
+        <!-- 已完成列表 -->
+        <div class="task task-clickable" v-for="t in done" :key="t.id" @click="$router.push(`/my/task/${t.id}`)">
+          <div class="task-info">
+            <span class="task-title">{{ t.title }}</span>
+            <div class="task-time-info">
+              <span class="time-item" v-if="t.claimedAt">
+                <span class="time-label">领取:</span>
+                <span class="time-value">{{ formatTime(t.claimedAt) }}</span>
+              </span>
+            </div>
+            <span class="task-meta">{{ getPlatformName(t.platform) }} · {{ getActionName(t.action) }}</span>
+            <span class="task-meta" v-if="t.settlement">到账: 基础{{ t.settlement.basePoints || t.baseReward || 0 }} + 加成{{ t.settlement.bonusPoints || 0 }}</span>
+            <span class="task-tag done-tag">已完成</span>
+          </div>
+          <div class="actions">
+            <span class="reward">+{{ t.settlement?.finalPoints || t.reward }} 积分</span>
+            <span class="arrow">></span>
+          </div>
+        </div>
+        <div class="empty" v-if="!done.length">暂无已完成任务</div>
+      </template>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { ref, onMounted, onActivated, onUnmounted } from 'vue'
+import { getMyTasks } from '../api/task'
+import CountdownTimer from '../components/CountdownTimer.vue'
+
+const tab = ref('doing')
+const loading = ref(true)
+const doing = ref([])
+const pending = ref([])
+const done = ref([])
+const doneStats = ref({ totalCount: 0, totalRewards: 0 })
+
+function getPlatformName(platform) {
+  const map = {
+    'douyin': '抖音',
+    'kuaishou': '快手',
+    'weibo': '视频号',
+    'xiaohongshu': '小红书',
+    '抖音': '抖音',
+    '快手': '快手',
+    '视频号': '视频号',
+    '小红书': '小红书'
+  }
+  return map[platform] || platform
+}
+
+function getActionName(action) {
+  return '短视频评价官'
+}
+
+function formatTime(dateStr) {
+  if (!dateStr) return '-'
+  const date = new Date(dateStr)
+  const month = (date.getMonth() + 1).toString().padStart(2, '0')
+  const day = date.getDate().toString().padStart(2, '0')
+  const hour = date.getHours().toString().padStart(2, '0')
+  const min = date.getMinutes().toString().padStart(2, '0')
+  return `${month}-${day} ${hour}:${min}`
+}
+
+// 任务过期回调
+function onTaskExpire(task) {
+  console.log('任务已过期:', task.id)
+  // 可以在这里刷新列表
+  load()
+}
+
+async function load() {
+  loading.value = true
+  try {
+    const data = await getMyTasks()
+    doing.value = data.doing || []
+    pending.value = data.pending || []
+    done.value = data.done || []
+    doneStats.value = data.doneStats || { totalCount: 0, totalRewards: 0 }
+  } catch (e) {
+    doing.value = []
+    pending.value = []
+    done.value = []
+    doneStats.value = { totalCount: 0, totalRewards: 0 }
+  } finally {
+    loading.value = false
+  }
+}
+
+const handlePointsUpdate = () => {
+  load()
+}
+
+const handleReviewUpdate = () => {
+  load()
+}
+
+onMounted(() => {
+  load()
+  window.addEventListener('points-update', handlePointsUpdate)
+  window.addEventListener('review-result', handleReviewUpdate)
+})
+
+// 每次进入页面都刷新数据
+onActivated(load)
+onUnmounted(() => {
+  window.removeEventListener('points-update', handlePointsUpdate)
+  window.removeEventListener('review-result', handleReviewUpdate)
+})
+</script>
+
+<style scoped>
+.my-tasks { min-height: 100vh; background: #f5f5f5; padding-bottom: 100px; }
+.header {
+  background: #3f51b5;
+  color: #fff;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.back { cursor: pointer; }
+.tabs {
+  display: flex;
+  background: #fff;
+  padding: 0 16px;
+}
+.tabs span {
+  flex: 1;
+  text-align: center;
+  padding: 14px;
+  font-size: 14px;
+  color: #666;
+  cursor: pointer;
+}
+.tabs span.active { color: #3f51b5; font-weight: 600; border-bottom: 2px solid #3f51b5; }
+.loading { padding: 40px; text-align: center; color: #666; }
+.list { padding: 16px; }
+.task {
+  background: #fff;
+  padding: 16px;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.task-info { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+.task-title { font-size: 15px; }
+.task-meta { font-size: 12px; color: #999; }
+.task-time-info { display: flex; gap: 12px; font-size: 11px; color: #888; margin-top: 2px; flex-wrap: wrap; }
+.time-item { display: flex; gap: 4px; align-items: center; }
+.time-label { color: #999; }
+.time-value { color: #666; }
+.task-reason { font-size: 12px; color: #f44336; margin-top: 4px; }
+.task-tag { font-size: 11px; padding: 2px 6px; border-radius: 4px; display: inline-block; width: fit-content; margin-top: 4px; }
+.rejected-tag { background: #ffebee; color: #f44336; }
+.highlight-rejected {
+  background: linear-gradient(135deg, #fff5f5 0%, #fff 100%);
+  border-left: 3px solid #f44336;
+  animation: pulse-highlight 2s ease-in-out infinite;
+}
+@keyframes pulse-highlight {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(244, 67, 54, 0.2); }
+  50% { box-shadow: 0 0 8px 2px rgba(244, 67, 54, 0.3); }
+}
+.review-status {
+  margin-top: 4px;
+  font-size: 12px;
+}
+.status-item {
+  display: inline-block;
+  padding: 2px 6px;
+  margin-right: 4px;
+  margin-bottom: 2px;
+  border-radius: 4px;
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+.status-item.warning {
+  background: #fff3e0;
+  color: #e65100;
+}
+.pending-tag { background: #fff3e0; color: #ff9800; }
+.done-tag { background: #e8f5e9; color: #4caf50; }
+.task-clickable { cursor: pointer; }
+.task-clickable:hover .task-title { color: #3f51b5; }
+.actions { display: flex; align-items: center; gap: 12px; }
+.reward { color: #4caf50; font-weight: 500; }
+.arrow { color: #3f51b5; font-size: 13px; }
+.status { color: #ff9800; font-size: 13px; }
+.empty { text-align: center; color: #999; padding: 40px; font-size: 14px; }
+
+/* 已完成统计样式 */
+.done-stats {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #3f51b5 0%, #5c6bc0 100%);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 16px;
+  color: #fff;
+}
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+}
+.stat-value {
+  font-size: 28px;
+  font-weight: 600;
+}
+.stat-value.reward {
+  color: #ffc107;
+}
+.stat-label {
+  font-size: 12px;
+  opacity: 0.9;
+  margin-top: 4px;
+}
+.stat-divider {
+  width: 1px;
+  height: 40px;
+  background: rgba(255, 255, 255, 0.3);
+}
+</style>
