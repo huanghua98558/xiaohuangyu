@@ -2,6 +2,7 @@
  * 错误处理中间件 - ES Modules 版本
  */
 import logger from '../utils/logger.js'
+import BusinessError from '../utils/BusinessError.js'
 
 // ============ P1 修复：错误分类 ============
 /**
@@ -131,7 +132,16 @@ export function errorHandler(err, req, res, next) {
     })
   }
   
-  if (err instanceof AppError) {
+    // 处理业务错误
+  if (err instanceof BusinessError) {
+    return res.status(err.code || 400).json({
+      code: err.code || 400,
+      message: err.message,
+      error: 'BUSINESS_ERROR'
+    })
+  }
+
+if (err instanceof AppError) {
     return res.status(err.statusCode).json({
       code: err.statusCode,
       message: err.message,

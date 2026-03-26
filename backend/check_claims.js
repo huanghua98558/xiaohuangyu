@@ -1,1 +1,14 @@
-const { PrismaClient } = require("@prisma/client"); const prisma = new PrismaClient(); async function main() { const result = await prisma.$queryRaw`SELECT status, COUNT(*) as count FROM claims WHERE screenshots IS NOT NULL AND screenshots::text != [] GROUP BY status ORDER BY count DESC`; console.log("任务状态统计:", result); const imageApproved = await prisma.$queryRaw`SELECT c.id, c.status, c.image_review_status, c.link_review_status FROM claims c WHERE c.status = image_approved LIMIT 5`; console.log("图片审核通过的任务:", imageApproved); } main().catch(console.error).finally(() => prisma.$disconnect());
+const { PrismaClient } = require("@prisma/client");
+const prisma = new PrismaClient();
+
+async function check() {
+  const claims = await prisma.$queryRaw`
+    SELECT id, status, link_review_status, link_review_reason, review_note, reject_count, user_hint
+    FROM claims 
+    WHERE id IN (11, 12, 13, 14)
+    ORDER BY id
+  `;
+  console.log(JSON.stringify(claims, null, 2));
+  await prisma.$disconnect();
+}
+check().catch(console.error);

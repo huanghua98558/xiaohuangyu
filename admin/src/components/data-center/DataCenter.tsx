@@ -35,6 +35,7 @@ import {
   Signal,
   Server,
   Package,
+  Brain,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAdminWebSocket } from '@/hooks/useAdminWebSocket'
@@ -59,6 +60,9 @@ export function DataCenter({ onFullscreenChange }: DataCenterProps) {
   // WebSocket 状态
   const [wsStatus, setWsStatus] = useState<WSStatus>('disconnected')
   const [networkStatus, setNetworkStatus] = useState<NetworkStatus>('idle')
+  
+  // AI Token消耗统计
+  const [aiTokenStats, setAiTokenStats] = useState<{totalTokens: number; requests: number}>({totalTokens: 0, requests: 0})
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectCountRef = useRef(0)
   const reconnectTimerRef = useRef<NodeJS.Timeout | null>(null)
@@ -173,6 +177,31 @@ export function DataCenter({ onFullscreenChange }: DataCenterProps) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []) // 空依赖数组，只在组件挂载时创建一次
 
+  // 获取AI Token消耗统计
+  useEffect(() => {
+    const fetchTokenStats = async () => {
+      try {
+        const token = localStorage.getItem('admin_token')
+        const res = await fetch('/api/ai/admin/usage-stats', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        })
+        const data = await res.json()
+        if (data.code === 200) {
+          setAiTokenStats({
+            totalTokens: data.data?.summary?.totalTokens || 0,
+            requests: data.data?.summary?.requests || 0
+          })
+        }
+      } catch (e) {
+        console.error('获取Token统计失败:', e)
+      }
+    }
+    fetchTokenStats()
+    // 每5分钟刷新一次
+    const interval = setInterval(fetchTokenStats, 5 * 60 * 1000)
+    return () => clearInterval(interval)
+  }, [])
+  
   // 初始化 WebSocket 连接
   useEffect(() => {
     connectWebSocket()
@@ -272,14 +301,18 @@ export function DataCenter({ onFullscreenChange }: DataCenterProps) {
     )
   }
 
-  // 计算完成率
-  const completionRate = stats?.todayClaims ? 
+  // 计算完成率 - 名额完成率 = (已领取任务数 - 待审核数) / 今日任务名额
+  // 如果今日任务名额为0，显示0%
+  const completionRate = stats?.todayTaskAmount
+    ? Math.round((((stats?.todayClaims ?? 0) - (stats?.pendingClaims ?? 0)) / stats.todayTaskAmount) * 100)
+    : 0
+
+  // 旧的计算方式（今日完成任务/今日认领）
+  const taskCompletionRate = stats?.todayClaims ?
     Math.round(((stats?.todayCompletedClaims ?? 0) / (stats?.todayClaims ?? 1)) * 100) : 0
 
-  // 计算剩余名额
-  const remainTotal = stats?.todayTaskAmount && stats?.todayClaims 
-    ? (stats?.todayTaskAmount ?? 0) - (stats?.todayClaims ?? 0) 
-    : 0
+  // 计算剩余名额 - 确保非负数
+  const remainTotal = Math.max(0, (stats?.todayTaskAmount ?? 0) - (stats?.todayClaims ?? 0))
 
   // 趋势数据
   const claimsTrend = trendData.map((d: TrendDataPoint) => d.claims)
@@ -400,10 +433,10 @@ export function DataCenter({ onFullscreenChange }: DataCenterProps) {
                 size="large"
               />
               <DataCard
-                title="今日完成任务"
-                value={stats?.todayCompletedClaims ?? 0}
+                title="今日完成次数"
+                value={stats?.todayCompletedTasks ?? 0}
                 icon={<CheckCircle className="w-5 h-5" />}
-                trend={stats?.todayCompletedClaimsChange?.change}
+                trend={stats?.todayCompletedTasksChange?.change}
                 trendLabel="较昨日"
                 color="green"
                 size="large"
@@ -426,10 +459,10 @@ export function DataCenter({ onFullscreenChange }: DataCenterProps) {
                   color="orange"
                 />
                 <DataCard
-                  title="今日完成次数"
-                  value={stats?.todayCompletedTasks ?? 0}
+                  title="今日完成任务"
+                  value={stats?.todayCompletedClaims ?? 0}
                   icon={<CheckCircle className="w-4 h-4" />}
-                  trend={stats?.todayCompletedTasksChange?.change}
+                  trend={stats?.todayCompletedClaimsChange?.change}
                   color="blue"
                 />
                 <DataCard
@@ -453,17 +486,18 @@ export function DataCenter({ onFullscreenChange }: DataCenterProps) {
                   color="orange"
                 />
                 <DataCard
-                  title="完成率"
+                  title="名额完成率"
                   value={completionRate}
                   icon={<TrendingUp className="w-4 h-4" />}
                   suffix="%"
                   color="green"
                 />
                 <DataCard
-                  title="本周签到次数"
-                  value={stats?.weekSignIns ?? 0}
-                  icon={<UserCheck className="w-4 h-4" />}
-                  color="blue"
+                  title="今日AI消耗"
+                  value={aiTokenStats.totalTokens}
+                  icon={<Brain className="w-4 h-4" />}
+                  suffix=""
+                  color="purple"
                 />
               </div>
 
@@ -475,7 +509,7 @@ export function DataCenter({ onFullscreenChange }: DataCenterProps) {
                 <div className="flex items-center justify-around">
                   <GaugeChart
                     value={completionRate}
-                    label="任务完成率"
+                    label="名额完成率"
                     color="#3b82f6"
                   />
                   <GaugeChart

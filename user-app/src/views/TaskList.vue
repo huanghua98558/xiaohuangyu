@@ -58,7 +58,13 @@
     <div class="night-status" v-if="nightRealtime">
       <span class="night-icon">🌙</span>
       <span class="night-text" v-if="nightRealtime.isNight">
-        夜间加成进行中 · 当前系数 x{{ Number(nightRealtime.coefficient || 1).toFixed(2) }}
+        <span class="night-label">夜间加成进行中</span>
+        <span class="coefficient-separator">·</span>
+        <span class="night-label">当前系数</span>
+        <span class="coefficient-value">
+          x{{ Number(nightRealtime.coefficient || 1).toFixed(2) }}
+          <span class="fire-icon">🔥</span>
+        </span>
       </span>
       <span class="night-text" v-else>
         当前为白天时段 · 任务是否加成按发布时间判定
@@ -791,5 +797,95 @@ onUnmounted(() => {
 
 .empty-icon {
   font-size: 48px;
+}
+
+/* 夜间系数高亮闪烁样式 */
+.night-status {
+  background: linear-gradient(135deg, rgba(30, 30, 60, 0.9) 0%, rgba(45, 45, 80, 0.9) 100%);
+  border-radius: 12px;
+  padding: 12px 16px;
+  margin: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.night-icon {
+  font-size: 20px;
+  animation: moonRotate 3s ease-in-out infinite;
+  display: inline-block;
+}
+
+@keyframes moonRotate {
+  0%, 100% { transform: rotate(-10deg); }
+  50% { transform: rotate(10deg); }
+}
+
+.night-text {
+  color: #fff;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.night-label {
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 13px;
+}
+
+.coefficient-separator {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 12px;
+}
+
+.coefficient-value {
+  color: #ffd700;
+  font-size: 18px;
+  font-weight: 700;
+  text-shadow: 0 0 10px rgba(255, 215, 0, 0.5);
+  animation: coefficientPulse 1.5s ease-in-out infinite;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: linear-gradient(135deg, #ffd700 0%, #ffed4e 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+@keyframes coefficientPulse {
+  0%, 100% {
+    transform: scale(1);
+    text-shadow: 0 0 10px rgba(255, 215, 0, 0.5);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.08);
+    text-shadow: 0 0 20px rgba(255, 215, 0, 0.8),
+                 0 0 30px rgba(255, 215, 0, 0.4);
+    opacity: 0.9;
+  }
+}
+
+.fire-icon {
+  font-size: 16px;
+  animation: fireFlicker 0.8s ease-in-out infinite;
+  display: inline-block;
+}
+
+@keyframes fireFlicker {
+  0%, 100% {
+    transform: scale(1) rotate(0deg);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.2) rotate(-5deg);
+    opacity: 0.8;
+  }
 }
 </style>

@@ -1098,7 +1098,7 @@ router.get('/reviewer/reports', adminOrReviewerAuth, async (req, res) => {
     // 直接从claims查询待人工审核的数据（ai_review_status = 'manual'）
     const { data: claims, error } = await supabase
       .from('claims')
-      .select('id, user_id, task_id, screenshots, status, image_review_status, link_review_status, ai_review_status, ai_confidence, ai_reason, claimed_at, tasks(id, title, platform, action), users(id, username)')
+      .select('id, user_id, task_id, screenshots, status, image_review_status, link_review_status, ai_review_status, ai_confidence, ai_reason, claimed_at, tasks(id, title, platform, action, video_url), users(id, username)')
       .eq('ai_review_status', 'manual')
       .order('claimed_at', { ascending: false })
       .range((page - 1) * pageSize, page * pageSize - 1)

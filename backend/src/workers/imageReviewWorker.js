@@ -404,11 +404,38 @@ async function callBailianAI(imagePath, taskContext) {
               role: 'user',
               content: [
                 { image: `data:${mimeType};base64,${base64Image}` },
-                { text: `请只返回 JSON，不要输出其它解释。分析这张图片并提取以下字段：
-1. 图片类型：comment_screenshot（评论截图）或 author_profile（达人主页）
-2. 评论截图需要识别：commenter_nickname、comment_content、是否出现“评论”关键词
-3. 达人主页需要识别：author_name、点赞状态、收藏状态、关注状态
-4. 识别不到的字段请返回空字符串
+                { text: `请只返回 JSON，不要输出其它解释。分析这张小红书截图：
+
+【图片类型判断】
+- comment_screenshot：评论区截图，包含评论列表
+- author_profile：达人主页，显示头像、名字、右侧有互动按钮
+
+【达人主页互动状态识别 - 重点！】
+这是小红书达人主页，请仔细观察右侧一列互动按钮区域（从上到下依次是：点赞、收藏、关注）：
+
+1. 点赞状态（心形图标）：
+   - 未点赞：白色空心心形 ❤️‍🩹（轮廓线，内部是空的或透明的）
+   - 已点赞：红色实心心形 ❤️（整体是红色填充的）
+   - 判断要点：看心形内部是否有红色填充！
+
+2. 收藏状态（星形图标）：
+   - 未收藏：白色空心星形 ⭐（轮廓线，内部是空的）
+   - 已收藏：黄色实心星形 🌟（整体是黄色填充的）
+   - 判断要点：看星形内部是否有黄色填充！
+
+3. 关注状态：
+   - 红色"+"按钮 = 未关注
+   - 灰色"已关注"按钮 = 已关注
+
+【常见误判警告】
+- 不要把白色空心心形误判为已点赞！
+- 白色空心心形 = 未点赞
+- 红色实心心形 = 已点赞
+
+【评论截图识别】
+- commenter_nickname：评论人昵称
+- comment_content：评论内容
+- has_comment_keyword：是否出现"评论"关键词
 
 返回格式：
 {
@@ -448,6 +475,7 @@ async function callBailianAI(imagePath, taskContext) {
       const jsonMatch = contentText.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         const result = JSON.parse(jsonMatch[0]);
+        console.log("[Worker] 百炼 AI 原始返回:", JSON.stringify(result));
         const type = result.type === 'author_profile' ? 'B' : 'A';
         const commentContent = extractCommentContent(result.comment_content || result.comment);
         const commenterNickname = normalizeDetectedValue(result.commenter_nickname);
@@ -810,81 +838,26 @@ class ImageReviewWorker {
         }
       }
       
-      // 如果所有 OCR 都失败，尝试降级到百炼 AI
-      if (!hasEffectiveEvidence(combinedEvidence)) {
-        console.log(`[Worker] 所有 OCR 失败，尝试百炼 AI 降级...`);
-        const fallbackEvidence = createCombinedEvidence('bailian_ai_fallback');
-
-        for (let i = 0; i < screenshotPaths.length; i++) {
-          const aiResult = await callBailianAI(screenshotPaths[i], {
-            taskTitle: item.task_title,
-            action: item.action,
-            stage: 'technical_fallback'
-          });
-
-          if (!aiResult) {
-            fallbackEvidence.screenshots.push({
-              screenshotIndex: i + 1,
-              source: 'bailian_ai',
-              status: 'failed'
-            });
-            continue;
-          }
-
-          mergeAiEvidence(fallbackEvidence, aiResult, i + 1);
-        }
-
-        if (hasEffectiveEvidence(fallbackEvidence)) {
-          combinedEvidence = fallbackEvidence;
-          usedFallback = true;
-        } else {
-          await this.moveToManualReview(item, '图片识别失败，已转人工复审', {
-            source: 'ocr_bailian',
-            screenshots: screenshots.length,
-            blocking: true
-          });
-          return;
-        }
-      }
-
-      // 综合判断
+      // 直接判断结果（取消 AI 降级和 AI 复审）
       let result = this.evaluateResult(combinedEvidence, yoloResult, item);
-      
-      if (usedFallback) {
-        result.source = 'bailian_ai_fallback';
-      }
-
-      if (!result.passed && !usedFallback) {
-        const aiRecheck = await this.runAiReReview(screenshotPaths, item, result);
-
-        if (aiRecheck?.decision === 'approved') {
-          result = aiRecheck.result;
-        } else if (aiRecheck?.decision === 'rejected') {
-          result = aiRecheck.result;
-          await this.saveResult(item, result, Date.now() - startTime);
-          await this.rejectTask(item, result, {
-            pushToManualQueue: true,
-            manualReason: 'AI复审拒绝，已加入人工检查列表',
-            manualDetails: {
-              stage: 'image_review',
-              blocking: false,
-              aiRecheck: true
-            }
-          });
-          return;
-        } else {
-          await this.moveToManualReview(item, 'AI复审失败，已转人工检查', {
-            stage: 'image_review',
-            source: 'ai_recheck',
-            blocking: true,
-            initialReasons: result.reasons
-          });
-          return;
-        }
-      }
 
       // 保存结果
       await this.saveResult(item, result, Date.now() - startTime);
+
+      // 如果不通过，拒绝并推送人工检查列表
+      if (!result.passed) {
+        await this.rejectTask(item, result, {
+          pushToManualQueue: true,
+          manualReason: '图片审核不通过: ' + result.reasons.join(', '),
+          manualDetails: {
+            stage: 'image_review',
+            blocking: false,
+            reasons: result.reasons,
+            detected: result.detected
+          }
+        });
+        return;
+      }
 
       // 如果通过且需要链接验证
       if (result.passed && item.video_url) {
@@ -1071,13 +1044,16 @@ class ImageReviewWorker {
     // 获取审核规则 (从 action 解析)
     const action = item.action || '';
     const requiresCommentFlow = action.includes('评论') || action.includes('留言') || action.includes('体验');
+    // "短视频体验官" 类任务默认需要全部检测（点赞、收藏）
+    const isFullCheck = action.includes('体验') || action.includes('短视频') || action.includes('short_video');
+
     const reviewSettings = {
       checks: {
         comment: requiresCommentFlow,
         commenterNickname: requiresCommentFlow,
         authorName: true,
-        like: action.includes('点赞'),
-        favorite: action.includes('收藏'),
+        like: isFullCheck || action.includes('点赞'),      // 体验类任务检查点赞
+        favorite: isFullCheck || action.includes('收藏'),  // 体验类任务检查收藏
         follow: action.includes('关注')
       }
     };
@@ -1112,6 +1088,7 @@ class ImageReviewWorker {
     }
 
     // 互动验证
+    console.log("[Worker] 互动验证: checks.like=" + reviewSettings.checks.like + ", hasLike=" + result.interaction.hasLike + ", action=" + action);
     if (reviewSettings.checks.like && !result.interaction.hasLike) {
       result.passed = false;
       result.reasons.push('未检测到点赞');
@@ -1321,8 +1298,16 @@ class ImageReviewWorker {
           console.log(`[Worker] ⚠️ 任务已释放: 拒绝次数达到3次`);
         } else {
           // 退回用户端，状态改为 doing，允许重新提交
+          // 需要重新设置倒计时（从任务获取限时）
+          const timeLimitResult = await client.query(
+            `SELECT t.time_limit_minutes FROM claims c JOIN tasks t ON c.task_id = t.id WHERE c.id = $1`,
+            [item.claim_id]
+          );
+          const timeLimitMinutes = timeLimitResult.rows[0]?.time_limit_minutes || 15;
+          const newExpiresAt = new Date(Date.now() + timeLimitMinutes * 60 * 1000);
+          
           await client.query(`
-            UPDATE claims 
+            UPDATE claims
             SET status = $1,
                 reject_count = $2,
                 submitted_at = NULL,
@@ -1332,10 +1317,11 @@ class ImageReviewWorker {
                 ai_reason = $6,
                 image_review_status = 'rejected',
                 image_review_reason = $3,
-                review_history = $4
-            WHERE id = $7
-          `, [CLAIM_STATUS.DOING, rejectCount, reviewReason, JSON.stringify(reviewHistory), nextAiStatus, aiReason, item.claim_id]);
-          console.log(`[Worker] 🔄 任务已退回用户端: 拒绝次数 ${rejectCount}/3`);
+                review_history = $4,
+                expires_at = $7
+            WHERE id = $8
+          `, [CLAIM_STATUS.DOING, rejectCount, reviewReason, JSON.stringify(reviewHistory), nextAiStatus, aiReason, newExpiresAt, item.claim_id]);
+          console.log(`[Worker] 🔄 任务已退回用户端: 拒绝次数 ${rejectCount}/3, 新倒计时 ${timeLimitMinutes}分钟`);
         }
       });
 

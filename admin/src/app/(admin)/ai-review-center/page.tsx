@@ -78,21 +78,6 @@ interface ServiceStatus {
   yolo: { healthy: boolean; url: string }
   browser: { healthy: boolean; url: string }
 }
-interface UsageStats {
-  day: string
-  summary: {
-    requests: number
-    promptTokens: number
-    completionTokens: number
-    totalTokens: number
-    failures: number
-  }
-  stages?: Array<{
-    name: string
-    requests?: number
-    tokens?: number
-  }>
-}
 
 // 常量
 const PLATFORM_COLORS: Record<string, string> = {
@@ -105,78 +90,17 @@ const PLATFORM_COLORS: Record<string, string> = {
 
 const isApiOk = (code?: number) => code === 0 || code === 200
 
-function tryParseJson<T = any>(value?: string | T | null): T | null {
-  if (!value) return null
-  if (typeof value !== 'string') return value as T
-  try {
-    return JSON.parse(value) as T
-  } catch {
-    return null
-  }
-}
-
-function formatImageReviewSource(source?: string | null) {
-  switch (source) {
-    case 'ai_review':
-      return 'AI复审'
-    case 'bailian_ai_fallback':
-      return 'AI降级复审'
-    case 'ocr_yolo':
-    default:
-      return 'OCR + YOLO'
-  }
-}
-
-function formatHistoryAction(entry: any) {
-  if (entry?.stage === 'manual_review' && entry?.action === 'queued') return '已加入人工检查'
-  if (entry?.stage === 'manual_review' && entry?.action === 'approved') return '人工纠正通过'
-  if (entry?.stage === 'manual_review' && entry?.action === 'rejected') return '人工确认拒绝'
-  if (entry?.stage === 'image_review' && entry?.action === 'approved') return '图片审核通过'
-  if (entry?.stage === 'image_review' && entry?.action === 'rejected') return '图片审核拒绝'
-  if (entry?.stage === 'image_review' && entry?.action === 'manual') return '图片转人工'
-  if (entry?.stage === 'link_review' && entry?.action === 'approved') return '连接审核通过'
-  if (entry?.stage === 'link_review' && entry?.action === 'rejected') return '连接审核拒绝'
-  if (entry?.stage === 'link_review' && entry?.action === 'manual') return '连接转人工'
-  if (entry?.stage === 'link_review' && entry?.action === 'queued') return '已进入连接队列'
-  if (entry?.stage === 'claim_flow' && entry?.action === 'returned') return '任务退回用户'
-  if (entry?.stage === 'claim_flow' && entry?.action === 'released') return '任务自动释放'
-  return entry?.action || '状态更新'
-}
-
-function buildHistoryHighlights(entry: any) {
-  const details = entry?.details || entry?.data || {}
-  const lines: string[] = []
-
-  if (details.source) {
-    lines.push(`来源: ${formatImageReviewSource(details.source)}`)
-  }
-  if (details.commenterNickname) {
-    lines.push(`评论人: ${details.commenterNickname}`)
-  }
-  if (details.comment) {
-    lines.push(`评论内容: ${details.comment}`)
-  }
-  if (details.authorName) {
-    lines.push(`达人: ${details.authorName}`)
-  }
-  if (details.commentResult?.matches?.length) {
-    lines.push(`匹配评论: ${details.commentResult.matches[0]?.extracted || '已匹配'}`)
-  }
-  if (details.nicknameResult?.submittedNickname || details.nicknameResult?.matchedNickname) {
-    lines.push(`昵称比对: ${details.nicknameResult?.submittedNickname || '没有'} / ${details.nicknameResult?.matchedNickname || '没有'}`)
-  }
-  if (details.authorResult?.reason) {
-    lines.push(details.authorResult.reason)
-  }
-  if (details.finalCommentJudgement?.reason) {
-    lines.push(`最终判定: ${details.finalCommentJudgement.reason}`)
-  }
-
-  return lines
-}
-
 
 // 多状态显示组件 - 同时显示图片审核和链接验证状态
+
+// 判断是否需要人工审核（支持多种审核阶段）
+function isManualReview(item: any): boolean {
+  return item.ai_review_status === 'manual' || 
+         item.link_review_status === 'manual' || 
+         item.image_review_status === 'manual' ||
+         item.status === 'pending_manual';
+}
+
 function MultiStatusBadge({ item }: { item: ReviewItem | LogItem }) {
   const imageStatus = item.image_review_status;
   const linkStatus = item.link_review_status;
@@ -298,8 +222,8 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; icon: React.
   'image_reviewing': { label: '图片审核中', color: 'bg-yellow-500/10 text-yellow-600 border-yellow-500/30', icon: <Scan className="w-3 h-3" /> },
   'pending_link': { label: '待连接审核', color: 'bg-purple-500/10 text-purple-600 border-purple-500/30', icon: <Globe className="w-3 h-3" /> },
   'link_reviewing': { label: '链接验证中', color: 'bg-purple-500/10 text-purple-600 border-purple-500/30', icon: <Globe className="w-3 h-3" /> },
-  'pending_manual': { label: '人工', color: 'bg-orange-500/10 text-orange-600 border-orange-500/30', icon: <ClipboardCheck className="w-3 h-3" /> },
-  'manual': { label: '人工', color: 'bg-orange-500/10 text-orange-600 border-orange-500/30', icon: <ClipboardCheck className="w-3 h-3" /> },
+  'pending_manual': { label: '待人工', color: 'bg-orange-500/10 text-orange-600 border-orange-500/30', icon: <ClipboardCheck className="w-3 h-3" /> },
+  'manual': { label: '待人工', color: 'bg-orange-500/10 text-orange-600 border-orange-500/30', icon: <ClipboardCheck className="w-3 h-3" /> },
   'approved': { label: '已通过', color: 'bg-green-500/10 text-green-600 border-green-500/30', icon: <CheckCircle className="w-3 h-3" /> },
   'doing': { label: '已退回', color: 'bg-red-500/10 text-red-600 border-red-500/30', icon: <AlertCircle className="w-3 h-3" /> },
   'rejected': { label: '已拒绝', color: 'bg-red-500/10 text-red-600 border-red-500/30', icon: <XCircle className="w-3 h-3" /> },
@@ -404,7 +328,6 @@ export default function AIReviewCenterPage() {
     yolo: { healthy: false, url: '' },
     browser: { healthy: false, url: '' }
   })
-  const [usageStats, setUsageStats] = useState<UsageStats | null>(null)
   const [imageQueue, setImageQueue] = useState<ReviewItem[]>([])
   const [linkQueue, setLinkQueue] = useState<ReviewItem[]>([])
   const [manualQueue, setManualQueue] = useState<ReviewItem[]>([])
@@ -418,6 +341,7 @@ export default function AIReviewCenterPage() {
   const [previewImages, setPreviewImages] = useState<string[]>([])
   const [previewIndex, setPreviewIndex] = useState(0)
   const [reviewNote, setReviewNote] = useState('')
+  const [aiTokenStats, setAiTokenStats] = useState<{ totalTokens: number; requests: number }>({ totalTokens: 0, requests: 0 })
 
   const getHeaders = () => ({
     'Authorization': `Bearer ${localStorage.getItem('admin_token')}`,
@@ -434,6 +358,30 @@ export default function AIReviewCenterPage() {
     return `${Math.floor(hours / 24)}天前`
   }
 
+  // 获取 AI Token 消耗统计
+  useEffect(() => {
+    const fetchTokenStats = async () => {
+      try {
+        const token = localStorage.getItem('admin_token')
+        const res = await fetch('/api/ai/admin/usage-stats', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        })
+        const data = await res.json()
+        if (data.code === 200 || data.code === 0) {
+          setAiTokenStats({
+            totalTokens: data.data?.summary?.totalTokens || 0,
+            requests: data.data?.summary?.requests || 0
+          })
+        }
+      } catch (e) {
+        console.error('获取Token统计失败:', e)
+      }
+    }
+    fetchTokenStats()
+    const interval = setInterval(fetchTokenStats, 5 * 60 * 1000)
+    return () => clearInterval(interval)
+  }, [])
+
 
   // 合并正在处理的队列（包括图片审核中、链接验证中、待链接验证）
   const processingQueue = useMemo(() => {
@@ -447,19 +395,15 @@ export default function AIReviewCenterPage() {
     return Array.from(uniqueMap.values()).sort((a, b) => b.id - a.id)
   }, [imageQueue, linkQueue, pendingLinkQueue])
 
-  const semanticUsage = useMemo(() => {
-    return usageStats?.stages?.find((stage) => stage.name === 'semantic_analysis') || null
-  }, [usageStats])
-
   // Tab配置
   const tabs = [
+    { key: 'manual', label: '人工', count: stats.manual || manualQueue.length, icon: ClipboardCheck },
+    { key: 'logs', label: '处理记录', count: logsQueue.length, icon: FileText },
+    { key: 'approved', label: '已通过', count: stats.approved || 0, icon: CheckCircle },
+    { key: 'rejected', label: '已拒绝', count: stats.rejected || 0, icon: XCircle },
     { key: 'processing', label: '正在处理', count: processingQueue.length, icon: Zap },
     { key: 'image', label: '图片审核', count: stats.imageReviewing || imageQueue.length, icon: Scan },
     { key: 'link', label: '链接验证', count: (stats.linkReviewing || 0) + (stats.pendingLink || 0), icon: Globe },
-    { key: 'manual', label: '人工', count: stats.manual || manualQueue.length, icon: ClipboardCheck },
-    { key: 'approved', label: '已通过', count: stats.approved || 0, icon: CheckCircle },
-    { key: 'rejected', label: '已拒绝', count: stats.rejected || 0, icon: XCircle },
-    { key: 'logs', label: '处理记录', count: logsQueue.length, icon: FileText },
   ]
 
   // 获取当前列表
@@ -481,7 +425,7 @@ export default function AIReviewCenterPage() {
     setLoading(true)
     try {
       const headers = getHeaders()
-      const [statsRes, imageRes, linkRes, manualRes, approvedRes, rejectedRes, logsRes, pendingLinkRes, usageStatsRes] = await Promise.all([
+      const [statsRes, imageRes, linkRes, manualRes, approvedRes, rejectedRes, logsRes, pendingLinkRes] = await Promise.all([
         fetch('/api/ai/reviewer/stats', { headers }),
         fetch('/api/ai/reviewer/queue?status=image_reviewing', { headers }),
         fetch('/api/ai/reviewer/queue?status=link_reviewing', { headers }),
@@ -489,20 +433,11 @@ export default function AIReviewCenterPage() {
         fetch('/api/ai/reviewer/queue?status=approved', { headers }),
         fetch('/api/ai/reviewer/queue?status=rejected', { headers }),
         fetch('/api/ai/reviewer/logs', { headers }),
-        fetch('/api/ai/reviewer/queue?status=pending_link', { headers }),
-        fetch('/admin/api/ai/admin/usage-stats', { headers })
+        fetch('/api/ai/reviewer/queue?status=pending_link', { headers })
       ])
 
-      const [statsData, imageData, linkData, manualData, approvedData, rejectedData, logsData, pendingLinkData, usageStatsData] = await Promise.all([
-        statsRes.json(),
-        imageRes.json(),
-        linkRes.json(),
-        manualRes.json(),
-        approvedRes.json(),
-        rejectedRes.json(),
-        logsRes.json(),
-        pendingLinkRes.json(),
-        usageStatsRes.json()
+      const [statsData, imageData, linkData, manualData, approvedData, rejectedData, logsData, pendingLinkData] = await Promise.all([
+        statsRes.json(), imageRes.json(), linkRes.json(), manualRes.json(), approvedRes.json(), rejectedRes.json(), logsRes.json(), pendingLinkRes.json()
       ])
 
       if (isApiOk(statsData.code)) setStats(statsData.data)
@@ -513,7 +448,6 @@ export default function AIReviewCenterPage() {
       if (isApiOk(rejectedData.code)) setRejectedQueue(rejectedData.data.list || [])
       if (isApiOk(logsData.code)) setLogsQueue(logsData.data.list || [])
       if (isApiOk(pendingLinkData.code)) setPendingLinkQueue(pendingLinkData.data.list || [])
-      if (isApiOk(usageStatsData.code)) setUsageStats(usageStatsData.data || null)
     } catch (e) {
       console.error('加载数据失败:', e)
       toast.error('加载数据失败')
@@ -688,7 +622,7 @@ export default function AIReviewCenterPage() {
           </div>
         </div>
         <div className="text-xs text-muted-foreground">{getRelativeTime(item.claimed_at)}</div>
-        {(item.status === 'pending_manual' || item.ai_review_status === 'manual' || item.link_review_status === 'manual') && (
+        {isManualReview(item) && (
           <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
             <Button size="sm" variant="default" className="h-7 text-xs" onClick={(e) => { e.stopPropagation(); handleManualReview(item.id, 'approve') }}>
               <CheckCircle className="w-3 h-3 mr-1" />通过
@@ -745,20 +679,6 @@ export default function AIReviewCenterPage() {
             <h1 className="text-xl font-bold">AI 审核中心</h1>
             <p className="text-xs text-muted-foreground">图片审核 → 链接验证 → 完成</p>
           </div>
-          <div className="rounded-xl border bg-muted/40 px-3 py-2 text-xs min-w-[260px]">
-            <div className="flex items-center gap-2 font-medium">
-              <Zap className="w-3.5 h-3.5 text-amber-500" />
-              百炼AI消耗实时统计
-            </div>
-            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground">
-              <span>请求 {usageStats?.summary.requests || 0}</span>
-              <span>评论检查 {semanticUsage?.tokens || 0}</span>
-              <span>Prompt {usageStats?.summary.promptTokens || 0}</span>
-              <span>Completion {usageStats?.summary.completionTokens || 0}</span>
-              <span>Total {usageStats?.summary.totalTokens || 0}</span>
-              <span>失败 {usageStats?.summary.failures || 0}</span>
-            </div>
-          </div>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" className="gap-2" onClick={loadAllData} disabled={loading}>
@@ -776,14 +696,52 @@ export default function AIReviewCenterPage() {
         </div>
       </div>
 
-      {/* 统计卡片 */}
-      <div className="grid grid-cols-6 gap-3 p-4 shrink-0">
+      {/* 统计卡片 - 第一行：审核状态 */}
+      <div className="grid grid-cols-6 gap-3 p-4 pb-2 shrink-0">
         <StatCard label="图片审核中" value={stats.imageReviewing || 0} icon={Scan} color="from-yellow-500 to-orange-500" subtitle="OCR + YOLO" />
         <StatCard label="链接验证中" value={stats.linkReviewing || 0} icon={Globe} color="from-purple-500 to-violet-500" subtitle="验证视频/评论" />
-        <StatCard label="人工" value={stats.manual || 0} icon={ClipboardCheck} color="from-orange-500 to-amber-500" subtitle="可人工介入检查" />
+        <StatCard label="待人工" value={stats.manual || 0} icon={ClipboardCheck} color="from-orange-500 to-amber-500" subtitle="需人工确认" />
         <StatCard label="已通过" value={stats.approved || stats.aiApproved || 0} icon={CheckCircle} color="from-emerald-500 to-green-500" subtitle="累计通过" />
         <StatCard label="已拒绝" value={stats.rejected || 0} icon={XCircle} color="from-red-500 to-rose-500" subtitle="累计拒绝" />
         <StatCard label="自动化率" value={`${stats.autoRate || 0}%`} icon={TrendingUp} color="from-cyan-500 to-blue-500" subtitle="效率指标" />
+      </div>
+
+      {/* 统计卡片 - 第二行：AI Token 消耗 */}
+      <div className="grid grid-cols-2 gap-3 px-4 pb-4 shrink-0">
+        <div className="bg-gradient-to-r from-indigo-500/10 to-purple-500/10 rounded-lg p-3 border border-indigo-500/20">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="p-2 rounded-lg bg-indigo-500/20">
+                <Bot className="w-4 h-4 text-indigo-600" />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">语义评论分析</p>
+                <p className="text-lg font-bold text-indigo-600">{aiTokenStats.totalTokens.toLocaleString()}</p>
+              </div>
+            </div>
+            <div className="text-right">
+              <p className="text-xs text-muted-foreground">今日消耗</p>
+              <p className="text-sm font-medium">{aiTokenStats.requests} 次请求</p>
+            </div>
+          </div>
+        </div>
+        <div className="bg-gradient-to-r from-slate-500/10 to-gray-500/10 rounded-lg p-3 border border-slate-500/20">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="p-2 rounded-lg bg-slate-500/20">
+                <TrendingUp className="w-4 h-4 text-slate-600" />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">自动化效果</p>
+                <p className="text-lg font-bold text-slate-600">{stats.autoRate || 0}%</p>
+              </div>
+            </div>
+            <div className="text-right">
+              <p className="text-xs text-muted-foreground">节省人工</p>
+              <p className="text-sm font-medium">{Math.round((stats.autoRate || 0) * (stats.total || 0) / 100)} 条</p>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* 服务状态 */}
@@ -871,7 +829,7 @@ export default function AIReviewCenterPage() {
 
       {/* 详情弹窗 */}
       <Dialog open={showDetail} onOpenChange={setShowDetail}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-hidden flex flex-col">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Eye className="w-5 h-5 text-primary" />
@@ -880,17 +838,7 @@ export default function AIReviewCenterPage() {
           </DialogHeader>
           
           {selectedItem && (
-            <div className="space-y-4">
-              {(() => {
-                const aiDetail = tryParseJson<any>(selectedItem.ai_reason)
-                const linkDetail = tryParseJson<any>(selectedItem.link_review_reason)
-                const canManualReview =
-                  selectedItem.status === 'pending_manual' ||
-                  selectedItem.ai_review_status === 'manual' ||
-                  selectedItem.link_review_status === 'manual'
-
-                return (
-                  <>
+            <div className="space-y-4 overflow-y-auto flex-1 pr-1">
               {/* 基础信息 */}
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <div className="p-3 rounded bg-muted/50">
@@ -940,19 +888,25 @@ export default function AIReviewCenterPage() {
                       </span>
                     </div>
                   )}
-                  {selectedItem.ai_reason && (
-                    <div className="text-muted-foreground">AI判断: {selectedItem.ai_reason}</div>
-                  )}
-                  {aiDetail && (aiDetail.commenterNickname || aiDetail.comment || aiDetail.authorName || aiDetail.source) && (
-                    <div className="rounded bg-blue-50 px-3 py-2 text-xs text-slate-700 space-y-1">
-                      <div className="font-medium text-slate-900">图片审核明细</div>
-                      <div>审核来源: {formatImageReviewSource(aiDetail.source)}</div>
-                      <div>评论人昵称: {aiDetail.commenterNickname || '没有'}</div>
-                      <div>评论内容: {aiDetail.comment || '没有'}</div>
-                      <div>达人名字: {aiDetail.authorName || '没有'}</div>
-                      <div>点赞/收藏/关注: {aiDetail.detected?.like || '没有'} / {aiDetail.detected?.favorite || '没有'} / {aiDetail.detected?.follow || '没有'}</div>
-                    </div>
-                  )}
+                  {selectedItem.ai_reason && (() => {
+                    try {
+                      const aiData = typeof selectedItem.ai_reason === 'string' 
+                        ? JSON.parse(selectedItem.ai_reason) 
+                        : selectedItem.ai_reason;
+                      
+                      return (
+                        <div className="text-muted-foreground space-y-1">
+                          <div><span className="font-medium">AI判断:</span> {aiData.passed ? '通过' : '未通过'}</div>
+                          {aiData.reasons?.length > 0 && (
+                            <div className="text-xs">原因: {aiData.reasons.join('; ')}</div>
+                          )}
+                          {aiData.source && <div className="text-xs">来源: {aiData.source}</div>}
+                        </div>
+                      );
+                    } catch (e) {
+                      return <div className="text-muted-foreground">AI判断: {selectedItem.ai_reason}</div>;
+                    }
+                  })()}
                   {selectedItem.image_review_reason && (() => {
                     try {
                       const reason = typeof selectedItem.image_review_reason === 'string' 
@@ -1015,16 +969,6 @@ export default function AIReviewCenterPage() {
                             <div className="mt-1">
                               评论验证: {reason.commentResult.passed ? '✅ 通过' : 
                                 <span className="text-red-600">{reason.commentResult.reasons?.join('; ') || '未通过'}</span>}
-                            </div>
-                          )}
-                          {linkDetail?.commentResult?.matches?.length > 0 && (
-                            <div className="mt-1">
-                              对比成功评论: {linkDetail.commentResult.matches[0]?.extracted || '已匹配'}
-                            </div>
-                          )}
-                          {reason.linkResult?.authorName && (
-                            <div className="mt-1">
-                              页面达人: {reason.linkResult.authorName}
                             </div>
                           )}
                           
@@ -1136,14 +1080,15 @@ export default function AIReviewCenterPage() {
                                 h.action?.includes('rejected') ? "text-red-600" :
                                 h.action?.includes('approved') ? "text-green-600" : "text-gray-600"
                               )}>
-                                {formatHistoryAction(h)}
+                                {h.action === 'image_rejected' ? '图片审核拒绝' :
+                                 h.action === 'link_rejected' ? '链接验证拒绝' :
+                                 h.action === 'image_approved' ? '图片审核通过' :
+                                 h.action === 'link_approved' ? '链接验证通过' :
+                                 h.action}
                               </div>
-                              {(h.reason || h.data?.reason) && (
-                                <div className="text-muted-foreground mt-0.5">{h.reason || h.data?.reason}</div>
+                              {h.data?.reason && (
+                                <div className="text-muted-foreground mt-0.5">{h.data.reason}</div>
                               )}
-                              {buildHistoryHighlights(h).map((line, index) => (
-                                <div key={index} className="text-[11px] text-muted-foreground mt-0.5">{line}</div>
-                              ))}
                             </div>
                             <div className="text-muted-foreground shrink-0 text-[10px]">
                               {h.timestamp ? new Date(h.timestamp).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}
@@ -1157,7 +1102,7 @@ export default function AIReviewCenterPage() {
               )}
 
               {/* 人工审核操作 */}
-              {canManualReview && (
+              {isManualReview(selectedItem) && (
                 <>
                   <div>
                     <div className="text-sm font-medium mb-2">审核备注</div>
@@ -1179,9 +1124,6 @@ export default function AIReviewCenterPage() {
                   </div>
                 </>
               )}
-                  </>
-                )
-              })()}
             </div>
           )}
         </DialogContent>

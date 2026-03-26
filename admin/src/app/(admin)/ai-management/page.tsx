@@ -249,6 +249,21 @@ interface StatsData {
   byAction: Array<{ action: string; count: number }>
 }
 
+// AI使用统计
+interface AIUsageStats {
+  day: string
+  summary: {
+    requests: number
+    promptTokens: number
+    completionTokens: number
+    totalTokens: number
+    failures: number
+  }
+  providers: Array<{ name: string; requests?: number; tokens?: number }>
+  models: Array<{ name: string; requests?: number; tokens?: number }>
+  stages: Array<{ name: string; requests?: number; tokens?: number }>
+}
+
 // 审核规则类型
 interface ReviewRule {
   id: number
@@ -346,6 +361,13 @@ export default function AIManagementPage() {
   const [manualReviewQueue, setManualReviewQueue] = useState<any[]>([])
   const [manualReviewLoading, setManualReviewLoading] = useState(false)
   const [queueStats, setQueueStats] = useState<{ pending: number; manual: number; aiApproved: number; aiRejected: number }>({ pending: 0, manual: 0, aiApproved: 0, aiRejected: 0 })
+  const [aiUsageStats, setAIUsageStats] = useState<AIUsageStats>({
+    day: "",
+    summary: { requests: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, failures: 0 },
+    providers: [],
+    models: [],
+    stages: []
+  })
 
   // 获取认证头
   const getAuthHeaders = () => {
@@ -393,7 +415,18 @@ export default function AIManagementPage() {
       const data = await res.json()
       if (data.code === 200) setStats(data.data || stats)
     } catch (error) {
-      console.error('加载统计失败:', error)
+      console.error("加载统计失败:", error)
+    }
+  }
+
+  // 加载AI使用统计
+  const loadAIUsageStats = async () => {
+    try {
+      const res = await fetch("/admin/api/ai/admin/usage-stats", { headers: getAuthHeaders() })
+      const data = await res.json()
+      if (data.code === 200) setAIUsageStats(data.data)
+    } catch (error) {
+      console.error("加载AI使用统计失败:", error)
     }
   }
 
@@ -507,6 +540,7 @@ export default function AIManagementPage() {
     loadConfigs()
     loadLogs()
     loadStats()
+    loadAIUsageStats()
     loadReviewRules()
     loadBrowserHealth()
     loadAvailableModels()
@@ -621,34 +655,82 @@ export default function AIManagementPage() {
       {/* 主内容区 */}
       <div className="flex-1 overflow-hidden">
         <Tabs defaultValue="configs" className="h-full flex flex-col">
-          {/* 配额统计卡片 - 放置在导航栏上方 */}
+          {/* 双AI Token消耗统计 - 两个卡片并排 */}
           <div className="px-3 md:px-6 py-2 md:py-3 bg-white dark:bg-gray-800 border-b shrink-0">
-            <div className="flex items-center justify-between mb-2 md:mb-3">
-              <div className="flex items-center gap-2">
-                <DollarSign className="w-3.5 h-3.5 md:w-4 md:h-4 text-green-500" />
-                <span className="text-xs md:text-sm font-medium">配额统计</span>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
+              {/* 图片复审AI统计 */}
+              <div className="p-3 rounded-lg border border-blue-200 bg-blue-50/50 dark:bg-blue-900/20 dark:border-blue-800">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <ImageIcon className="w-4 h-4 text-blue-500" />
+                    <span className="text-sm font-medium">图片复审AI</span>
+                  </div>
+                  <Badge variant="outline" className="text-blue-600 border-blue-200 text-xs">
+                    百炼视觉
+                  </Badge>
+                </div>
+                <div className="grid grid-cols-4 gap-2 text-center">
+                  <div>
+                    <p className="text-[10px] text-muted-foreground">请求次数</p>
+                    <p className="text-base font-bold">{aiUsageStats.stages?.find(s => s.name === "image_review")?.requests || 0}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-muted-foreground">输入Token</p>
+                    <p className="text-base font-bold text-blue-600">{(() => {
+                      const img = aiUsageStats.stages?.find(s => s.name === "image_review")
+                      return img?.tokens ? Math.round(img.tokens * 0.7) : 0
+                    })()}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-muted-foreground">输出Token</p>
+                    <p className="text-base font-bold text-green-600">{(() => {
+                      const img = aiUsageStats.stages?.find(s => s.name === "image_review")
+                      return img?.tokens ? Math.round(img.tokens * 0.3) : 0
+                    })()}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-muted-foreground">总Token</p>
+                    <p className="text-base font-bold text-purple-600">{aiUsageStats.stages?.find(s => s.name === "image_review")?.tokens || 0}</p>
+                  </div>
+                </div>
               </div>
-              <Badge variant="outline" className="text-green-600 border-green-200 text-xs">
-                正常
-              </Badge>
+              
+              {/* 评论审查AI统计 */}
+              <div className="p-3 rounded-lg border border-emerald-200 bg-emerald-50/50 dark:bg-emerald-900/20 dark:border-emerald-800">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <Brain className="w-4 h-4 text-emerald-500" />
+                    <span className="text-sm font-medium">评论审查AI</span>
+                  </div>
+                  <Badge variant="outline" className="text-emerald-600 border-emerald-200 text-xs">
+                    qwen-plus
+                  </Badge>
+                </div>
+                <div className="grid grid-cols-4 gap-2 text-center">
+                  <div>
+                    <p className="text-[10px] text-muted-foreground">请求次数</p>
+                    <p className="text-base font-bold">{aiUsageStats.stages?.find(s => s.name === "semantic_analysis")?.requests || 0}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-muted-foreground">输入Token</p>
+                    <p className="text-base font-bold text-blue-600">{aiUsageStats.summary?.promptTokens || 0}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-muted-foreground">输出Token</p>
+                    <p className="text-base font-bold text-green-600">{aiUsageStats.summary?.completionTokens || 0}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-muted-foreground">总Token</p>
+                    <p className="text-base font-bold text-purple-600">{aiUsageStats.summary?.totalTokens || 0}</p>
+                  </div>
+                </div>
+              </div>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-6">
-              <div className="text-center">
-                <p className="text-[10px] md:text-xs text-muted-foreground mb-1">本月调用</p>
-                <p className="text-lg md:text-xl font-bold">{stats.total}</p>
-              </div>
-              <div className="text-center">
-                <p className="text-[10px] md:text-xs text-muted-foreground mb-1">预计费用</p>
-                <p className="text-lg md:text-xl font-bold text-green-600">¥{(stats.total * 0.002).toFixed(2)}</p>
-              </div>
-              <div className="text-center">
-                <p className="text-[10px] md:text-xs text-muted-foreground mb-1">成功率</p>
-                <p className="text-lg md:text-xl font-bold text-blue-600">{stats.successRate || 0}%</p>
-              </div>
-              <div className="text-center">
-                <p className="text-[10px] md:text-xs text-muted-foreground mb-1">平均耗时</p>
-                <p className="text-lg md:text-xl font-bold">{(stats.avgDuration / 1000).toFixed(2)}s</p>
-              </div>
+            
+            {/* 总计行 */}
+            <div className="mt-2 pt-2 border-t flex items-center justify-between text-xs text-muted-foreground">
+              <span>今日总计: {aiUsageStats.summary?.requests || 0} 次请求</span>
+              <span>总Token: {aiUsageStats.summary?.totalTokens || 0} | 失败: {aiUsageStats.summary?.failures || 0}</span>
             </div>
           </div>
           

@@ -6,6 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
@@ -103,6 +104,8 @@ interface Configs {
   rank_monthly_top1: number
   rank_monthly_top2: number
   rank_monthly_top3: number
+  // 兑换限制开关
+  exchange_restriction_enabled: boolean
 }
 
 interface Anomaly {
@@ -451,6 +454,22 @@ export default function PointsRewardsPage() {
                       type="number"
                       value={configs.points_to_yuan}
                       onChange={(e) => setConfigs({ ...configs, points_to_yuan: Number(e.target.value) })}
+                    />
+                  </div>
+                  {/* 兑换限制开关 */}
+                  <div className="col-span-2 mt-4">
+                    <h4 className="font-medium text-sm mb-2 text-muted-foreground">兑换限制设置</h4>
+                  </div>
+                  <div className="space-y-2 flex items-center justify-between col-span-2">
+                    <div>
+                      <Label>任务积分占比限制</Label>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        开启后，用户需满足任务积分占比要求才能兑换；周榜/月榜奖励积分可随时兑换
+                      </p>
+                    </div>
+                    <Switch
+                      checked={configs.exchange_restriction_enabled}
+                      onCheckedChange={(checked) => setConfigs({ ...configs, exchange_restriction_enabled: checked })}
                     />
                   </div>
                   {/* 周榜奖励配置 */}

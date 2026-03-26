@@ -10,14 +10,9 @@ class NotificationController {
       const userId = req.userId
       const page = parseInt(req.query.page) || 1
       const size = parseInt(req.query.size) || 20
-      const unreadOnly = req.query.unreadOnly === 'true'
-
-      const result = await notificationService.getUserNotifications({
-        userId,
-        page,
-        pageSize: size,
-        unreadOnly
-      })
+      const type = req.query.type || null
+      
+      const result = await notificationService.getUserNotifications(userId, page, size, type)
       success(res, result)
     } catch (err) {
       next(err)

@@ -131,7 +131,7 @@ async function getReviewQueue(options = {}) {
   let users = [];
   
   if (taskIds.length > 0) {
-    tasks = await prisma.$queryRawUnsafe("SELECT id, title, platform, action FROM tasks WHERE id IN (" + taskIds.join(',') + ")");
+    tasks = await prisma.$queryRawUnsafe("SELECT id, title, platform, action, video_url FROM tasks WHERE id IN (" + taskIds.join(',') + ")");
   }
   if (userIds.length > 0) {
     users = await prisma.$queryRawUnsafe("SELECT id, username FROM users WHERE id IN (" + userIds.join(',') + ")");
@@ -194,7 +194,7 @@ async function getReviewStats() {
       COUNT(*) FILTER (WHERE status IN ('submitted', 'image_reviewing')) as image_reviewing,
       COUNT(*) FILTER (WHERE status = 'link_reviewing') as link_reviewing,
       COUNT(*) FILTER (WHERE status = 'pending_link') as pending_link,
-      COUNT(*) FILTER (WHERE status = 'released' OR (status = 'doing' AND (image_review_status = 'rejected' OR link_review_status = 'rejected'))) as rejected,
+      COUNT(*) FILTER (WHERE status IN ('released', 'image_rejected', 'link_rejected', 'rejected') OR (status = 'doing' AND (image_review_status = 'rejected' OR link_review_status = 'rejected'))) as rejected,
       COUNT(*) FILTER (WHERE status IN ('approved', 'done')) as approved
     FROM claims
     WHERE screenshots IS NOT NULL
@@ -204,7 +204,7 @@ async function getReviewStats() {
   const todayStatsResult = await prisma.$queryRawUnsafe(`
     SELECT 
       COUNT(*) FILTER (WHERE status IN ('approved', 'done') AND reviewed_at >= '${today.toISOString()}') as today_approved,
-      COUNT(*) FILTER (WHERE (status = 'released' OR (status = 'doing' AND (image_review_status = 'rejected' OR link_review_status = 'rejected'))) AND reviewed_at >= '${today.toISOString()}') as today_rejected
+      COUNT(*) FILTER (WHERE (status IN ('released', 'image_rejected', 'link_rejected', 'rejected') OR (status = 'doing' AND (image_review_status = 'rejected' OR link_review_status = 'rejected'))) AND reviewed_at >= '${today.toISOString()}') as today_rejected
     FROM claims
     WHERE screenshots IS NOT NULL
   `);
@@ -646,7 +646,7 @@ async function getReviewLogs(options = {}) {
   let users = [];
   
   if (taskIds.length > 0) {
-    tasks = await prisma.$queryRawUnsafe("SELECT id, title, platform, action FROM tasks WHERE id IN (" + taskIds.join(',') + ")");
+    tasks = await prisma.$queryRawUnsafe("SELECT id, title, platform, action, video_url FROM tasks WHERE id IN (" + taskIds.join(',') + ")");
   }
   if (userIds.length > 0) {
     users = await prisma.$queryRawUnsafe("SELECT id, username FROM users WHERE id IN (" + userIds.join(',') + ")");

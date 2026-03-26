@@ -12,7 +12,7 @@ sys.path.insert(0, '/home/ubuntu/.local/lib/python3.12/site-packages')
 
 from rapidocr_onnxruntime import RapidOCR
 
-app = FastAPI(title="OCR Service")
+app = FastAPI(title="OCR Service - Fixed")
 
 print("[OCR] 正在加载 RapidOCR...")
 ocr_engine = RapidOCR(use_textline_orientation=False, det_db_box_thresh=0.6)
@@ -43,15 +43,23 @@ def is_input_hint(text: str) -> bool:
     return any(hint in text for hint in INPUT_HINTS)
 
 def extract_comment_after_author(texts: list, author_index: int) -> Optional[str]:
+    """在评论人后面找评论内容"""
     for i in range(author_index + 1, len(texts)):
         t = texts[i].strip()
+        # 跳过时间标记
         if re.match(r'^\d+[分钟小时天]前', t) or t in ['刚刚', '刚刚 ']:
             continue
-        if '回复' in t or '去发布' in t or '展开' in t:
+        # 跳过功能按钮
+        if '回复' in t or '去发布' in t or '展开' in t or '发作品' in t:
             continue
+        # 跳过过短内容
         if len(t) < 3:
             continue
-        if '流量奖励' in t or '发作品' in t:
+        # 跳过流量奖励提示
+        if '流量奖励' in t or '分享你' in t:
+            continue
+        # 跳过地点标记
+        if re.match(r'^\d+小时前·', t):
             continue
         return t
     return None
@@ -83,6 +91,8 @@ async def process_image(image_path: str, image_type: str = None):
         full_text = '\n'.join(texts)
         
         print(f"[OCR] 识别到 {len(texts)} 行文本")
+        for i, t in enumerate(texts):
+            print(f"  [{i}] {t}")
         
         has_comment = any('评论' in t for t in texts)
         author = None
@@ -93,22 +103,40 @@ async def process_image(image_path: str, image_type: str = None):
         if has_comment:
             print("[OCR] 检测到评论截图 (类型A)")
             
-            # 提取评论人 - 匹配纯数字ID，去掉末尾的"我"标注
+            # 修复：支持多种评论人格式
             for i, t in enumerate(texts):
-                # 匹配: 数字ID + 可选的"我"标注
-                match = re.match(r'^(\d{6,})我?$', t.strip())
+                stripped = t.strip()
+                
+                # 模式1：数字ID + 我（如 135846594我）
+                match = re.match(r'^(\d{6,})我$', stripped)
                 if match:
-                    author = match.group(1)  # 只取数字ID部分，去掉"我"
+                    author = match.group(1)
                     author_index = i
-                    print(f"[OCR] 提取评论人: {author} (原始: {t.strip()})")
+                    print(f"[OCR] 提取评论人(数字ID): {author}")
                     break
+                
+                # 模式2：中文昵称 + 我（如 柒柒爱做家常菜我）
+                # 要求：包含中文，以我结尾，长度合理
+                if stripped.endswith('我') and len(stripped) > 2:
+                    # 检查是否包含中文
+                    if re.search(r'[\u4e00-\u9fff]', stripped):
+                        # 去掉我，取昵称
+                        potential_author = stripped[:-1]
+                        # 确保不是其他误匹配（如 我们）
+                        if potential_author and not potential_author in ['我', '咱', '你']:
+                            author = potential_author
+                            author_index = i
+                            print(f"[OCR] 提取评论人(中文昵称): {author}")
+                            break
             
+            # 如果找到评论人，提取评论内容
             if author_index >= 0:
                 comment = extract_comment_after_author(texts, author_index)
                 if comment:
                     print(f"[OCR] 提取评论内容: {comment}")
                     is_positive = is_positive_comment(comment)
             
+            # 如果没找到评论内容，尝试从正向关键词中找
             if not comment:
                 for t in texts:
                     if is_positive_comment(t) and not is_input_hint(t):
@@ -182,11 +210,11 @@ async def analyze_image_file(
         traceback.print_exc()
         return OCRResponse(has_comment_keyword=False)
 
-@app.get("/health")
+@app.get("/")
 async def health():
     return {"status": "ok"}
 
 if __name__ == "__main__":
-    port = int(os.environ.get('PORT', 8001))
+    port = int(os.environ.get('PORT', 9001))
     print(f"[OCR] 启动服务，端口: {port}")
     uvicorn.run(app, host="0.0.0.0", port=port)

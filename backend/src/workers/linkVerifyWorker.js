@@ -197,7 +197,8 @@ function verifyLinkedCommentMatch({ userComment, ocrComment, extractedComments, 
 
   if (candidates.length === 0) {
     result.errorType = 'missing_page_comments';
-    result.reasons.push('页面未提取到评论');
+    result.reasons.push('页面未提取到评论，请检查评论账号是否存在');
+    result.userHint = '请换号检查评论账号评论是否存在';
     return result;
   }
 
@@ -970,6 +971,10 @@ const linkVerifyWorker = new Worker('link-verify-queue', async (job) => {
     }
 
     const extractedComments = linkResult.comments || [];
+    console.log('[LinkWorker] 📊 提取的评论数量:', extractedComments.length);
+    if (extractedComments.length > 0) {
+      console.log('[LinkWorker] 📝 提取的评论内容:', extractedComments.slice(0, 3).map(c => c?.content?.substring(0, 50) || c?.substring?.(0, 50) || 'N/A'));
+    }
     const commentResult = verifyLinkedCommentMatch({
       userComment,
       ocrComment,
@@ -1001,29 +1006,56 @@ const linkVerifyWorker = new Worker('link-verify-queue', async (job) => {
       authorResult.match &&
       finalCommentJudgement.passed;
 
-    const isSystemError = !linkResult.success && (
+    // ============ 链接审查三种情况 ============
+    console.log('[LinkWorker] 🔍 linkResult.success:', linkResult.success, ', commentResult.passed:', commentResult.passed, ', commentResult.errorType:', commentResult.errorType);
+    
+    // 情况1: 提取失败（系统错误）- 转人工
+    const isExtractError = !linkResult.success && (
       linkResult.error?.includes('IP 均失败') ||
       linkResult.error?.includes('Browser Service') ||
       linkResult.error?.includes('timeout') ||
       linkResult.error?.includes('ECONNREFUSED') ||
       linkResult.error?.includes('unavailable') ||
+      linkResult.error?.includes('提取失败') ||
       (Array.isArray(linkResult.attemptLog) &&
         linkResult.attemptLog.length > 0 &&
         linkResult.attemptLog.every(log => !log.success))
     );
 
+    // 情况2: 一条评论都没有提取到（页面无评论）- 转人工检查
+    const isNoCommentsOnPage = linkResult.success && 
+      commentResult.errorType === 'missing_page_comments' &&
+      extractedComments.length === 0;
+
+    // 情况3: 提取到评论了，但用户评论不在其中（评论不匹配）- 直接拒绝
+    const isCommentMismatch = linkResult.success && 
+      !commentResult.passed && 
+      extractedComments.length > 0 &&
+      !isNoCommentsOnPage;
+
+    const isNicknameMismatch = linkResult.success && 
+      commentResult.passed && 
+      !nicknameResult.passed && 
+      !nicknameResult.requiresManual;
+
+    console.log('[LinkWorker] 🔍 三种情况判断:');
+    console.log('  - isExtractError:', isExtractError);
+    console.log('  - isNoCommentsOnPage:', isNoCommentsOnPage, '(extractedComments.length:', extractedComments.length, ')');
+    console.log('  - isCommentMismatch:', isCommentMismatch);
+
+    // 需要转人工的情况
     const requiresManual =
-      isSystemError ||
-      commentResult.errorType === 'missing_page_comments' ||
+      isExtractError ||
+      isNoCommentsOnPage ||
       nicknameResult.requiresManual ||
       finalCommentJudgement.requiresManual;
 
-    const isCommentMismatch = linkResult.success && !commentResult.passed && !requiresManual;
-    const isNicknameMismatch = linkResult.success && commentResult.passed && !nicknameResult.passed && !requiresManual;
+    // 高亮推送的原因
     const blockReasons = [];
     if (linkResult.blocked_account) blockReasons.push('账号被封禁');
     if (linkResult.suspicious_behavior) blockReasons.push('检测到可疑行为');
-    if (isCommentMismatch && extractedComments.length > 0) blockReasons.push('评论不匹配');
+    if (isNoCommentsOnPage) blockReasons.push('链接审查：页面无评论');
+    if (isCommentMismatch) blockReasons.push('链接审查：评论不匹配');
     if (isNicknameMismatch) blockReasons.push('评论人昵称不匹配');
     if (!authorResult.match) blockReasons.push('达人不匹配');
 
@@ -1135,14 +1167,19 @@ const linkVerifyWorker = new Worker('link-verify-queue', async (job) => {
     }
 
     if (requiresManual) {
-      const manualReason =
-        commentResult.errorType === 'missing_page_comments'
-          ? '连接审核未提取到评论，已转人工检查'
-          : nicknameResult.requiresManual
-            ? `${nicknameResult.reason}，已转人工检查`
-            : finalCommentJudgement.requiresManual
-              ? finalCommentJudgement.reason
-              : '连接审核异常，已转人工复审';
+      // 区分不同的人工原因
+      let manualReason;
+      if (isExtractError) {
+        manualReason = '链接审查提取失败，已转人工检查';
+      } else if (isNoCommentsOnPage) {
+        manualReason = '链接审查：页面无评论，已转人工检查';
+      } else if (nicknameResult.requiresManual) {
+        manualReason = `${nicknameResult.reason}，已转人工检查`;
+      } else if (finalCommentJudgement.requiresManual) {
+        manualReason = finalCommentJudgement.reason;
+      } else {
+        manualReason = '链接审查异常，已转人工复审';
+      }
       await db.transaction(async (client) => {
         const historyRes = await client.query('SELECT review_history FROM claims WHERE id = $1', [claimId]);
         const nextHistory = appendReviewHistory(
@@ -1200,6 +1237,16 @@ const linkVerifyWorker = new Worker('link-verify-queue', async (job) => {
       return { claimId, manual: true, reason: manualReason };
     }
 
+    // 构造拒绝原因，针对不同情况给出用户友好提示
+    // 评论不匹配：直接拒绝，提示用户换号检查
+    // 页面无评论：不在这里处理，已转人工
+    let userHint = null;
+    if (isCommentMismatch) {
+      userHint = '请换号检查评论账号，确认评论是否存在';
+    } else if (isNicknameMismatch) {
+      userHint = '评论账号不匹配，请使用正确的评论账号';
+    }
+    
     const rejectReason = [
       ...commentResult.reasons,
       !nicknameResult.passed && !nicknameResult.requiresManual ? nicknameResult.reason : null,

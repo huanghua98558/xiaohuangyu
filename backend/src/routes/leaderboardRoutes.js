@@ -6,6 +6,7 @@ const router = Router()
 
 // 公开接口
 router.get('/total', leaderboardController.getTotalRank)
+router.get('/daily', leaderboardController.getTotalRank)  // daily 使用 total 排行
 router.get('/weekly', leaderboardController.getWeeklyRank)
 router.get('/monthly', leaderboardController.getMonthlyRank)
 

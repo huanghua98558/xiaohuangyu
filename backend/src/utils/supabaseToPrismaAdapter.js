@@ -501,7 +501,7 @@ class PrismaQueryBuilder {
     
     for (const cond of this.whereConditions) {
       if (cond.type === 'eq') {
-        const intFields = ['id', 'user_id', 'task_id', 'claim_id', 'reviewer_id', 'invited_by', 'c_parent_id', 'c_grand_id'];
+        const intFields = ['id', 'user_id', 'task_id', 'claim_id', 'reviewer_id', 'invited_by', 'c_parent_id', 'c_grand_id', 'parent_id', 'child_id', 'admin_id', 'b_inviter_id'];
         if (intFields.includes(cond.field) && typeof cond.value === 'string' && /^\d+$/.test(cond.value)) {
           whereClauses.push(`"${cond.field}" = $${params.length + 1}::INT8`)
           params.push(cond.value)
@@ -562,7 +562,7 @@ class PrismaQueryBuilder {
     // 构建 WHERE 子句
     const whereClauses = []
     const params = []
-    const intFields = ['id', 'user_id', 'task_id', 'claim_id', 'reviewer_id', 'invited_by', 'c_parent_id', 'c_grand_id', 'points', 'points_earned', 'continuous_days'];
+    const intFields = ['id', 'user_id', 'task_id', 'claim_id', 'reviewer_id', 'invited_by', 'c_parent_id', 'c_grand_id', 'points', 'points_earned', 'continuous_days', 'parent_id', 'child_id', 'admin_id', 'b_inviter_id'];
     
     for (const cond of this.whereConditions) {
       if (cond.type === 'eq') {
@@ -710,7 +710,7 @@ class PrismaQueryBuilder {
    */
   _convertValue(field, value) {
     // 定义需要转换为整数的字段
-    const intFields = ['id', 'user_id', 'task_id', 'claim_id', 'reviewer_id', 'invited_by', 'c_parent_id', 'c_grand_id', 'b_inviter_id', 'level', 'status', 'total_tasks', 'total_points', 'points', 'b_promotion_points'];
+    const intFields = ['id', 'user_id', 'task_id', 'claim_id', 'reviewer_id', 'invited_by', 'c_parent_id', 'c_grand_id', 'b_inviter_id', 'level', 'status', 'total_tasks', 'total_points', 'points', 'b_promotion_points', 'parent_id', 'child_id', 'admin_id'];
     
     // 定义日期时间字段（以 _at 结尾的字段，注意：sign_date 是字符串类型，不需要转换）
     // 只有真正的时间戳字段才需要转换

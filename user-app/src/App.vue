@@ -328,7 +328,7 @@ const goToTask = (taskId) => {
   display: flex;
   justify-content: space-around;
   align-items: center;
-  z-index: 100;
+  z-index: 9999;
   overflow: visible;
 }
 
@@ -551,6 +551,9 @@ const goToTask = (taskId) => {
 
 /* 主体圆形 */
 .main-circle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   position: relative;
   width: 52px;
   height: 52px;
@@ -690,7 +693,6 @@ const goToTask = (taskId) => {
     transform: scale(1.05);
   }
 }
-
 /* ========== 通知弹窗样式 ========== */
 .notification-toast {
   position: fixed;

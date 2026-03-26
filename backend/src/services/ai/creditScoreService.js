@@ -268,64 +268,61 @@ function calculateRandomCheckRate(score) {
  * 获取信用排名
  */
 export async function getCreditRanking(limit = 100) {
-  // 从users表获取信用分排名
-  const { data: users, error } = await supabase
-    .from('users')
-    .select('id, username, level, total_tasks')
-    .gte('total_tasks', 10)  // 至少完成10个任务
-    .order('total_tasks', { ascending: false })
-    .limit(limit)
-  
-  if (error) {
+  try {
+    const prisma = (await import('../../utils/prisma.js')).default
+    
+    // 使用原始 SQL 查询
+    const users = await prisma.$queryRawUnsafe(`
+      SELECT id, username, level, total_tasks
+      FROM users
+      WHERE total_tasks >= 10
+      ORDER BY total_tasks DESC
+      LIMIT ${parseInt(limit)}
+    `)
+    
+    return users || []
+  } catch (error) {
     logger.error('获取信用排名失败:', error)
     return []
   }
-  
-  return users || []
 }
 
 /**
  * 获取风险用户列表
  */
 export async function getRiskUsers(limit = 50) {
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
-  
-  // 查询被拒绝次数较多的用户
-  const { data: rejectedClaims, error } = await supabase
-    .from('claims')
-    .select('user_id, users(id, username, level)')
-    .eq('status', 'rejected')
-    .gte('created_at', thirtyDaysAgo)
-  
-  if (error) {
+  try {
+    const prisma = (await import('../../utils/prisma.js')).default
+    
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+    
+    // 使用原始 SQL 查询被拒绝次数较多的用户
+    const riskUsers = await prisma.$queryRawUnsafe(`
+      SELECT 
+        c.user_id,
+        u.username,
+        u.level,
+        COUNT(*) as reject_count
+      FROM claims c
+      JOIN users u ON c.user_id = u.id
+      WHERE c.status = 'rejected'
+        AND c.claimed_at >= '${thirtyDaysAgo.toISOString()}'
+      GROUP BY c.user_id, u.username, u.level
+      HAVING COUNT(*) >= 5
+      ORDER BY reject_count DESC
+      LIMIT ${parseInt(limit)}
+    `)
+    
+    return (riskUsers || []).map(r => ({
+      user_id: r.user_id,
+      username: r.username || '未知',
+      level: r.level || 1,
+      rejectCount: parseInt(r.reject_count)
+    }))
+  } catch (error) {
     logger.error('获取风险用户失败:', error)
     return []
   }
-  
-  // 统计每个用户的拒绝次数
-  const userRejectCounts = {}
-  ;(rejectedClaims || []).forEach(c => {
-    if (c.user_id) {
-      userRejectCounts[c.user_id] = (userRejectCounts[c.user_id] || 0) + 1
-    }
-  })
-  
-  // 过滤出高风险用户（拒绝次数>=5）
-  const riskUsers = Object.entries(userRejectCounts)
-    .filter(([_, count]) => count >= 5)
-    .map(([userId, count]) => {
-      const claim = rejectedClaims?.find(c => c.user_id === parseInt(userId))
-      return {
-        user_id: parseInt(userId),
-        username: claim?.users?.username || '未知',
-        level: claim?.users?.level || 1,
-        rejectCount: count
-      }
-    })
-    .sort((a, b) => b.rejectCount - a.rejectCount)
-    .slice(0, limit)
-  
-  return riskUsers
 }
 
 export default {

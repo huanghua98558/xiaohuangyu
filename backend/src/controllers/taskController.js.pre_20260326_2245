@@ -1,0 +1,179 @@
+import taskService from '../services/taskService.js'
+import { success } from '../utils/response.js'
+
+class TaskController {
+  /**
+   * 获取系统配置
+   */
+  async getConfig(req, res, next) {
+    try {
+      const config = await taskService.getConfig()
+      success(res, config)
+    } catch (err) {
+      next(err)
+    }
+  }
+
+  /**
+   * 获取任务列表（根据用户位置过滤）
+   * 查询参数：
+   * - platform: 平台筛选
+   * - action: 操作类型筛选
+   * - city: 用户所在城市
+   * - province: 用户所在省份
+   * - limit: 返回数量限制（首页推荐用）
+   */
+  async getTasks(req, res, next) {
+    try {
+      const { platform, action, city, province, limit, source } = req.query
+      const geo = { city, province }
+      const limitNum = limit ? parseInt(limit) : null
+      const userId = req.userId || null
+      // source: 'home'(首页推荐，随机排序) | 'list'(任务列表，按时间排序)
+      const taskSource = source || 'list'
+      const tasks = await taskService.getTasks({ platform, action }, geo, limitNum, userId, taskSource)
+      success(res, tasks)
+    } catch (err) {
+      next(err)
+    }
+  }
+  
+  /**
+   * 获取首页推荐任务（随机排序）
+   */
+  async getHomeTasks(req, res, next) {
+    try {
+      const { city, province, limit } = req.query
+      const geo = { city, province }
+      const limitNum = limit ? parseInt(limit) : 20
+      const userId = req.userId || null
+      const tasks = await taskService.getTasks({}, geo, limitNum, userId, 'home')
+      success(res, tasks)
+    } catch (err) {
+      next(err)
+    }
+  }
+
+  /**
+   * 获取任务详情
+   */
+  async getTaskById(req, res, next) {
+    try {
+      const id = req.params.id
+      const userId = req.userId || null
+      const task = await taskService.getTaskById(id, userId)
+      success(res, task)
+    } catch (err) {
+      next(err)
+    }
+  }
+
+  /**
+   * 领取任务
+   */
+  async claimTask(req, res, next) {
+    try {
+      const taskId = req.params.id
+      const { lat, lng, city, province } = req.validatedData || req.body
+      const result = await taskService.claimTask(req.userId, taskId, { city, province, lat, lng })
+      success(res, result, '领取成功')
+    } catch (err) {
+      next(err)
+    }
+  }
+
+  /**
+   * 获取我的任务
+   */
+  async getMyTasks(req, res, next) {
+    try {
+      const tasks = await taskService.getMyTasks(req.userId)
+      success(res, tasks)
+    } catch (err) {
+      next(err)
+    }
+  }
+
+  /**
+   * 提交任务
+   */
+  async submitTask(req, res, next) {
+    try {
+      const claimId = req.params.claimId
+      const { platformNickname, screenshots, evaluation } = req.validatedData || req.body
+      // platformNickname 可选，默认为空字符串
+      const result = await taskService.submitTask(req.userId, claimId, platformNickname || '', screenshots, evaluation || '')
+      success(res, result, '提交成功，等待审核')
+    } catch (err) {
+      next(err)
+    }
+  }
+
+  /**
+   * 撤回提交
+   */
+  async withdrawClaim(req, res, next) {
+    try {
+      const claimId = req.params.claimId
+      const result = await taskService.withdrawClaim(req.userId, claimId)
+      success(res, result, '撤回成功，可重新提交')
+    } catch (err) {
+      next(err)
+    }
+  }
+
+  /**
+   * 放弃任务
+   */
+  async abandonClaim(req, res, next) {
+    try {
+      const claimId = req.params.claimId
+      const result = await taskService.abandonClaim(req.userId, claimId)
+      success(res, result, '任务已放弃')
+    } catch (err) {
+      next(err)
+    }
+  }
+
+  /**
+   * 创建任务（管理员）
+   */
+  async createTask(req, res, next) {
+    try {
+      const data = req.validatedData || req.body
+      const task = await taskService.createTask(data)
+      success(res, task, '创建成功', 201)
+    } catch (err) {
+      next(err)
+    }
+  }
+
+  /**
+   * 更新任务（管理员）
+   */
+  async updateTask(req, res, next) {
+    try {
+      const id = req.params.id
+      const data = req.validatedData || req.body
+      const task = await taskService.updateTask(id, data)
+      success(res, task, '更新成功')
+    } catch (err) {
+      next(err)
+    }
+  }
+
+  /**
+   * 删除任务（管理员）
+   */
+  async deleteTask(req, res, next) {
+    try {
+      const id = req.params.id
+      await taskService.deleteTask(id)
+      success(res, null, '删除成功')
+    } catch (err) {
+      next(err)
+    }
+  }
+}
+
+export default new TaskController()

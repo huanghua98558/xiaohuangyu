@@ -12,7 +12,7 @@ module.exports = {
       max_memory_restart: '500M',
       env: {
         NODE_ENV: 'production',
-        DATABASE_URL: 'postgresql://1823985558qqcom:4-NJnwt94B-yljofZCocTw@cotton-tern-23589.j77.aws-ap-southeast-1.cockroachlabs.cloud:26257/xiaohuangyu?sslmode=verify-full',
+        DATABASE_URL: 'postgresql://xiaohuanyu2:d5XWShrEqwWHBPxuts-gCw@aware-bison-23613.j77.aws-ap-southeast-1.cockroachlabs.cloud:26257/defaultdb?sslmode=require',
         PADDLE_OCR_URL: 'http://localhost:8088',
         PADDLE_OCR_TIMEOUT: '120000',
         PADDLE_OCR_ENABLED: 'true',

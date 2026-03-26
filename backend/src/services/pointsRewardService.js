@@ -127,7 +127,7 @@ class PointsRewardService {
     // 构建基础查询
     let query = supabase
       .from('records')
-      .select('id, user_id, type, description, points, balance, created_at', { count: 'exact' })
+      .select('id, user_id, type, desc, points, balance, created_at', { count: 'exact' })
       .order('created_at', { ascending: false })
 
     if (type && type !== 'all') {
@@ -172,7 +172,7 @@ class PointsRewardService {
           username: user.username || '未知',
           userRole: user.role || '',
           type: r.type,
-          description: r.description,
+          description: r.desc,
           points: r.points,
           balance: Number(r.balance) || 0,
           createdAt: r.created_at
@@ -221,7 +221,7 @@ class PointsRewardService {
     
     let query = supabase
       .from('records')
-      .select('id, user_id, type, description, points, balance, created_at')
+      .select('id, user_id, type, desc, points, balance, created_at')
       .order('created_at', { ascending: false })
 
     if (type && type !== 'all') {
@@ -259,7 +259,7 @@ class PointsRewardService {
       用户ID: r.user_id,
       用户名: userMap[r.user_id]?.username || '',
       奖励类型: this.getTypeLabel(r.type),
-      描述: r.description,
+      描述: r.desc,
       积分变动: r.points,
       余额变动: Number(r.balance) || 0,
       时间: r.created_at
@@ -290,6 +290,8 @@ class PointsRewardService {
       register_bonus: 200,
       // 最低提现
       min_withdraw: 10,
+      // 兑换限制开关（true=需要任务积分占比达标，false=无限制）
+      exchange_restriction_enabled: true,
       // 周榜奖励配置
       rank_weekly_top1: 300,   // 周榜第1名
       rank_weekly_top2: 100,   // 周榜第2名
@@ -305,9 +307,15 @@ class PointsRewardService {
       if (c.key.startsWith('points_')) {
         const key = c.key.replace('points_', '')
         if (result.hasOwnProperty(key)) {
-          result[key] = parseFloat(c.value) || result[key]
+          // 布尔值配置特殊处理
+          if (key === "exchange_restriction_enabled") {
+            result[key] = c.value === "true" || c.value === true
+          } else {
+            result[key] = parseFloat(c.value) || result[key]
+          }
         }
       }
+      
       // 处理推广配置（c_promotion_level1_rate -> promotion_level1）
       if (c.key === 'c_promotion_level1_rate') {
         result.promotion_level1 = parseFloat(c.value) || result.promotion_level1
@@ -407,7 +415,7 @@ class PointsRewardService {
     const today = this.getTodayStart()
     const { data: highRewards } = await supabase
       .from('records')
-      .select('user_id, points, type, description')
+      .select('user_id, points, type, desc')
       .gte('created_at', today)
       .gt('points', 200)
 
@@ -420,7 +428,7 @@ class PointsRewardService {
           details: {
             points: r.points,
             rewardType: r.type,
-            description: r.description
+            description: r.desc
           },
           message: `用户${r.user_id}单次获得${r.points}积分(${r.type})`
         })
@@ -500,6 +508,7 @@ class PointsRewardService {
       promotion_level1: '一级推广奖励比例(%)',
       promotion_level2: '二级推广奖励比例(%)',
       points_to_yuan: '积分兑换比例',
+      exchange_restriction_enabled: '兑换限制开关',
       register_bonus: '注册奖励积分',
       min_withdraw: '最低提现金额',
       rank_daily_top1: '日榜第1奖励',

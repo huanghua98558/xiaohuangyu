@@ -1,0 +1,128 @@
+[
+  {
+    "id": "1",
+    "key": "publisher_api_provider",
+    "value": "doubao",
+    "desc": null
+  },
+  {
+    "id": "2",
+    "key": "publisher_api_base_url",
+    "value": "",
+    "desc": null
+  },
+  {
+    "id": "3",
+    "key": "publisher_api_key",
+    "value": "",
+    "desc": null
+  },
+  {
+    "id": "4",
+    "key": "publisher_model",
+    "value": "doubao-seed-1-8-251228",
+    "desc": null
+  },
+  {
+    "id": "5",
+    "key": "publisher_system_prompt",
+    "value": "",
+    "desc": null
+  },
+  {
+    "id": "6",
+    "key": "reviewer_api_provider",
+    "value": "doubao",
+    "desc": null
+  },
+  {
+    "id": "7",
+    "key": "reviewer_api_base_url",
+    "value": "",
+    "desc": null
+  },
+  {
+    "id": "8",
+    "key": "reviewer_api_key",
+    "value": "",
+    "desc": null
+  },
+  {
+    "id": "9",
+    "key": "reviewer_model",
+    "value": "Qwen/Qwen2-VL-72B-Instruct",
+    "desc": null
+  },
+  {
+    "id": "10",
+    "key": "reviewer_system_prompt",
+    "value": "",
+    "desc": null
+  },
+  {
+    "id": "11",
+    "key": "ocr_confidence_threshold",
+    "value": "0.75",
+    "desc": null
+  },
+  {
+    "id": "12",
+    "key": "ocr_use_gpu",
+    "value": "false",
+    "desc": null
+  },
+  {
+    "id": "13",
+    "key": "ocr_language",
+    "value": "ch",
+    "desc": null
+  },
+  {
+    "id": "14",
+    "key": "yolo_confidence_threshold",
+    "value": "0.5",
+    "desc": null
+  },
+  {
+    "id": "15",
+    "key": "yolo_model_path",
+    "value": "/models/yolo/best.pt",
+    "desc": null
+  },
+  {
+    "id": "16",
+    "key": "image_ai_provider",
+    "value": "bailian",
+    "desc": null
+  },
+  {
+    "id": "17",
+    "key": "image_ai_model",
+    "value": "qwen-vl-max",
+    "desc": null
+  },
+  {
+    "id": "18",
+    "key": "image_ai_api_key",
+    "value": "",
+    "desc": null
+  },
+  {
+    "id": "19",
+    "key": "image_ai_base_url",
+    "value": "",
+    "desc": null
+  },
+  {
+    "id": "20",
+    "key": "min_images_for_review",
+    "value": "2",
+    "desc": null
+  },
+  {
+    "id": "21",
+    "key": "enable_ai_review",
+    "value": "true",
+    "desc": null
+  }
+]

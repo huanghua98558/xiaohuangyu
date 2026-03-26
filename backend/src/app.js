@@ -216,6 +216,7 @@ app.use('/api/admin-v2/points-rewards', apiLimiter, pointsRewardRoutes)  // 积�
 app.use('/api/admin/statistics', apiLimiter, statisticsRoutes)  // 统计分析路由
 app.use('/api/exposure', apiLimiter, exposureRoutes)  // 曝光控制路由
 app.use('/api/monitor', apiLimiter, monitorRoutes)  // 系统监控路由
+app.use('/api/user-detail', apiLimiter, userDetailRoutes)  // 用户详情路由（管理员）
 
 // 兼容旧API路径
 app.use('/api/my/tasks', apiLimiter, (req, res, next) => {

@@ -194,4 +194,39 @@ router.get('/users', authMiddleware, adminOnly, async (req, res, next) => {
   }
 })
 
+
+// ============ 管理后台列表接口 ============
+router.get('/list', authMiddleware, adminOnly, async (req, res, next) => {
+  try {
+    const { page = 1, size = 20, type = 'tasks' } = req.query
+    const offset = (parseInt(page) - 1) * parseInt(size)
+    const prisma = (await import('../utils/prisma.js')).default
+    
+    if (type === 'users') {
+      // 获取用户曝光列表
+      const data = await prisma.$queryRawUnsafe(`
+        SELECT id, username, level, points, current_exposure, exposure_level, exposure_priority
+        FROM users
+        WHERE status = 1
+        ORDER BY current_exposure DESC
+        LIMIT ${parseInt(size)} OFFSET ${offset}
+      `)
+      res.json({ code: 0, data: { list: data || [], total: data?.length || 0, page: parseInt(page), size: parseInt(size) } })
+    } else {
+      // 获取任务曝光列表
+      const data = await prisma.$queryRawUnsafe(`
+        SELECT id, title, platform, status, remain, created_at
+        FROM tasks
+        WHERE status = 'active'
+        ORDER BY created_at DESC
+        LIMIT ${parseInt(size)} OFFSET ${offset}
+      `)
+      res.json({ code: 0, data: { list: data || [], total: data?.length || 0, page: parseInt(page), size: parseInt(size) } })
+    }
+  } catch (e) {
+    console.error('获取曝光列表失败:', e)
+    res.json({ code: 0, data: { list: [], total: 0 } })
+  }
+})
+
 export default router

@@ -197,8 +197,8 @@ const handleSignIn = async () => {
     const result = await signIn()
     // 签到成功
     hasSignedToday.value = true
-    const pointsEarned = result.data?.points_earned || result.points_earned || 10
-    alert(`签到成功！获得 ${pointsEarned} 积分`)
+    const pointsEarned = result.data?.points_earned || result.points_earned
+    alert(result.message || `签到成功！获得 ${pointsEarned} 积分`)
     loadStatus()
     loadCalendar()
   } catch (e) {

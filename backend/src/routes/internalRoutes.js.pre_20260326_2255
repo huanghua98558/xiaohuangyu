@@ -1,0 +1,376 @@
+/**
+ * 内部 API 路由（供 Browser Service 调用）
+ * 安全增强版 - 使用双重验证机制
+ */
+import express from 'express'
+import logger from '../utils/logger.js'
+
+const router = express.Router()
+
+// 内部 API 密钥（从环境变量获取）
+const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY
+
+// IP 白名单中间件 - 增强版
+const internalOnly = (req, res, next) => {
+  // 1. 检查 IP 地址（考虑反向代理）
+  const forwardedFor = req.headers['x-forwarded-for']
+  const realIp = req.headers['x-real-ip']
+  const socketIp = req.socket?.remoteAddress
+  const connectionIp = req.connection?.remoteAddress
+  
+  // 获取所有可能的 IP
+  const possibleIPs = [
+    req.ip,
+    forwardedFor?.split(',')[0]?.trim(),
+    realIp,
+    socketIp,
+    connectionIp
+  ].filter(Boolean)
+  
+  // 检查是否全部为本地 IP
+  const isLocalhost = possibleIPs.every(ip => {
+    if (!ip) return false
+    const normalized = ip.replace(/^::ffff:/, '')
+    return normalized === '127.0.0.1' || normalized === '::1' || normalized === 'localhost'
+  })
+  
+  // 2. 如果 IP 检查通过，直接放行
+  if (isLocalhost) {
+    return next()
+  }
+  
+  // 3. 如果不是本地 IP，检查 API Key（允许带密钥的内部调用）
+  if (INTERNAL_API_KEY) {
+    const authHeader = req.headers['x-internal-api-key'] || req.headers['authorization']
+    if (authHeader === INTERNAL_API_KEY || authHeader === `Bearer ${INTERNAL_API_KEY}`) {
+      return next()
+    }
+  }
+  
+  // 4. 拒绝访问
+  logger.warn("[Internal API] 拒绝非授权访问:", {
+    ips: possibleIPs,
+    hasApiKey: !!req.headers['x-internal-api-key'],
+    path: req.path
+  })
+  return res.status(403).json({ code: 403, message: "Forbidden" })
+}
+
+router.use(internalOnly)
+
+/**
+ * 获取当前代理模式
+ */
+router.get("/ip/mode", async (req, res) => {
+  try {
+    const { getRedisClient } = await import("../utils/redis.js")
+    const client = await getRedisClient()
+    
+    if (!client) {
+      return res.json({ code: 200, data: { mode: "direct" } })
+    }
+    
+    const mode = await client.get("proxy:mode") || "direct"
+    const cooldownEnd = await client.get("proxy:mode:cooldown")
+    
+    res.json({
+      code: 200,
+      data: {
+        mode,
+        cooldownRemaining: cooldownEnd ? Math.max(0, parseInt(cooldownEnd) - Date.now()) : 0
+      }
+    })
+  } catch (error) {
+    logger.error('[Internal API] 获取 IP 模式失败:', error)
+    res.status(500).json({ code: 500, message: error.message })
+  }
+})
+
+/**
+ * 获取一个代理 IP（从池中）
+ */
+router.post("/ip/acquire", async (req, res) => {
+  try {
+    const ipDispenser = (await import("../services/ai/ipDispenserService.js")).default
+    const ipInfo = await ipDispenser.acquireIP()
+    
+    if (!ipInfo) {
+      return res.json({ code: 503, message: "暂无可用 IP" })
+    }
+    
+    res.json({
+      code: 200,
+      data: {
+        ip: ipInfo.ip,
+        port: ipInfo.port,
+        proxyUrl: ipInfo.proxyUrl,
+        expireTime: ipInfo.expireTime
+      }
+    })
+  } catch (error) {
+    logger.error('[Internal API] 获取 IP 失败:', error)
+    res.status(500).json({ code: 500, message: error.message })
+  }
+})
+
+/**
+ * 实时获取新鲜 IP
+ */
+router.post("/ip/acquire-fresh", async (req, res) => {
+  try {
+    const ipDispenser = (await import("../services/ai/ipDispenserService.js")).default
+    const ipInfo = await ipDispenser.acquireFreshIP()
+    
+    if (!ipInfo) {
+      return res.json({ code: 503, message: "无法获取有效 IP" })
+    }
+    
+    res.json({
+      code: 200,
+      data: {
+        ip: ipInfo.ip,
+        port: ipInfo.port,
+        proxyUrl: ipInfo.proxyUrl,
+        expireTime: ipInfo.expireTime,
+        ttlSeconds: ipInfo.ttlSeconds || ipInfo.remainingTTL || null
+      }
+    })
+  } catch (error) {
+    logger.error('[Internal API] 实时获取 IP 失败:', error)
+    res.status(500).json({ code: 500, message: error.message })
+  }
+})
+
+/**
+ * 检查是否应该跳过直连
+ */
+router.get("/ip/should-skip-direct", async (req, res) => {
+  try {
+    const ipDispenser = (await import("../services/ai/ipDispenserService.js")).default
+    const result = await ipDispenser.shouldSkipDirect()
+    
+    res.json({
+      code: 200,
+      data: result
+    })
+  } catch (error) {
+    logger.error('[Internal API] 检查跳过直连失败:', error)
+    res.status(500).json({ code: 500, message: error.message })
+  }
+})
+
+/**
+ * 报告直连成功
+ */
+router.post("/ip/direct-success", async (req, res) => {
+  try {
+    const ipDispenser = (await import("../services/ai/ipDispenserService.js")).default
+    await ipDispenser.reportDirectSuccessV2()
+    
+    res.json({ code: 200, message: "已记录直连成功" })
+  } catch (error) {
+    logger.error('[Internal API] 报告直连成功失败:', error)
+    res.status(500).json({ code: 500, message: error.message })
+  }
+})
+
+/**
+ * 获取 IP 池状态
+ */
+router.get("/ip/status", async (req, res) => {
+  try {
+    const ipDispenser = (await import("../services/ai/ipDispenserService.js")).default
+    const status = await ipDispenser.getPoolStatus()
+    
+    res.json({
+      code: 200,
+      data: status
+    })
+  } catch (error) {
+    logger.error('[Internal API] 获取 IP 池状态失败:', error)
+    res.status(500).json({ code: 500, message: error.message })
+  }
+})
+
+/**
+ * 手动切换模式
+ */
+router.post("/ip/switch-mode", async (req, res) => {
+  try {
+    const { mode, duration } = req.body
+    
+    if (!mode || !['direct', 'proxy', 'auto'].includes(mode)) {
+      return res.status(400).json({ code: 400, message: "无效的模式，可选: direct, proxy, auto" })
+    }
+    
+    const ipDispenser = (await import("../services/ai/ipDispenserService.js")).default
+    await ipDispenser.manualSwitchMode(mode, duration)
+    
+    res.json({ code: 200, message: `已切换到 ${mode} 模式` })
+  } catch (error) {
+    logger.error('[Internal API] 切换模式失败:', error)
+    res.status(500).json({ code: 500, message: error.message })
+  }
+})
+
+/**
+ * 归还代理 IP
+ */
+router.post("/ip/return", async (req, res) => {
+  try {
+    const { ipInfo } = req.body
+    
+    if (!ipInfo) {
+      return res.status(400).json({ code: 400, message: "缺少 ipInfo" })
+    }
+    
+    const ipDispenser = (await import("../services/ai/ipDispenserService.js")).default
+    await ipDispenser.returnToPool(ipInfo)
+    
+    res.json({ code: 200, message: "已归还" })
+  } catch (error) {
+    logger.error('[Internal API] 归还 IP 失败:', error)
+    res.status(500).json({ code: 500, message: error.message })
+  }
+})
+
+/**
+ * 报告 IP 失效
+ */
+router.post("/ip/invalidate", async (req, res) => {
+  try {
+    const { ip } = req.body
+    
+    if (!ip) {
+      return res.status(400).json({ code: 400, message: "缺少 ip" })
+    }
+    
+    const ipDispenser = (await import("../services/ai/ipDispenserService.js")).default
+    await ipDispenser.reportIPInvalid(ip)
+    
+    res.json({ code: 200, message: "已记录" })
+  } catch (error) {
+    logger.error('[Internal API] 报告失效失败:', error)
+    res.status(500).json({ code: 500, message: error.message })
+  }
+})
+
+/**
+ * 报告直连失败
+ */
+router.post("/ip/direct-failure", async (req, res) => {
+  try {
+    const ipDispenser = (await import("../services/ai/ipDispenserService.js")).default
+    await ipDispenser.reportDirectFailure()
+    
+    res.json({ code: 200, message: "已记录" })
+  } catch (error) {
+    logger.error('[Internal API] 报告直连失败:', error)
+    res.status(500).json({ code: 500, message: error.message })
+  }
+})
+
+/**
+ * 报告遇到验证码
+ */
+router.post("/ip/captcha-detected", async (req, res) => {
+  try {
+    const ipDispenser = (await import("../services/ai/ipDispenserService.js")).default
+    await ipDispenser.reportCaptcha()
+    
+    res.json({ code: 200, message: "已记录" })
+  } catch (error) {
+    logger.error('[Internal API] 报告验证码:', error)
+    res.status(500).json({ code: 500, message: error.message })
+  }
+})
+
+/**
+ * 获取队列状态
+ */
+router.get("/queue/status", async (req, res) => {
+  try {
+    const { Queue } = await import("bullmq")
+    const redisConnection = (await import("../config/queue.js")).default
+    const db = (await import("../config/database.js")).default
+    
+    const queues = [
+      { name: "link-verify-queue", displayName: "链接验证队列" },
+      { name: "link-delay-queue", displayName: "连接延迟队列" }
+    ]
+
+    const [imageQueueStats, results] = await Promise.all([
+      db.queryOne(
+        `
+        SELECT
+          COUNT(*) FILTER (WHERE status = 'pending')::int AS waiting,
+          COUNT(*) FILTER (WHERE status = 'processing')::int AS active,
+          COUNT(*) FILTER (WHERE status = 'completed')::int AS completed,
+          COUNT(*) FILTER (WHERE status = 'failed')::int AS failed
+        FROM ai_review_queue
+        `
+      ),
+      queues.map(async (q) => {
+        try {
+          const queue = new Queue(q.name, { connection: redisConnection })
+          const [waiting, active, completed, failed] = await Promise.all([
+            queue.getWaitingCount(),
+            queue.getActiveCount(),
+            queue.getCompletedCount(),
+            queue.getFailedCount()
+          ])
+          return {
+            name: q.displayName,
+            queueName: q.name,
+            waiting,
+            active,
+            completed,
+            failed
+          }
+        } catch (e) {
+          return {
+            name: q.displayName,
+            queueName: q.name,
+            error: e.message,
+            waiting: 0,
+            active: 0,
+            completed: 0,
+            failed: 0
+          }
+        }
+      })
+    ])
+
+    const allQueues = [
+      {
+        name: "图片审核队列",
+        queueName: "ai_review_queue",
+        waiting: Number(imageQueueStats?.waiting || 0),
+        active: Number(imageQueueStats?.active || 0),
+        completed: Number(imageQueueStats?.completed || 0),
+        failed: Number(imageQueueStats?.failed || 0)
+      },
+      ...results
+    ]
+    const waiting = allQueues.reduce((sum, item) => sum + Number(item.waiting || 0), 0)
+    const active = allQueues.reduce((sum, item) => sum + Number(item.active || 0), 0)
+    const completed = allQueues.reduce((sum, item) => sum + Number(item.completed || 0), 0)
+    const failed = allQueues.reduce((sum, item) => sum + Number(item.failed || 0), 0)
+    
+    res.json({
+      code: 200,
+      data: {
+        waiting,
+        active,
+        completed,
+        failed,
+        queues: allQueues
+      }
+    })
+  } catch (error) {
+    logger.error('[Internal API] 获取队列状态失败:', error)
+    res.status(500).json({ code: 500, message: error.message })
+  }
+})
+
+export default router

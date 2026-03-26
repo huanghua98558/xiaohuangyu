@@ -71,7 +71,7 @@
           </div>
           <div class="rank-info">
             <span class="rank-name">{{ item.username }}</span>
-            <span class="rank-points">{{ item.points }} 积分</span>
+            <span class="rank-points">{{ activeRankTab === 'total' ? item.points : item.dailyPoints }} {{ activeRankTab === 'total' ? '积分' : '今日积分' }}</span>
           </div>
         </div>
         <div class="rank-empty" v-if="(activeRankTab === 'total' ? !rankList.length : !dailyRankList.length) && !rankLoading">
@@ -213,14 +213,14 @@
 
     <!-- 数据统计（仅登录后显示） -->
     <section class="stats-section" v-if="isLoggedIn">
-      <div class="stat-card">
+      <div class="stat-card clickable" @click="$router.push('/points')">
         <div class="stat-icon">💎</div>
         <div class="stat-info">
           <span class="stat-value">{{ userPoints }}</span>
           <span class="stat-label">我的积分</span>
         </div>
       </div>
-      <div class="stat-card">
+      <div class="stat-card clickable" @click="$router.push('/withdraw')">
         <div class="stat-icon">💵</div>
         <div class="stat-info">
           <span class="stat-value">¥{{ userBalance }}</span>
@@ -1183,65 +1183,65 @@ onActivated(() => {
     font-size: 24px;
   }
 }
-</style>
 
-/* ========== 数据统计 ========== */
+/* ========== 积分统计 ========== */
 .stats-section {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-  margin-bottom: 24px;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-bottom: 16px;
 }
 
 .stat-card {
-  background: #fff;
-  border-radius: 16px;
-  padding: 24px;
+  background: linear-gradient(135deg, #fff 0%, #f8f9ff 100%);
+  border-radius: 12px;
+  padding: 12px 10px;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 16px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
-  transition: all 0.2s;
+  gap: 6px;
+  box-shadow: 0 2px 8px rgba(83, 109, 254, 0.06);
+  border: 1px solid rgba(83, 109, 254, 0.08);
+  transition: all 0.3s ease;
 }
 
 .stat-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+  transform: translateY(-3px);
+  box-shadow: 0 6px 20px rgba(83, 109, 254, 0.15);
 }
+.stat-card.clickable {  cursor: pointer;}.stat-card.clickable:active {  transform: scale(0.98);}
+
 
 .stat-icon {
-  font-size: 36px;
-  width: 64px;
-  height: 64px;
+  font-size: 20px;
+  width: 36px;
+  height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #f5f5f5 0%, #e8e8e8 100%);
-  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(83, 109, 254, 0.1) 0%, rgba(124, 77, 255, 0.1) 100%);
+  border-radius: 50%;
   flex-shrink: 0;
 }
 
 .stat-info {
   display: flex;
   flex-direction: column;
-  flex: 1;
-  min-width: 0;
+  align-items: center;
+  text-align: center;
 }
 
 .stat-value {
-  font-size: 28px;
+  font-size: 18px;
   font-weight: 700;
-  color: #333;
-  margin-bottom: 6px;
+  color: #3f51b5;
+  margin-bottom: 2px;
   line-height: 1.2;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .stat-label {
-  font-size: 14px;
+  font-size: 11px;
   color: #666;
   font-weight: 500;
-  opacity: 0.9;
 }
+</style>

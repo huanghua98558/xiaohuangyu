@@ -1,0 +1,2345 @@
+/**
+ * AI服务API路由 - 升级版
+ * 
+ * 权限说明：
+ * - 普通用户(part_timer)：无AI入口
+ * - 发布者(client)：可使用发布助手
+ * - 审核员(reviewer)：可使用发布助手、审核助手
+ * - 管理员(admin)：可使用所有功能
+ * 
+ * 数据存储：所有数据存储在Supabase
+ */
+import express from 'express'
+import { Readable } from 'stream'
+import { authMiddleware, requireRoles } from '../middlewares/auth.js'
+import supabase from '../utils/supabaseToPrismaAdapter.js'
+import {
+  createConversation,
+  getConversations,
+  getConversation,
+  deleteConversation
+} from '../services/ai/conversationService.js'
+import {
+  chatWithPublisher,
+  parseTaskUrl,
+  detectLink
+} from '../services/ai/publisherAssistantService.js'
+// 从 imageReviewService.js 导入（PaddleOCR审核）
+import {
+  getReviewQueue,
+  getReviewStats,
+  getReviewLogs,
+  manualApprove,
+  manualReject
+} from '../services/ai/imageReviewService.js'
+import {
+  getFingerprintStats,
+  batchCheckFingerprints
+} from '../services/ai/fingerprintService.js'
+import { getQueueStats } from '../services/ai/queueService.js'
+import { getOperationLogs, getOperationStats } from '../services/ai/operationLogService.js'
+import { getConfig, getConfigs, setConfig, getAllConfigs } from '../services/ai/configService.js'
+import reviewConfig from '../services/ai/reviewConfigService.js'
+import logger from '../utils/logger.js'
+import db from '../config/database.js'
+import pointsSettlementService from '../services/pointsSettlementService.js'
+import { CLAIM_STATUS } from '../constants/claimLifecycle.js'
+import { appendReviewHistory, createReviewHistoryEntry } from '../utils/claimReviewHistory.js'
+
+const router = express.Router()
+
+// ============ 公开接口（无需认证）============
+
+// 浏览器服务状态检查 - 公开端点
+
+// admin 也可以访问 reviewer 接口
+const adminOrReviewerAuth = (req, res, next) => {
+  if (req.userRole === 'admin' || req.userRole === 'reviewer') {
+    return next()
+  }
+  return res.status(403).json({ code: 403, message: '需要审核员或管理员权限' })
+}
+
+router.get('/browser-status', async (req, res) => {
+  try {
+    // 动态导入以避免启动时加载
+    const { healthCheck: browserHealthCheck } = await import('../services/ai/browserService.js')
+    const result = await browserHealthCheck()
+    res.json({ code: 0, message: '检查完成', data: result })
+  } catch (error) {
+    res.json({ 
+      code: 200, 
+      message: '检查完成', 
+      data: {
+        status: 'unavailable',
+        error: error.message,
+        hint: '浏览器自动化功能不可用，但不影响核心业务运行'
+      }
+    })
+  }
+})
+
+// ============ 中间件 ============
+
+// 全局认证中间件 - 所有AI接口都需要登录
+router.use(authMiddleware)
+
+// 权限检查中间件
+const publisherAuth = requireRoles('admin', 'client', 'reviewer')
+const reviewerAuth = requireRoles('admin', 'reviewer')
+const adminAuth = requireRoles('admin')
+
+// ============ SSE 辅助函数 ============
+function createSSEStream(generator, res, req) {
+  const stream = new Readable({ read() {} })
+  
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
+  res.setHeader('X-Accel-Buffering', 'no')
+  
+  ;(async () => {
+    try {
+      for await (const chunk of generator) {
+        const data = JSON.stringify({ content: chunk })
+        stream.push(`data: ${data}\n\n`)
+      }
+      stream.push('data: [DONE]\n\n')
+      stream.push(null)
+    } catch (error) {
+      logger.error('SSE流错误:', error)
+      const errorData = JSON.stringify({ error: error.message })
+      stream.push(`data: ${errorData}\n\n`)
+      stream.push(null)
+    }
+  })()
+  
+  stream.pipe(res)
+  
+  req.on('close', () => {
+    stream.destroy()
+  })
+}
+
+// ============ 会话管理接口 ============
+
+// 创建会话
+router.post('/conversations', async (req, res) => {
+  try {
+    const { type, title, context } = req.body
+    const conversation = await createConversation(req.userId, type, title, context)
+    res.json({ code: 0, message: '创建成功', data: conversation })
+  } catch (error) {
+    logger.error('创建会话失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 获取会话列表
+router.get('/conversations', async (req, res) => {
+  try {
+    const { type, page = 1, pageSize = 20 } = req.query
+    const result = await getConversations(req.userId, type, { page, pageSize })
+    res.json({ code: 0, message: '获取成功', data: result })
+  } catch (error) {
+    logger.error('获取会话列表失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 获取会话详情
+router.get('/conversations/:id', async (req, res) => {
+  try {
+    const conversation = await getConversation(parseInt(req.params.id), req.userId)
+    res.json({ code: 0, message: '获取成功', data: conversation })
+  } catch (error) {
+    logger.error('获取会话详情失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 删除会话
+router.delete('/conversations/:id', async (req, res) => {
+  try {
+    await deleteConversation(parseInt(req.params.id), req.userId)
+    res.json({ code: 0, message: '删除成功', data: null })
+  } catch (error) {
+    logger.error('删除会话失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// ============ 发布助手接口 ============
+
+// 与发布助手对话（流式）- 发布者/审核员/管理员
+router.post('/publisher/chat', publisherAuth, async (req, res) => {
+  try {
+    const { message, conversationId } = req.body
+    
+    if (!message) {
+      return res.status(400).json({ code: 400, message: '消息不能为空', data: null })
+    }
+    
+    // 获取用户信息
+    const { data: user } = await supabase
+      .from('users')
+      .select('id, username, role')
+      .eq('id', req.userId)
+      .single()
+    
+    const headers = req.headers
+    const generator = chatWithPublisher(req.userId, message, conversationId, headers, user)
+    
+    createSSEStream(generator, res, req)
+  } catch (error) {
+    logger.error('发布助手对话失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 解析链接 - 发布者/审核员/管理员
+router.post('/publisher/parse-link', publisherAuth, async (req, res) => {
+  try {
+    const { url } = req.body
+    
+    if (!url) {
+      return res.status(400).json({ code: 400, message: '链接不能为空', data: null })
+    }
+    
+    const result = await parseTaskUrl(url, req.headers)
+    res.json({ code: 0, message: '解析成功', data: result })
+  } catch (error) {
+    logger.error('解析链接失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 检测链接格式
+router.post('/publisher/detect-link', publisherAuth, async (req, res) => {
+  try {
+    const { text } = req.body
+    
+    if (!text) {
+      return res.status(400).json({ code: 400, message: '文本不能为空', data: null })
+    }
+    
+    const result = detectLink(text)
+    res.json({ code: 0, message: '检测完成', data: result })
+  } catch (error) {
+    logger.error('检测链接失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// ============ 快捷模板接口 ============
+
+// 平台名称映射
+const PLATFORM_NAMES = {
+  douyin: '抖音',
+  xiaohongshu: '小红书',
+  kuaishou: '快手',
+  weibo: '微博',
+  bilibili: 'B站'
+}
+
+// 获取快捷模板列表 - 发布者/审核员/管理员
+router.get('/templates', publisherAuth, async (req, res) => {
+  try {
+    // 获取默认模板 + 用户自定义模板
+    const { data: templates, error } = await supabase
+      .from('ai_quick_templates')
+      .select('*')
+      .in('user_id', ['0', req.userId])
+      .order('is_default', { ascending: false })
+      .order('sort_order', { ascending: true })
+      .order('created_at', { ascending: false })
+    
+    if (error) throw error
+    
+    // 格式化返回数据
+    const formattedTemplates = (templates || []).map(t => ({
+      id: t.id,
+      name: t.name,
+      platform: t.platform,
+      platformName: PLATFORM_NAMES[t.platform] || t.platform,
+      action: t.action,
+      reward: t.reward,
+      remain: t.remain,
+      timeLimitMinutes: t.time_limit_minutes,
+      description: t.description,
+      isDefault: t.is_default,
+      canEdit: !t.is_default && t.user_id === req.userId
+    }))
+    
+    res.json({ code: 0, message: '获取成功', data: formattedTemplates })
+  } catch (error) {
+    logger.error('获取模板列表失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 创建自定义模板 - 发布者/审核员/管理员
+router.post('/templates', publisherAuth, async (req, res) => {
+  try {
+    const { name, platform, action, reward, remain, timeLimitMinutes, description } = req.body
+    
+    if (!name || !platform) {
+      return res.status(400).json({ code: 400, message: '模板名称和平台不能为空', data: null })
+    }
+    
+    const { data: template, error } = await supabase
+      .from('ai_quick_templates')
+      .insert({
+        user_id: req.userId,
+        name,
+        platform,
+        action: action || 'short_video_research',
+        reward: reward || 30,
+        remain: remain || 10,
+        time_limit_minutes: timeLimitMinutes || 15,
+        description: description || '',
+        is_default: false
+      })
+      .select()
+      .single()
+    
+    if (error) throw error
+    
+    res.json({ 
+      code: 200, 
+      message: '创建成功', 
+      data: {
+        id: template.id,
+        name: template.name,
+        platform: template.platform,
+        platformName: PLATFORM_NAMES[template.platform] || template.platform,
+        action: template.action,
+        reward: template.reward,
+        remain: template.remain,
+        timeLimitMinutes: template.time_limit_minutes,
+        description: template.description,
+        isDefault: false,
+        canEdit: true
+      }
+    })
+  } catch (error) {
+    logger.error('创建模板失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 更新自定义模板 - 发布者/审核员/管理员
+router.put('/templates/:id', publisherAuth, async (req, res) => {
+  try {
+    const templateId = parseInt(req.params.id)
+    const { name, platform, action, reward, remain, timeLimitMinutes, description } = req.body
+    
+    // 检查模板是否存在且属于当前用户
+    const { data: existing, error: checkError } = await supabase
+      .from('ai_quick_templates')
+      .select('id, user_id, is_default')
+      .eq('id', templateId)
+      .single()
+    
+    if (checkError || !existing) {
+      return res.status(404).json({ code: 404, message: '模板不存在', data: null })
+    }
+    
+    if (existing.is_default) {
+      return res.status(400).json({ code: 400, message: '默认模板不能编辑', data: null })
+    }
+    
+    if (existing.user_id !== req.userId) {
+      return res.status(403).json({ code: 403, message: '无权编辑此模板', data: null })
+    }
+    
+    const { data: template, error } = await supabase
+      .from('ai_quick_templates')
+      .update({
+        name,
+        platform,
+        action: action || 'short_video_research',
+        reward: reward || 30,
+        remain: remain || 10,
+        time_limit_minutes: timeLimitMinutes || 15,
+        description: description || '',
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', templateId)
+      .select()
+      .single()
+    
+    if (error) throw error
+    
+    res.json({ 
+      code: 200, 
+      message: '更新成功', 
+      data: {
+        id: template.id,
+        name: template.name,
+        platform: template.platform,
+        platformName: PLATFORM_NAMES[template.platform] || template.platform,
+        action: template.action,
+        reward: template.reward,
+        remain: template.remain,
+        timeLimitMinutes: template.time_limit_minutes,
+        description: template.description,
+        isDefault: false,
+        canEdit: true
+      }
+    })
+  } catch (error) {
+    logger.error('更新模板失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 删除自定义模板 - 发布者/审核员/管理员
+router.delete('/templates/:id', publisherAuth, async (req, res) => {
+  try {
+    const templateId = parseInt(req.params.id)
+    
+    // 检查模板是否存在且属于当前用户
+    const { data: existing, error: checkError } = await supabase
+      .from('ai_quick_templates')
+      .select('id, user_id, is_default')
+      .eq('id', templateId)
+      .single()
+    
+    if (checkError || !existing) {
+      return res.status(404).json({ code: 404, message: '模板不存在', data: null })
+    }
+    
+    if (existing.is_default) {
+      return res.status(400).json({ code: 400, message: '默认模板不能删除', data: null })
+    }
+    
+    if (existing.user_id !== req.userId) {
+      return res.status(403).json({ code: 403, message: '无权删除此模板', data: null })
+    }
+    
+    const { error } = await supabase
+      .from('ai_quick_templates')
+      .delete()
+      .eq('id', templateId)
+    
+    if (error) throw error
+    
+    res.json({ code: 0, message: '删除成功', data: null })
+  } catch (error) {
+    logger.error('删除模板失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// ============ 审核助手接口 ============
+
+// 获取审核队列 - 审核员/管理员
+router.get('/reviewer/queue', adminOrReviewerAuth, async (req, res) => {
+  try {
+    const { status, page, pageSize } = req.query
+    const result = await getReviewQueue({ status, page, pageSize })
+    res.json({ code: 0, message: '获取成功', data: result })
+  } catch (error) {
+    logger.error('获取审核队列失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 获取审核统计 - 审核员/管理员
+router.get('/reviewer/stats', adminOrReviewerAuth, async (req, res) => {
+  try {
+    const stats = await getReviewStats()
+    res.json({ code: 0, message: '获取成功', data: stats })
+  } catch (error) {
+    logger.error('获取审核统计失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 获取审核日志 - 审核员/管理员
+router.get('/reviewer/logs', adminOrReviewerAuth, async (req, res) => {
+  try {
+    const { page = 1, pageSize = 50 } = req.query
+    const offset = (page - 1) * pageSize
+    const result = await getReviewLogs({ limit: parseInt(pageSize), offset })
+    res.json({ code: 0, message: '获取成功', data: result })
+  } catch (error) {
+    logger.error('获取审核日志失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 获取服务状态 - 审核员/管理员
+router.get('/reviewer/services', adminOrReviewerAuth, async (req, res) => {
+  try {
+    const services = {
+      ocr: { healthy: false, url: 'http://localhost:9001' },
+      yolo: { healthy: false, url: 'http://localhost:8003' },
+      browser: { healthy: false, url: 'http://localhost:8000' }
+    }
+    
+    // 检查 OCR 服务
+    try {
+      const ocrRes = await fetch('http://localhost:9001/health', { 
+        method: 'GET',
+        signal: AbortSignal.timeout(3000)
+      })
+      if (ocrRes.ok) {
+        const data = await ocrRes.json()
+        services.ocr.healthy = data.status === 'ok'
+      }
+    } catch (e) {
+      services.ocr.error = e.message
+    }
+    
+    // 检查 YOLO 服务
+    try {
+      const yoloRes = await fetch('http://localhost:8003/health', {
+        method: 'GET',
+        signal: AbortSignal.timeout(3000)
+      })
+      if (yoloRes.ok) {
+        const data = await yoloRes.json()
+        services.yolo.healthy = data.status === 'ok'
+      }
+    } catch (e) {
+      services.yolo.error = e.message
+    }
+    
+    // 检查链接验证服务 (browser)
+    try {
+      const browserRes = await fetch('http://localhost:8000/', {
+        method: 'GET',
+        signal: AbortSignal.timeout(3000)
+      })
+      if (browserRes.ok) {
+        services.browser.healthy = true
+      }
+    } catch (e) {
+      // 尝试备用路径
+      try {
+        const browserRes2 = await fetch('http://localhost:8001/', {
+          method: 'GET',
+          signal: AbortSignal.timeout(3000)
+        })
+        services.browser.healthy = browserRes2.ok
+      } catch (e2) {
+        services.browser.error = e2.message
+      }
+    }
+    
+    res.json({ code: 0, message: '获取成功', data: services })
+  } catch (error) {
+    logger.error('获取服务状态失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 批量AI审核 - 审核员/管理员
+router.post('/reviewer/batch-review', adminOrReviewerAuth, async (req, res) => {
+  try {
+    const { claims } = req.body
+    const { enqueueReview } = await import('../services/ai/queueService.js')
+
+    const claimIds = Array.isArray(claims)
+      ? claims.map(item => Number(item?.claimId || item?.id || item)).filter(Number.isFinite)
+      : []
+
+    let queued = 0
+    for (const claimId of claimIds) {
+      await enqueueReview(claimId)
+      queued++
+    }
+
+    res.json({ code: 0, message: '已加入审核队列', data: { queued } })
+  } catch (error) {
+    logger.error('批量审核失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 人工审核 - 审核员/管理员
+router.post('/reviewer/manual', adminOrReviewerAuth, async (req, res) => {
+  try {
+    const { claimId, action, note } = req.body
+    
+    if (!claimId || !action) {
+      return res.status(400).json({ code: 400, message: '参数不完整', data: null })
+    }
+    
+    let result
+    if (action === 'approve') {
+      result = await manualApprove(claimId, req.userId, note || '')
+    } else {
+      result = await manualReject(claimId, req.userId, note || '')
+    }
+    
+    res.json({ code: 0, message: result.message, data: result })
+  } catch (error) {
+    logger.error('人工审核失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 与审核助手对话（流式）- 审核员/管理员
+router.post('/reviewer/chat', reviewerAuth, async (req, res) => {
+  try {
+    const { message, conversationId } = req.body
+    
+    if (!message) {
+      return res.status(400).json({ code: 400, message: '消息不能为空', data: null })
+    }
+    
+    const headers = req.headers
+    const generator = chatWithReviewer(req.userId, message, conversationId, headers)
+    
+    createSSEStream(generator, res, req)
+  } catch (error) {
+    logger.error('审核助手对话失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 处理单个审核项
+router.post('/reviewer/process/:id', reviewerAuth, async (req, res) => {
+  try {
+    const queueId = parseInt(req.params.id)
+    const queueItem = await db.queryOne('SELECT claim_id FROM ai_review_queue WHERE id = $1', [queueId])
+    if (!queueItem?.claim_id) {
+      return res.status(404).json({ code: 404, message: '审核队列项不存在', data: null })
+    }
+
+    const { enqueueReview } = await import('../services/ai/queueService.js')
+    const result = await enqueueReview(queueItem.claim_id)
+    res.json({ code: 0, message: '已重新入队', data: result })
+  } catch (error) {
+    logger.error('处理审核项失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 直接处理领取记录审核（通过claimId）
+router.post('/reviewer/process-claim/:claimId', reviewerAuth, async (req, res) => {
+  try {
+    const claimId = parseInt(req.params.claimId)
+    const { enqueueReview } = await import('../services/ai/queueService.js')
+    const result = await enqueueReview(claimId)
+    res.json({ code: 0, message: '已加入审核队列', data: result })
+  } catch (error) {
+    logger.error('直接处理审核失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// ============ 管理员接口 ============
+
+// 获取AI配置
+router.get("/admin/configs", adminAuth, async (req, res) => {
+  try {
+    const { category } = req.query
+    const configs = await getAllConfigs(category)
+    res.json({ code: 0, message: '获取成功', data: configs })
+  } catch (error) {
+    logger.error('获取配置失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 更新AI配置
+router.post('/admin/configs', adminAuth, async (req, res) => {
+  try {
+    const { key, value } = req.body
+    await setConfig(key, value)
+    res.json({ code: 0, message: '更新成功', data: null })
+  } catch (error) {
+    logger.error('更新配置失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 批量更新配置
+router.post('/admin/configs/batch', adminAuth, async (req, res) => {
+  try {
+    const { updates, configs } = req.body
+    const configList = updates || configs
+    
+    for (const { key, value } of configList) {
+      await setConfig(key, value)
+    }
+    
+    res.json({ code: 0, message: '批量更新成功', data: null })
+  } catch (error) {
+    logger.error('批量更新配置失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// ============ 模型配置接口 ============
+
+// 获取模型配置（发布助手/审核助手）
+router.get('/config/logs', adminOrReviewerAuth, async (req, res) => {
+  res.json({ code: 0, data: { list: [], total: 0 } })
+})
+
+router.get('/config/:type', adminAuth, async (req, res) => {
+  try {
+    const { type } = req.params // 'publisher' 或 'reviewer'
+    
+    if (!['publisher', 'reviewer'].includes(type)) {
+      return res.status(400).json({ code: 400, message: '无效的配置类型', data: null })
+    }
+    
+    const prefix = `${type}_`
+    const provider = await getConfig(`${prefix}api_provider`, '')
+    const providerName = await getConfig(`${prefix}api_provider_name`, '')
+    const apiBaseUrl = await getConfig(`${prefix}api_base_url`, '')
+    const apiKey = await getConfig(`${prefix}api_key`, '')
+    const model = await getConfig(`${prefix}model`, '')
+    
+    res.json({
+      code: 200,
+      message: '获取成功',
+      data: {
+        config: {
+          provider,
+          providerName,
+          apiBaseUrl,
+          apiKey: apiKey ? '******' : '', // 不返回完整key
+          hasApiKey: !!apiKey,
+          model
+        }
+      }
+    })
+  } catch (error) {
+    logger.error('获取模型配置失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 保存模型配置
+router.post('/config/:type', adminAuth, async (req, res) => {
+  try {
+    const { type } = req.params // 'publisher' 或 'reviewer'
+    const { provider, providerName, apiBaseUrl, apiKey, model } = req.body
+    
+    if (!['publisher', 'reviewer'].includes(type)) {
+      return res.status(400).json({ code: 400, message: '无效的配置类型', data: null })
+    }
+    
+    const prefix = `${type}_`
+    
+    // 保存各配置项
+    if (provider) await setConfig(`${prefix}api_provider`, provider)
+    if (providerName) await setConfig(`${prefix}api_provider_name`, providerName)
+    if (apiBaseUrl) await setConfig(`${prefix}api_base_url`, apiBaseUrl)
+    if (apiKey && apiKey !== '******') await setConfig(`${prefix}api_key`, apiKey) // 只有传入新key才更新
+    if (model) await setConfig(`${prefix}model`, model)
+    
+    logger.info(`管理员 ${req.userId} 更新了${type === 'publisher' ? '发布助手' : '审核助手'}模型配置`)
+    
+    res.json({ code: 0, message: '保存成功', data: null })
+  } catch (error) {
+    logger.error('保存模型配置失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 测试API连接
+router.post('/test-connection', adminAuth, async (req, res) => {
+  try {
+    const { apiBaseUrl, apiKey, model } = req.body
+    
+    if (!apiBaseUrl || !apiKey || !model) {
+      return res.status(400).json({ code: 400, message: '参数不完整', data: null })
+    }
+    
+    // 构造测试请求
+    const testUrl = apiBaseUrl.endsWith('/') 
+      ? `${apiBaseUrl}chat/completions` 
+      : `${apiBaseUrl}/chat/completions`
+    
+    const response = await fetch(testUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: 'Hello' }],
+        max_tokens: 10
+      })
+    })
+    
+    if (response.ok) {
+      res.json({ code: 0, message: '连接成功', data: { success: true } })
+    } else {
+      const errorText = await response.text()
+      let errorMessage = '连接失败'
+      try {
+        const errorJson = JSON.parse(errorText)
+        errorMessage = errorJson.error?.message || errorJson.message || errorMessage
+      } catch {
+        errorMessage = errorText || errorMessage
+      }
+      res.json({ code: 0, message: '连接失败', data: { success: false, error: errorMessage } })
+    }
+  } catch (error) {
+    logger.error('测试连接失败:', error)
+    res.json({ code: 0, message: '连接失败', data: { success: false, error: error.message } })
+  }
+})
+
+// 获取操作日志
+router.get('/admin/logs', adminAuth, async (req, res) => {
+  try {
+    const { page = 1, pageSize = 50, type, status } = req.query
+    const result = await getOperationLogs({ page, pageSize, type, status })
+    res.json({ code: 0, message: '获取成功', data: result })
+  } catch (error) {
+    logger.error('获取日志失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 获取操作统计
+router.get('/admin/stats', adminAuth, async (req, res) => {
+  try {
+    const stats = await getOperationStats()
+    res.json({ code: 0, message: '获取成功', data: stats })
+  } catch (error) {
+    logger.error('获取统计失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 获取队列统计
+router.get('/admin/queue-stats', adminAuth, async (req, res) => {
+  try {
+    const stats = await getQueueStats()
+    res.json({ code: 0, message: '获取成功', data: stats })
+  } catch (error) {
+    logger.error('获取队列统计失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 批量处理队列
+router.post('/admin/process-queue', adminAuth, async (req, res) => {
+  try {
+    const { count = 100 } = req.body
+    const { enqueueReview } = await import('../services/ai/queueService.js')
+    const pendingClaims = await db.queryMany(
+      `
+      SELECT c.id
+      FROM claims c
+      LEFT JOIN ai_review_queue q
+        ON q.claim_id = c.id
+       AND q.status IN ('pending', 'processing')
+      WHERE c.status IN ($1, $2)
+        AND c.screenshots IS NOT NULL
+        AND c.screenshots::text != '[]'
+        AND q.id IS NULL
+      ORDER BY c.submitted_at ASC NULLS LAST, c.id ASC
+      LIMIT $3
+      `,
+      [
+        CLAIM_STATUS.SUBMITTED,
+        CLAIM_STATUS.IMAGE_REVIEWING,
+        Number(count) || 100
+      ]
+    )
+
+    let queued = 0
+    for (const item of pendingClaims) {
+      await enqueueReview(item.id)
+      queued++
+    }
+
+    res.json({ code: 0, message: '已加入审核队列', data: { queued } })
+  } catch (error) {
+    logger.error('批量处理队列失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 获取指纹统计
+router.get('/admin/fingerprint-stats', adminAuth, async (req, res) => {
+  try {
+    const stats = await getFingerprintStats()
+    res.json({ code: 0, message: '获取成功', data: stats })
+  } catch (error) {
+    logger.error('获取指纹统计失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 检查截图指纹
+router.post('/admin/check-fingerprint', adminAuth, async (req, res) => {
+  try {
+    const { imageUrls, userId } = req.body
+    const result = await batchCheckFingerprints(imageUrls, userId)
+    res.json({ code: 0, message: '检查完成', data: result })
+  } catch (error) {
+    logger.error('检查指纹失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 获取用户信用分
+router.get('/admin/credit-score/:userId', adminAuth, async (req, res) => {
+  try {
+    const score = await calculateUserCreditScore(parseInt(req.params.userId))
+    res.json({ code: 0, message: '获取成功', data: score })
+  } catch (error) {
+    logger.error('获取信用分失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 获取信用分排名
+router.get('/admin/credit-ranking', adminAuth, async (req, res) => {
+  try {
+    const { limit = 100 } = req.query
+    const ranking = await getCreditRanking(parseInt(limit))
+    res.json({ code: 0, message: '获取成功', data: ranking })
+  } catch (error) {
+    logger.error('获取信用排名失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 获取风险用户
+router.get('/admin/risk-users', adminAuth, async (req, res) => {
+  try {
+    const { threshold = 50 } = req.query
+    const users = await getRiskUsers(parseInt(threshold))
+    res.json({ code: 0, message: '获取成功', data: users })
+  } catch (error) {
+    logger.error('获取风险用户失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 发送用户提醒（管理员专用）
+router.post('/admin/notify', adminAuth, async (req, res) => {
+  try {
+    const { userId, title, content } = req.body
+    
+    if (!userId || !content) {
+      return res.status(400).json({ code: 400, message: '参数不完整', data: null })
+    }
+    
+    // TODO: 实际调用通知服务
+    // 这里先模拟
+    const notification = {
+      id: Date.now(),
+      userId,
+      title: title || '系统通知',
+      content,
+      createdAt: new Date()
+    }
+    
+    res.json({ code: 0, message: '发送成功', data: notification })
+  } catch (error) {
+    logger.error('发送通知失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// ============ 兼容旧接口 ============
+
+// 旧的配置接口
+router.get('/configs', async (req, res) => {
+  try {
+    const configs = await getConfigs()
+    res.json({ code: 0, message: '获取成功', data: configs })
+  } catch (error) {
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+router.post('/configs', async (req, res) => {
+  try {
+    const { key, value } = req.body
+    await setConfig(key, value)
+    res.json({ code: 0, message: '更新成功', data: null })
+  } catch (error) {
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// ============ 新增：多维度审核接口 ============
+
+import {
+  comprehensiveReview,
+  batchComprehensiveReview
+} from '../services/ai/reviewEngine.js'
+import {
+  parseCommand,
+  executeCommand,
+  formatReviewList
+} from '../services/ai/reviewCommandService.js'
+import {
+  verifyComment,
+  healthCheck as browserHealthCheck
+} from '../services/ai/browserService.js'
+
+// 多维度综合审核 - 审核员/管理员
+router.post('/reviewer/comprehensive/:claimId', reviewerAuth, async (req, res) => {
+  try {
+    const claimId = parseInt(req.params.claimId)
+    const { commentText } = req.body
+    
+    const result = await comprehensiveReview(claimId, {
+      commentText,
+      headers: req.headers
+    })
+    
+    res.json({ code: 0, message: '审核完成', data: result })
+  } catch (error) {
+    logger.error('综合审核失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 批量综合审核 - 审核员/管理员
+router.post('/reviewer/batch-comprehensive', adminOrReviewerAuth, async (req, res) => {
+  try {
+    const { claimIds } = req.body
+    
+    if (!claimIds || !Array.isArray(claimIds)) {
+      return res.status(400).json({ code: 400, message: '请提供审核项ID数组', data: null })
+    }
+    
+    const result = await batchComprehensiveReview(claimIds, { headers: req.headers })
+    res.json({ code: 0, message: '批量审核完成', data: result })
+  } catch (error) {
+    logger.error('批量综合审核失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 审核指令解析与执行 - 审核员/管理员
+router.post('/reviewer/command', adminOrReviewerAuth, async (req, res) => {
+  try {
+    const { message } = req.body
+    
+    if (!message) {
+      return res.status(400).json({ code: 400, message: '指令不能为空', data: null })
+    }
+    
+    // 解析指令
+    const parsed = await parseCommand(message, req.headers)
+    
+    // 执行指令
+    const result = await executeCommand(parsed, req.userId, req.headers)
+    
+    // 格式化输出
+    if (result.type === 'query' && result.data?.list) {
+      result.formattedList = formatReviewList(result.data.list)
+    }
+    
+    res.json({ code: 0, message: result.message || '执行完成', data: result })
+  } catch (error) {
+    logger.error('执行审核指令失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 链接验证 - 审核员/管理员
+router.post('/reviewer/verify-link', adminOrReviewerAuth, async (req, res) => {
+  try {
+    const { videoUrl, comment, userName } = req.body
+    
+    if (!videoUrl) {
+      return res.status(400).json({ code: 400, message: '视频链接不能为空', data: null })
+    }
+    
+    const result = await verifyComment(videoUrl, comment || '', userName || '')
+    res.json({ code: 0, message: '验证完成', data: result })
+  } catch (error) {
+    logger.error('链接验证失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 浏览器服务健康检查 - 管理员
+router.get('/admin/browser-health', adminAuth, async (req, res) => {
+  try {
+    const result = await browserHealthCheck()
+    res.json({ code: 0, message: '检查完成', data: result })
+  } catch (error) {
+    logger.error('浏览器健康检查失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 获取审核报告列表（待人工审核）- 审核员/管理员
+router.get('/reviewer/reports', adminOrReviewerAuth, async (req, res) => {
+  try {
+    const { status = 'pending', page = 1, pageSize = 20 } = req.query
+    
+    // 直接从claims查询待人工审核的数据（ai_review_status = 'manual'）
+    const { data: claims, error } = await supabase
+      .from('claims')
+      .select('id, user_id, task_id, screenshots, status, image_review_status, link_review_status, ai_review_status, ai_confidence, ai_reason, claimed_at, tasks(id, title, platform, action), users(id, username)')
+      .eq('ai_review_status', 'manual')
+      .order('claimed_at', { ascending: false })
+      .range((page - 1) * pageSize, page * pageSize - 1)
+    
+    if (error) throw error
+    
+    // 构造报告格式返回
+    const reports = (claims || []).map(claim => ({
+      id: claim.id,
+      claim_id: claim.id,
+      report_type: 'manual_review',
+      priority: 0,
+      status: 'pending',
+      created_at: claim.claimed_at,
+      ai_analysis: {
+        screenshot: {
+          dimension: 'screenshot',
+          result: claim.image_review_status === 'passed' ? 'approved' : 
+                  claim.image_review_status === 'failed' ? 'rejected' : 'manual',
+          confidence: claim.ai_confidence || 0.5,
+          details: { analysisText: claim.ai_reason || '待人工审核' }
+        }
+      },
+      difficulty_reasons: [{
+        dimension: 'screenshot',
+        confidence: claim.ai_confidence || 0.5,
+        issues: claim.ai_reason || '需要人工确认'
+      }],
+      claims: claim
+    }))
+    
+    res.json({ code: 0, message: '获取成功', data: { list: reports, page, pageSize } })
+  } catch (error) {
+    logger.error('获取审核报告失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 处理审核报告 - 审核员/管理员
+router.post('/reviewer/reports/:id/resolve', reviewerAuth, async (req, res) => {
+  try {
+    const reportId = parseInt(req.params.id)
+    const { decision, note } = req.body
+    
+    if (!decision) {
+      return res.status(400).json({ code: 400, message: '请提供审核决定', data: null })
+    }
+    
+    // 获取报告
+    const { data: report, error: reportError } = await supabase
+      .from('review_reports')
+      .select('claim_id')
+      .eq('id', reportId)
+      .single()
+    
+    if (reportError || !report) {
+      return res.status(404).json({ code: 404, message: '报告不存在', data: null })
+    }
+    
+    // 执行审核决定
+    if (decision === 'approve') {
+      await manualApprove(report.claim_id, req.userId, note || '')
+    } else if (decision === 'reject') {
+      await manualReject(report.claim_id, req.userId, note || '')
+    }
+    
+    // 更新报告状态
+    await supabase
+      .from('review_reports')
+      .update({
+        status: 'resolved',
+        human_decision: decision,
+        human_note: note,
+        reviewer_id: req.userId,
+        resolved_at: new Date().toISOString()
+      })
+      .eq('id', reportId)
+    
+    res.json({ code: 0, message: '处理完成', data: { reportId, decision } })
+  } catch (error) {
+    logger.error('处理审核报告失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 获取可疑用户列表 - 审核员/管理员
+router.get('/reviewer/suspicious-users', adminOrReviewerAuth, async (req, res) => {
+  try {
+    const { status = 'monitoring', page = 1, pageSize = 20 } = req.query
+    
+    const { data: users, error } = await supabase
+      .from('suspicious_users')
+      .select(`
+        id, user_id, suspicion_type, suspicion_score, evidence, status, created_at,
+        users (id, username, level, total_points)
+      `)
+      .neq('status', 'cleared')
+      .order('suspicion_score', { ascending: false })
+      .range((page - 1) * pageSize, page * pageSize - 1)
+    
+    if (error) throw error
+    
+    res.json({ code: 0, message: '获取成功', data: { list: users || [], page, pageSize } })
+  } catch (error) {
+    logger.error('获取可疑用户失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 更新可疑用户状态 - 管理员
+router.post('/admin/suspicious-users/:id', adminAuth, async (req, res) => {
+  try {
+    const userId = parseInt(req.params.id)
+    const { status, adminNote } = req.body
+    
+    const { error } = await supabase
+      .from('suspicious_users')
+      .update({
+        status,
+        admin_note: adminNote,
+        updated_at: new Date().toISOString()
+      })
+      .eq('user_id', userId)
+    
+    if (error) throw error
+    
+    res.json({ code: 0, message: '更新成功', data: null })
+  } catch (error) {
+    logger.error('更新可疑用户失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 获取可用模型列表 - 管理员
+router.get('/admin/models', adminAuth, async (req, res) => {
+  try {
+    const models = [
+      {
+        id: 'doubao-seed-2-0-pro-260215',
+        name: 'Doubao Seed 2.0 Pro',
+        description: '旗舰模型，复杂推理，多模态，长上下文',
+        category: 'flagship',
+        capabilities: ['text', 'vision', 'long-context'],
+        recommended: 'multi-step planning, multimodal, complex reasoning'
+      },
+      {
+        id: 'doubao-seed-2-0-lite-260215',
+        name: 'Doubao Seed 2.0 Lite',
+        description: '平衡性能和成本，内容创作、数据分析',
+        category: 'balanced',
+        capabilities: ['text'],
+        recommended: 'content creation, data analysis, enterprise tasks'
+      },
+      {
+        id: 'doubao-seed-2-0-mini-260215',
+        name: 'Doubao Seed 2.0 Mini',
+        description: '快速响应，成本效益高',
+        category: 'fast',
+        capabilities: ['text'],
+        recommended: 'low latency, high concurrency, lightweight tasks'
+      },
+      {
+        id: 'doubao-seed-1-8-251228',
+        name: 'Doubao Seed 1.8',
+        description: '多模态Agent优化模型（默认）',
+        category: 'agent',
+        capabilities: ['text', 'vision', 'tool-use'],
+        recommended: 'agent scenarios, multimodal understanding'
+      },
+      {
+        id: 'doubao-seed-1-6-251015',
+        name: 'Doubao Seed 1.6',
+        description: '平衡性能，通用对话',
+        category: 'balanced',
+        capabilities: ['text'],
+        recommended: 'general conversations'
+      },
+      {
+        id: 'doubao-seed-1-6-flash-250615',
+        name: 'Doubao Seed 1.6 Flash',
+        description: '快速响应模型',
+        category: 'fast',
+        capabilities: ['text'],
+        recommended: 'quick responses, real-time chat'
+      },
+      {
+        id: 'doubao-seed-1-6-thinking-250715',
+        name: 'Doubao Seed 1.6 Thinking',
+        description: '思考模型，复杂推理',
+        category: 'thinking',
+        capabilities: ['text', 'reasoning'],
+        recommended: 'complex reasoning, math, logic problems',
+        requiresThinking: true
+      },
+      {
+        id: 'doubao-seed-1-6-vision-250815',
+        name: 'Doubao Seed 1.6 Vision',
+        description: '视觉模型，图像/视频理解',
+        category: 'vision',
+        capabilities: ['text', 'vision', 'video'],
+        recommended: 'image/video understanding, screenshot analysis'
+      },
+      {
+        id: 'doubao-seed-1-6-lite-251015',
+        name: 'Doubao Seed 1.6 Lite',
+        description: '轻量级模型，简单任务',
+        category: 'lite',
+        capabilities: ['text'],
+        recommended: 'simple tasks, cost-effective'
+      },
+      {
+        id: 'deepseek-v3-2-251201',
+        name: 'DeepSeek V3.2',
+        description: 'DeepSeek高级推理模型',
+        category: 'advanced',
+        capabilities: ['text', 'reasoning'],
+        recommended: 'advanced reasoning tasks'
+      },
+      {
+        id: 'deepseek-r1-250528',
+        name: 'DeepSeek R1',
+        description: 'DeepSeek研究和分析模型',
+        category: 'research',
+        capabilities: ['text', 'reasoning'],
+        recommended: 'research and analysis'
+      },
+      {
+        id: 'glm-4-7-251222',
+        name: 'GLM-4-7',
+        description: '通用大模型',
+        category: 'general',
+        capabilities: ['text'],
+        recommended: 'general purpose tasks'
+      },
+      {
+        id: 'kimi-k2-250905',
+        name: 'Kimi K2',
+        description: '长上下文处理模型',
+        category: 'long-context',
+        capabilities: ['text', 'long-context'],
+        recommended: 'long context processing'
+      },
+      {
+        id: 'kimi-k2-5-260127',
+        name: 'Kimi K2.5',
+        description: 'Kimi最智能模型，Agent、代码、视觉',
+        category: 'flagship',
+        capabilities: ['text', 'vision', 'code', 'agent'],
+        recommended: 'agent, code, vision, multimodal tasks',
+        restrictions: {
+          temperature: { thinking: 1.0, normal: 0.6 },
+          top_p: 0.95,
+          max_tokens: 32768
+        }
+      },
+      {
+        id: 'THUDM/GLM-4.1V-9B-Thinking',
+        name: 'GLM-4.1V-9B-Thinking',
+        description: '视觉思考模型，图像理解与推理',
+        category: 'vision',
+        capabilities: ['text', 'vision', 'reasoning'],
+        recommended: 'image understanding, visual reasoning'
+      },
+      {
+        id: 'Qwen/Qwen2.5-7B-Instruct',
+        name: 'Qwen2.5-7B-Instruct',
+        description: '通义千问7B，轻量高效',
+        category: 'fast',
+        capabilities: ['text'],
+        recommended: 'general purpose, fast responses'
+      }
+    ]
+    
+    res.json({ code: 0, message: '获取成功', data: models })
+  } catch (error) {
+    logger.error('获取模型列表失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 获取审核规则列表 - 管理员
+router.get('/admin/review-rules', adminAuth, async (req, res) => {
+  try {
+    const { data: rules, error } = await supabase
+      .from('review_rules')
+      .select('*')
+      .order('platform')
+      .order('action')
+    
+    if (error) throw error
+    
+    res.json({ code: 0, message: '获取成功', data: rules })
+  } catch (error) {
+    logger.error('获取审核规则失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// 更新审核规则 - 管理员
+router.post('/admin/review-rules/:id', adminAuth, async (req, res) => {
+  try {
+    const ruleId = parseInt(req.params.id)
+    const updates = req.body
+    
+    updates.updated_at = new Date().toISOString()
+    
+    const { error } = await supabase
+      .from('review_rules')
+      .update(updates)
+      .eq('id', ruleId)
+    
+    if (error) throw error
+    
+    res.json({ code: 0, message: '更新成功', data: null })
+  } catch (error) {
+    logger.error('更新审核规则失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// ========== 图片审核设置 API ==========
+
+/**
+ * 获取图片审核设置
+ */
+router.get('/admin/review-settings', adminAuth, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('ai_configs')
+      .select('key, value')
+      .eq('key', 'image_review_settings')
+      .single()
+    
+    if (error && error.code !== 'PGRST116') {
+      throw error
+    }
+    
+    const settings = data?.value ? JSON.parse(data.value) : {
+      checks: {
+        follow: true,
+        like: true,
+        favorite: true,
+        comment: true,
+        authorName: true,
+        commentNickname: true
+      }
+    }
+    
+    res.json({ code: 0, message: '获取成功', data: settings })
+  } catch (error) {
+    logger.error('获取图片审核设置失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+/**
+ * 保存图片审核设置
+ */
+router.post('/admin/review-settings', adminAuth, async (req, res) => {
+  try {
+    const { checks } = req.body
+    
+    const settings = { checks }
+    const now = new Date().toISOString()
+    
+    const { error } = await supabase
+      .from('ai_configs')
+      .upsert({
+        key: 'image_review_settings',
+        value: JSON.stringify(settings),
+        category: 'image_review',
+        is_enabled: true,
+        updated_at: now
+      }, { onConflict: 'key' })
+    
+    if (error) throw error
+    
+    res.json({ code: 0, message: '保存成功', data: null })
+  } catch (error) {
+    logger.error('保存图片审核设置失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+// ========== 链接审查配置 API ==========
+
+const DEFAULT_LINK_REVIEW_SETTINGS = {
+  basic: {
+    batchSize: 10,
+    waitTime: 5,
+    timeout: 30,
+    maxRetries: 3,
+    concurrentLimit: 5,
+    delayMinutes: 15,
+    batchThreshold: 5,
+    maxWaitMinutes: 60
+  },
+  proxy: {
+    enabled: true,
+    mode: 'auto',
+    queueThreshold: 20,
+    directFailLimit: 3,
+    directCooldown: 30,
+    captchaCooldown: 60,
+    ipUsageLimit: 200,
+    ipTtlMin: 300,
+    ipTtlMax: 900
+  },
+  riskDetection: {
+    enabled: true,
+    keywords: ['验证码', '访问频繁', '安全验证', '滑动验证'],
+    autoSwitchOnCaptcha: true
+  },
+  browser: {
+    browserCount: 3,
+    contextsPerBrowser: 10,
+    headless: true,
+    disableImages: true
+  }
+}
+
+function parseIntegerOrFallback(value, fallback) {
+  const parsed = Number.parseInt(String(value), 10)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
+function parseBooleanOrFallback(value, fallback) {
+  if (value === undefined || value === null || value === '') {
+    return fallback
+  }
+  return String(value) === 'true'
+}
+
+async function loadStoredLinkReviewSettings() {
+  const row = await db.queryOne(
+    'SELECT value FROM system_configs WHERE key = $1',
+    ['link_review_settings']
+  )
+
+  if (!row?.value) {
+    return null
+  }
+
+  try {
+    return typeof row.value === 'string' ? JSON.parse(row.value) : row.value
+  } catch (error) {
+    logger.warn('解析 link_review_settings 失败，回退默认值:', error.message)
+    return null
+  }
+}
+
+function mergeLinkReviewSettings({ storedConfig, effectiveConfig, proxyMode }) {
+  return {
+    basic: {
+      ...DEFAULT_LINK_REVIEW_SETTINGS.basic,
+      ...(storedConfig?.basic || {}),
+      batchSize: effectiveConfig.linkVerify.batchSize,
+      maxRetries: effectiveConfig.linkVerify.retryCount,
+      delayMinutes: effectiveConfig.linkVerify.delayMinutes,
+      batchThreshold: effectiveConfig.linkVerify.batchThreshold,
+      maxWaitMinutes: effectiveConfig.linkVerify.maxWaitMinutes
+    },
+    proxy: {
+      ...DEFAULT_LINK_REVIEW_SETTINGS.proxy,
+      ...(storedConfig?.proxy || {}),
+      mode: proxyMode || storedConfig?.proxy?.mode || DEFAULT_LINK_REVIEW_SETTINGS.proxy.mode
+    },
+    riskDetection: {
+      ...DEFAULT_LINK_REVIEW_SETTINGS.riskDetection,
+      ...(storedConfig?.riskDetection || {})
+    },
+    browser: {
+      ...DEFAULT_LINK_REVIEW_SETTINGS.browser,
+      ...(storedConfig?.browser || {})
+    }
+  }
+}
+
+function normalizeLinkReviewSettings(config, effectiveConfig) {
+  const source = config || {}
+  return {
+    basic: {
+      batchSize: Math.max(1, parseIntegerOrFallback(source.basic?.batchSize, effectiveConfig.linkVerify.batchSize)),
+      waitTime: Math.max(1, parseIntegerOrFallback(source.basic?.waitTime, DEFAULT_LINK_REVIEW_SETTINGS.basic.waitTime)),
+      timeout: Math.max(1, parseIntegerOrFallback(source.basic?.timeout, DEFAULT_LINK_REVIEW_SETTINGS.basic.timeout)),
+      maxRetries: Math.max(0, parseIntegerOrFallback(source.basic?.maxRetries, effectiveConfig.linkVerify.retryCount)),
+      concurrentLimit: Math.max(1, parseIntegerOrFallback(source.basic?.concurrentLimit, DEFAULT_LINK_REVIEW_SETTINGS.basic.concurrentLimit)),
+      delayMinutes: Math.max(0, parseIntegerOrFallback(source.basic?.delayMinutes, effectiveConfig.linkVerify.delayMinutes)),
+      batchThreshold: Math.max(1, parseIntegerOrFallback(source.basic?.batchThreshold, effectiveConfig.linkVerify.batchThreshold)),
+      maxWaitMinutes: Math.max(0, parseIntegerOrFallback(source.basic?.maxWaitMinutes, effectiveConfig.linkVerify.maxWaitMinutes))
+    },
+    proxy: {
+      enabled: parseBooleanOrFallback(source.proxy?.enabled, DEFAULT_LINK_REVIEW_SETTINGS.proxy.enabled),
+      mode: ['auto', 'direct', 'proxy'].includes(source.proxy?.mode) ? source.proxy.mode : DEFAULT_LINK_REVIEW_SETTINGS.proxy.mode,
+      queueThreshold: Math.max(1, parseIntegerOrFallback(source.proxy?.queueThreshold, DEFAULT_LINK_REVIEW_SETTINGS.proxy.queueThreshold)),
+      directFailLimit: Math.max(1, parseIntegerOrFallback(source.proxy?.directFailLimit, DEFAULT_LINK_REVIEW_SETTINGS.proxy.directFailLimit)),
+      directCooldown: Math.max(1, parseIntegerOrFallback(source.proxy?.directCooldown, DEFAULT_LINK_REVIEW_SETTINGS.proxy.directCooldown)),
+      captchaCooldown: Math.max(1, parseIntegerOrFallback(source.proxy?.captchaCooldown, DEFAULT_LINK_REVIEW_SETTINGS.proxy.captchaCooldown)),
+      ipUsageLimit: Math.max(1, parseIntegerOrFallback(source.proxy?.ipUsageLimit, DEFAULT_LINK_REVIEW_SETTINGS.proxy.ipUsageLimit)),
+      ipTtlMin: Math.max(1, parseIntegerOrFallback(source.proxy?.ipTtlMin, DEFAULT_LINK_REVIEW_SETTINGS.proxy.ipTtlMin)),
+      ipTtlMax: Math.max(1, parseIntegerOrFallback(source.proxy?.ipTtlMax, DEFAULT_LINK_REVIEW_SETTINGS.proxy.ipTtlMax))
+    },
+    riskDetection: {
+      enabled: parseBooleanOrFallback(source.riskDetection?.enabled, DEFAULT_LINK_REVIEW_SETTINGS.riskDetection.enabled),
+      keywords: Array.isArray(source.riskDetection?.keywords) && source.riskDetection.keywords.length > 0
+        ? source.riskDetection.keywords
+        : DEFAULT_LINK_REVIEW_SETTINGS.riskDetection.keywords,
+      autoSwitchOnCaptcha: parseBooleanOrFallback(
+        source.riskDetection?.autoSwitchOnCaptcha,
+        DEFAULT_LINK_REVIEW_SETTINGS.riskDetection.autoSwitchOnCaptcha
+      )
+    },
+    browser: {
+      browserCount: Math.max(1, parseIntegerOrFallback(source.browser?.browserCount, DEFAULT_LINK_REVIEW_SETTINGS.browser.browserCount)),
+      contextsPerBrowser: Math.max(1, parseIntegerOrFallback(source.browser?.contextsPerBrowser, DEFAULT_LINK_REVIEW_SETTINGS.browser.contextsPerBrowser)),
+      headless: source.browser?.headless ?? DEFAULT_LINK_REVIEW_SETTINGS.browser.headless,
+      disableImages: source.browser?.disableImages ?? DEFAULT_LINK_REVIEW_SETTINGS.browser.disableImages
+    }
+  }
+}
+
+/**
+ * 获取链接审查配置
+ */
+router.get('/admin/link-review-settings', adminAuth, async (req, res) => {
+  try {
+    // 从 Redis 获取配置
+    const { getRedisClient } = await import('../utils/redis.js')
+    const client = await getRedisClient()
+
+    const storedConfig = await loadStoredLinkReviewSettings()
+    const effectiveConfig = await reviewConfig.getConfig()
+    const proxyMode = client ? (await client.get('proxy:mode')) : null
+
+    res.json({
+      code: 200,
+      message: '获取成功',
+      data: mergeLinkReviewSettings({
+        storedConfig,
+        effectiveConfig,
+        proxyMode
+      })
+    })
+  } catch (error) {
+    logger.error('获取链接审查配置失败:', error)
+    res.status(500).json({ code: 500, message: '获取配置失败' })
+  }
+})
+
+/**
+ * 更新链接审查配置
+ */
+router.post('/admin/link-review-settings', adminAuth, async (req, res) => {
+  try {
+    const currentConfig = await reviewConfig.getConfig()
+    const normalizedConfig = normalizeLinkReviewSettings(req.body, currentConfig)
+    const now = new Date().toISOString()
+
+    await db.query(
+      `
+      INSERT INTO system_configs (key, value, type, category, is_enabled, updated_at)
+      VALUES ($1, $2, 'json', 'link_review', true, $3)
+      ON CONFLICT (key)
+      DO UPDATE SET
+        value = EXCLUDED.value,
+        type = EXCLUDED.type,
+        category = EXCLUDED.category,
+        is_enabled = EXCLUDED.is_enabled,
+        updated_at = EXCLUDED.updated_at
+      `,
+      ['link_review_settings', JSON.stringify(normalizedConfig), now]
+    )
+
+    const updateResult = await reviewConfig.updateConfig(
+      {
+        linkVerify: {
+          enabled: currentConfig.linkVerify.enabled,
+          delayMinutes: normalizedConfig.basic.delayMinutes,
+          batchThreshold: normalizedConfig.basic.batchThreshold,
+          maxWaitMinutes: normalizedConfig.basic.maxWaitMinutes,
+          batchSize: normalizedConfig.basic.batchSize,
+          retryCount: normalizedConfig.basic.maxRetries
+        }
+      },
+      {
+        id: req.user?.id,
+        name: req.user?.username || req.user?.name || 'admin',
+        ip: req.ip
+      }
+    )
+
+    if (!updateResult.success) {
+      throw new Error(updateResult.error || '连接审核配置写入 ai_configs 失败')
+    }
+
+    // 更新 Redis 中的模式
+    if (normalizedConfig.proxy?.mode) {
+      const { getRedisClient } = await import('../utils/redis.js')
+      const client = await getRedisClient()
+      if (client) {
+        await client.set('proxy:mode', normalizedConfig.proxy.mode)
+      }
+    }
+    
+    res.json({
+      code: 200,
+      message: '配置已更新',
+      data: normalizedConfig
+    })
+  } catch (error) {
+    logger.error('更新链接审查配置失败:', error)
+    res.status(500).json({ code: 500, message: '更新配置失败' })
+  }
+})
+
+/**
+ * 获取代理统计信息
+ */
+router.get('/admin/proxy-stats', adminAuth, async (req, res) => {
+  try {
+    const { getRedisClient } = await import('../utils/redis.js')
+    const client = await getRedisClient()
+    
+    if (!client) {
+      return res.json({
+        code: 200,
+        message: '获取成功',
+        data: {
+          mode: 'direct',
+          poolSize: 0,
+          directRequests: 0,
+          proxyRequests: 0,
+          captchaHits: 0,
+          modeSwitches: 0,
+          directFailCount: 0,
+          cooldownRemaining: 0
+        }
+      })
+    }
+    
+    const mode = await client.get('proxy:mode') || 'direct'
+    const poolSize = await client.lLen('proxy:pool:available')
+    const stats = await client.hGetAll('proxy:stats') || {}
+    const directFailCount = parseInt(await client.get('proxy:direct:failCount') || '0')
+    const cooldownEnd = await client.get('proxy:mode:cooldown')
+    
+    res.json({
+      code: 200,
+      message: '获取成功',
+      data: {
+        mode,
+        poolSize,
+        directRequests: parseInt(stats.directRequests || '0'),
+        proxyRequests: parseInt(stats.proxyRequests || '0'),
+        captchaHits: parseInt(stats.captchaHits || '0'),
+        modeSwitches: parseInt(stats.modeSwitches || '0'),
+        directFailCount,
+        cooldownRemaining: cooldownEnd ? Math.max(0, parseInt(cooldownEnd) - Date.now()) : 0
+      }
+    })
+  } catch (error) {
+    logger.error('获取代理统计失败:', error)
+    res.status(500).json({ code: 500, message: '获取统计失败' })
+  }
+})
+
+/**
+ * 设置代理模式
+ */
+router.post('/admin/proxy-mode', adminAuth, async (req, res) => {
+  try {
+    const { mode } = req.body
+    
+    if (!['direct', 'proxy', 'auto'].includes(mode)) {
+      return res.status(400).json({ code: 400, message: '无效的模式' })
+    }
+    
+    const { getRedisClient } = await import('../utils/redis.js')
+    const client = await getRedisClient()
+    
+    if (!client) {
+      return res.status(500).json({ code: 500, message: 'Redis 未连接' })
+    }
+    
+    await client.set('proxy:mode', mode)
+    await client.del('proxy:mode:cooldown')  // 清除冷却
+    
+    logger.info(`[代理模式] 管理员手动切换为: ${mode}`)
+    
+    res.json({
+      code: 200,
+      message: `已切换到${mode === 'direct' ? '直连' : mode === 'proxy' ? '代理' : '智能'}模式`,
+      data: { mode }
+    })
+  } catch (error) {
+    logger.error('设置代理模式失败:', error)
+    res.status(500).json({ code: 500, message: '设置失败' })
+  }
+})
+
+/**
+ * 预热代理 IP 池
+ */
+router.post('/admin/proxy-warmup', adminAuth, async (req, res) => {
+  try {
+    const { count = 5 } = req.body
+    
+    const ipDispenser = (await import('../services/ai/ipDispenserService.js')).default
+    await ipDispenser.warmup(count)
+    
+    res.json({
+      code: 200,
+      message: `已预热 ${count} 个 IP`
+    })
+  } catch (error) {
+    logger.error('预热代理池失败:', error)
+    res.status(500).json({ code: 500, message: '预热失败' })
+  }
+})
+
+
+/**
+ * ========== 内部 API（供 Browser Service 调用）==========
+ */
+
+/**
+ * 获取当前代理模式
+ * 内部接口，不需要认证
+ */
+router.get("/internal/ip/mode", async (req, res) => {
+  try {
+    const { getRedisClient } = await import("../utils/redis.js")
+    const client = await getRedisClient()
+    
+    if (!client) {
+      return res.json({ code: 200, data: { mode: "direct" } })
+    }
+    
+    const mode = await client.get("proxy:mode") || "direct"
+    const cooldownEnd = await client.get("proxy:mode:cooldown")
+    
+    res.json({
+      code: 200,
+      data: {
+        mode,
+        cooldownRemaining: cooldownEnd ? Math.max(0, parseInt(cooldownEnd) - Date.now()) : 0
+      }
+    })
+  } catch (error) {
+    res.status(500).json({ code: 500, message: error.message })
+  }
+})
+
+/**
+ * 获取一个代理 IP
+ * 内部接口，不需要认证
+ */
+router.post("/internal/ip/acquire", async (req, res) => {
+  try {
+    const ipDispenser = (await import("../services/ai/ipDispenserService.js")).default
+    const ipInfo = await ipDispenser.acquireIP()
+    
+    if (!ipInfo) {
+      return res.json({ code: 503, message: "暂无可用 IP" })
+    }
+    
+    res.json({
+      code: 200,
+      data: {
+        ip: ipInfo.ip,
+        port: ipInfo.port,
+        proxyUrl: ipInfo.proxyUrl,
+        expireTime: ipInfo.expireTime
+      }
+    })
+  } catch (error) {
+    res.status(500).json({ code: 500, message: error.message })
+  }
+})
+
+/**
+ * 归还代理 IP
+ * 内部接口，不需要认证
+ */
+router.post("/internal/ip/return", async (req, res) => {
+  try {
+    const { ipInfo } = req.body
+    
+    if (!ipInfo) {
+      return res.status(400).json({ code: 400, message: "缺少 ipInfo" })
+    }
+    
+    const ipDispenser = (await import("../services/ai/ipDispenserService.js")).default
+    await ipDispenser.returnToPool(ipInfo)
+    
+    res.json({ code: 0, message: "已归还" })
+  } catch (error) {
+    res.status(500).json({ code: 500, message: error.message })
+  }
+})
+
+/**
+ * 报告 IP 失效
+ * 内部接口，不需要认证
+ */
+router.post("/internal/ip/invalidate", async (req, res) => {
+  try {
+    const { ip } = req.body
+    
+    if (!ip) {
+      return res.status(400).json({ code: 400, message: "缺少 ip" })
+    }
+    
+    const ipDispenser = (await import("../services/ai/ipDispenserService.js")).default
+    await ipDispenser.reportIPInvalid(ip)
+    
+    res.json({ code: 0, message: "已记录" })
+  } catch (error) {
+    res.status(500).json({ code: 500, message: error.message })
+  }
+})
+
+/**
+ * 报告直连失败
+ * 内部接口，不需要认证
+ */
+router.post("/internal/ip/direct-failure", async (req, res) => {
+  try {
+    const ipDispenser = (await import("../services/ai/ipDispenserService.js")).default
+    await ipDispenser.reportDirectFailure()
+    
+    res.json({ code: 0, message: "已记录" })
+  } catch (error) {
+    res.status(500).json({ code: 500, message: error.message })
+  }
+})
+
+/**
+ * 报告遇到验证码
+ * 内部接口，不需要认证
+ */
+router.post("/internal/ip/captcha-detected", async (req, res) => {
+  try {
+    const ipDispenser = (await import("../services/ai/ipDispenserService.js")).default
+    await ipDispenser.reportCaptcha()
+    
+    res.json({ code: 0, message: "已记录" })
+  } catch (error) {
+    res.status(500).json({ code: 500, message: error.message })
+  }
+})
+
+
+
+// ============ 配置中心兼容路由 ============
+router.get('/review/config', adminOrReviewerAuth, (req, res, next) => {
+  req.url = '/admin/review-settings'
+  router.handle(req, res, next)
+})
+
+router.get('/reviewer/config', adminOrReviewerAuth, (req, res, next) => {
+  req.url = '/admin/review-settings'
+  router.handle(req, res, next)
+})
+
+router.get('/link-review/config', adminOrReviewerAuth, async (req, res) => {
+  try {
+    const supabase = (await import('../utils/supabaseToPrismaAdapter.js')).default
+    const { data } = await supabase.from('system_configs').select('*').eq('key', 'link_review_settings').single()
+    const config = data?.value ? JSON.parse(data.value) : { enabled: true, timeout: 30, maxRetries: 3 }
+    res.json({ code: 0, data: config })
+  } catch (err) {
+    res.json({ code: 0, data: { enabled: true, timeout: 30, maxRetries: 3 } })
+  }
+})
+
+router.get('/review/rules', adminOrReviewerAuth, async (req, res) => {
+  try {
+    const supabaseModule = await import('../utils/supabaseToPrismaAdapter.js')
+    const sb = supabaseModule.default
+    const { data } = await sb.from('review_rules').select('id, name, description, enabled, priority, created_at').order('priority', { ascending: true })
+    res.json({ code: 0, data: data || [] })
+  } catch (e) {
+    res.json({ code: 0, data: [] })
+  }
+})
+
+router.get('/review/queue', adminOrReviewerAuth, (req, res, next) => {
+  req.url = '/reviewer/queue' + (req.url.includes('?') ? '?' + req.url.split('?')[1] : '')
+  router.handle(req, res, next)
+})
+
+router.get('/review/stats', adminOrReviewerAuth, (req, res, next) => {
+  req.url = '/reviewer/stats'
+  router.handle(req, res, next)
+})
+
+router.get('/review/logs', adminOrReviewerAuth, (req, res, next) => {
+  req.url = '/reviewer/logs' + (req.url.includes('?') ? '?' + req.url.split('?')[1] : '')
+  router.handle(req, res, next)
+})
+
+router.get('/assistant/config', adminOrReviewerAuth, async (req, res) => {
+  try {
+    const supabase = (await import('../utils/supabaseToPrismaAdapter.js')).default
+    const { data } = await supabase.from('system_configs').select('*').eq('key', 'assistant_config').single()
+    res.json({ code: 0, data: data?.value ? JSON.parse(data.value) : {
+      enabled: true, model: 'gpt-4', temperature: 0.7, maxTokens: 2000
+    } })
+  } catch (err) {
+    res.json({ code: 0, data: { enabled: true, model: 'gpt-4', temperature: 0.7, maxTokens: 2000 } })
+  }
+})
+
+router.get('/semantic/config', adminOrReviewerAuth, (req, res) => {
+  res.json({ code: 0, data: { enabled: false, message: '语义分析配置尚未实现' } })
+})
+
+router.get('/monitor/config', adminOrReviewerAuth, (req, res) => {
+  res.json({ code: 0, data: { enabled: true, checkInterval: 30, alertThreshold: 5 } })
+})
+
+
+// ============ AI管理页面路由 ============
+router.get('/config', adminOrReviewerAuth, async (req, res) => {
+  try {
+    const supabaseModule = await import('../utils/supabaseToPrismaAdapter.js')
+    const sb = supabaseModule.default
+    const { data } = await sb.from('system_configs').select('*').eq('key', 'ai_config').single()
+    res.json({ code: 0, data: data?.value ? JSON.parse(data.value) : { enabled: true, autoReview: true, batchSize: 10 } })
+  } catch (e) {
+    res.json({ code: 0, data: { enabled: true, autoReview: true, batchSize: 10 } })
+  }
+})
+
+router.get('/model/test-status', adminOrReviewerAuth, async (req, res) => {
+  try {
+    const fetch = globalThis.fetch || (await import('node-fetch')).default
+    const [ocrRes, yoloRes] = await Promise.allSettled([
+      fetch('http://127.0.0.1:5010/health', { signal: AbortSignal.timeout(3000) }).then(r => r.ok),
+      fetch('http://127.0.0.1:5020/health', { signal: AbortSignal.timeout(3000) }).then(r => r.ok),
+    ])
+    res.json({ code: 0, data: {
+      ocr: { status: ocrRes.status === 'fulfilled' && ocrRes.value ? 'online' : 'offline' },
+      yolo: { status: yoloRes.status === 'fulfilled' && yoloRes.value ? 'online' : 'offline' },
+    }})
+  } catch (e) {
+    res.json({ code: 0, data: { ocr: { status: 'unknown' }, yolo: { status: 'unknown' } } })
+  }
+})
+
+router.get('/queue/status', adminOrReviewerAuth, async (req, res) => {
+  try {
+    const supabaseModule = await import('../utils/supabaseToPrismaAdapter.js')
+    const sb = supabaseModule.default
+    const pending = await sb.from('ai_review_queue').select('*', { count: 'exact', head: true }).eq('status', 'pending').then(r => r.count || 0).catch(() => 0)
+    const processing = await sb.from('ai_review_queue').select('*', { count: 'exact', head: true }).eq('status', 'processing').then(r => r.count || 0).catch(() => 0)
+    res.json({ code: 0, data: { pending, processing, total: pending + processing } })
+  } catch (e) {
+    res.json({ code: 0, data: { pending: 0, processing: 0, total: 0 } })
+  }
+})
+
+router.get('/proxy/status', adminOrReviewerAuth, async (req, res) => {
+  try {
+    res.json({ code: 0, data: { enabled: true, mode: 'pool', activeCount: 0, totalUsed: 0 } })
+  } catch (e) {
+    res.json({ code: 0, data: { enabled: false } })
+  }
+})
+
+
+// ============ AI管理面板接口 ============
+router.get('/config', adminOrReviewerAuth, async (req, res) => {
+  try {
+    const supabase = (await import('../utils/supabaseToPrismaAdapter.js')).default
+    const { data } = await supabase.from('system_configs').select('*').eq('key', 'ai_config').single()
+    res.json({ code: 0, data: data?.value ? JSON.parse(data.value) : {
+      imageReview: { enabled: true, autoApprove: false, batchSize: 10 },
+      linkVerify: { enabled: true, timeout: 30, maxRetries: 3 },
+      ocrService: { host: 'http://127.0.0.1:9001' },
+      yoloService: { host: 'http://127.0.0.1:8003' }
+    } })
+  } catch (err) {
+    res.json({ code: 0, data: {
+      imageReview: { enabled: true, autoApprove: false, batchSize: 10 },
+      linkVerify: { enabled: true, timeout: 30, maxRetries: 3 },
+      ocrService: { host: 'http://127.0.0.1:9001' },
+      yoloService: { host: 'http://127.0.0.1:8003' }
+    } })
+  }
+})
+
+router.get('/model/test-status', adminOrReviewerAuth, async (req, res) => {
+  try {
+    const axios = (await import('axios')).default
+    const [ocrRes, yoloRes] = await Promise.allSettled([
+      axios.get('http://127.0.0.1:9001/health', { timeout: 3000 }),
+      axios.get('http://127.0.0.1:8003/health', { timeout: 3000 })
+    ])
+    res.json({ code: 0, data: {
+      ocr: { status: ocrRes.status === 'fulfilled' ? 'online' : 'offline' },
+      yolo: { status: yoloRes.status === 'fulfilled' ? 'online' : 'offline' }
+    } })
+  } catch (err) {
+    res.json({ code: 0, data: { ocr: { status: 'unknown' }, yolo: { status: 'unknown' } } })
+  }
+})
+
+router.get('/queue/status', adminOrReviewerAuth, async (req, res) => {
+  try {
+    const supabase = (await import('../utils/supabaseToPrismaAdapter.js')).default
+    const results = await Promise.all([
+      supabase.from('ai_review_queue').select('*', { count: 'exact', head: true }).eq('status', 'pending').then(r => r.count || 0).catch(() => 0),
+      supabase.from('ai_review_queue').select('*', { count: 'exact', head: true }).eq('status', 'processing').then(r => r.count || 0).catch(() => 0),
+      supabase.from('ai_review_queue').select('*', { count: 'exact', head: true }).eq('status', 'completed').then(r => r.count || 0).catch(() => 0),
+    ])
+    res.json({ code: 0, data: { pending: results[0], processing: results[1], completed: results[2] } })
+  } catch (err) {
+    res.json({ code: 0, data: { pending: 0, processing: 0, completed: 0 } })
+  }
+})
+
+router.get('/proxy/status', adminOrReviewerAuth, async (req, res) => {
+  res.json({ code: 0, data: { mode: 'direct', activeProxies: 0, totalProxies: 0, status: 'idle' } })
+})
+
+
+
+
+
+// ============ AI 审核中心前端所需路由 ============
+
+// 人工审核操作 - 通过/拒绝
+router.post('/reviewer/claim/:claimId/action', adminOrReviewerAuth, async (req, res) => {
+  try {
+    const { claimId } = req.params
+    const { action, reason } = req.body
+    
+    if (!claimId || !action) {
+      return res.status(400).json({ code: 400, message: '缺少必要参数' })
+    }
+    
+    if (!['approve', 'reject'].includes(action)) {
+      return res.status(400).json({ code: 400, message: '无效的操作类型' })
+    }
+    
+    const claim = await db.queryOne(
+      `
+      SELECT c.id, c.user_id, c.task_id, c.status, c.reject_count, c.review_history,
+             c.image_review_status, c.link_review_status, t.video_url
+      FROM claims c
+      LEFT JOIN tasks t ON t.id = c.task_id
+      WHERE c.id = $1
+      `,
+      [claimId]
+    )
+
+    if (!claim) {
+      return res.status(404).json({ code: 404, message: '任务认领记录不存在' })
+    }
+
+    if (action === 'approve') {
+      await db.transaction(async (client) => {
+        const nextHistory = appendReviewHistory(
+          claim.review_history,
+          createReviewHistoryEntry({
+            stage: 'manual_review',
+            action: 'approved',
+            reason: reason || '人工审核通过',
+            details: {
+              reviewerId: String(req.userId),
+              previousStatus: claim.status
+            }
+          })
+        )
+
+        await client.query(
+          `
+          UPDATE claims
+          SET status = $1,
+              image_review_status = CASE WHEN image_review_status IS NULL OR image_review_status = 'manual' THEN 'approved' ELSE image_review_status END,
+              link_review_status = CASE
+                WHEN $2 = true AND (link_review_status IS NULL OR link_review_status = 'manual') THEN 'approved'
+                WHEN $2 = false THEN COALESCE(link_review_status, 'skipped')
+                ELSE link_review_status
+              END,
+              review_note = $3,
+              reviewed_at = NOW(),
+              reviewer_id = $4,
+              review_history = $5
+          WHERE id = $6
+          `,
+          [
+            CLAIM_STATUS.APPROVED,
+            Boolean(claim.video_url),
+            reason || '人工审核通过',
+            req.userId,
+            JSON.stringify(nextHistory),
+            claimId
+          ]
+        )
+      })
+
+      await pointsSettlementService.awardClaimPoints({
+        claimId,
+        taskId: claim.task_id,
+        userId: claim.user_id,
+        awardReason: reason || '人工审核通过',
+        source: 'ai_reviewer_manual'
+      })
+
+      logger.info('[人工审核] 用户', req.userId, '通过认领', claimId)
+      return res.json({
+        code: 0,
+        message: '审核通过',
+        data: { claimId, action, newStatus: CLAIM_STATUS.APPROVED }
+      })
+    }
+
+    const rejectCount = Number(claim.reject_count || 0) + 1
+    const shouldRelease = rejectCount >= 3
+    const rejectReason = reason || '人工审核拒绝'
+    const stageField = claim.image_review_status !== 'approved' ? 'image_review_status' : 'link_review_status'
+    const nextHistory = appendReviewHistory(
+      appendReviewHistory(
+        claim.review_history,
+        createReviewHistoryEntry({
+          stage: 'manual_review',
+          action: 'rejected',
+          reason: rejectReason,
+          details: {
+            reviewerId: String(req.userId),
+            previousStatus: claim.status,
+            rejectCount
+          }
+        })
+      ),
+      createReviewHistoryEntry({
+        stage: 'claim_flow',
+        action: shouldRelease ? 'released' : 'returned',
+        reason: rejectReason,
+        details: {
+          source: 'manual_review',
+          rejectCount
+        }
+      })
+    )
+
+    await db.query(
+      `
+      UPDATE claims
+      SET status = $1,
+          reject_count = $2,
+          submitted_at = NULL,
+          reviewed_at = NOW(),
+          reviewer_id = $3,
+          review_note = $4,
+          ${stageField} = 'rejected',
+          review_history = $5
+      WHERE id = $6
+      `,
+      [
+        shouldRelease ? CLAIM_STATUS.RELEASED : CLAIM_STATUS.DOING,
+        rejectCount,
+        req.userId,
+        rejectReason,
+        JSON.stringify(nextHistory),
+        claimId
+      ]
+    )
+
+    logger.info('[人工审核] 用户', req.userId, '拒绝认领', claimId)
+    res.json({
+      code: 0,
+      message: '已拒绝',
+      data: { claimId, action, newStatus: shouldRelease ? CLAIM_STATUS.RELEASED : CLAIM_STATUS.DOING }
+    })
+  } catch (error) {
+    logger.error('人工审核失败:', error)
+    res.status(500).json({ code: 500, message: '操作失败' })
+  }
+})
+
+// 处理审核队列（不带参数）
+router.post('/reviewer/process', adminOrReviewerAuth, async (req, res) => {
+  try {
+    const { enqueueReview } = await import('../services/ai/queueService.js')
+    const prisma = (await import('../utils/prisma.js')).default
+    
+    // 查找需要补偿入队的图片审核任务
+    const pending = await prisma.$queryRaw`
+      SELECT c.id, c.user_id, c.task_id, c.screenshots, c.status
+      FROM claims c
+      LEFT JOIN ai_review_queue q
+        ON q.claim_id = c.id
+       AND q.status IN ('pending', 'processing')
+      WHERE (
+        c.status = ${CLAIM_STATUS.SUBMITTED}
+        OR c.status = ${CLAIM_STATUS.IMAGE_REVIEWING}
+      )
+        AND c.screenshots IS NOT NULL
+        AND c.screenshots != ''
+        AND c.screenshots != '[]'
+        AND q.id IS NULL
+      LIMIT 50
+    `
+    
+    if (!pending || pending.length === 0) {
+      return res.json({ code: 200, message: '队列为空', data: { processed: 0 } })
+    }
+    
+    // 入队到审核队列
+    let processed = 0
+    for (const item of pending) {
+      try {
+        await enqueueReview(String(item.id), {
+          user_id: String(item.user_id),
+          task_id: String(item.task_id),
+          screenshots: item.screenshots
+        })
+        processed++
+      } catch (e) {
+        logger.error('入队失败:', item.id, e.message)
+      }
+    }
+    
+    logger.info('[队列处理] 已将', processed, '条记录加入处理队列')
+    
+    res.json({ 
+      code: 200, 
+      message: '处理完成', 
+      data: { processed, items: pending.map(p => p.id) }
+    })
+  } catch (error) {
+    logger.error('处理队列失败:', error)
+    res.status(500).json({ code: 500, message: '处理失败' })
+  }
+})
+
+// GET 代理模式状态
+router.get('/admin/proxy-mode', adminAuth, async (req, res) => {
+  try {
+    const { getRedisClient } = await import('../utils/redis.js')
+    const client = await getRedisClient()
+    
+    if (!client) {
+      return res.json({ code: 200, data: { mode: 'direct' } })
+    }
+    
+    const mode = await client.get('proxy:mode') || 'direct'
+    res.json({ code: 200, data: { mode } })
+  } catch (e) {
+    res.json({ code: 200, data: { mode: 'direct' } })
+  }
+})
+
+export default router

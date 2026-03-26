@@ -10,7 +10,6 @@ import {
   ADMIN_NOTIFICATION_TYPES,
   USER_NOTIFICATION_TYPES,
 } from '../constants/taskActions.js'
-import { sendAdminNotification as pushAdminNotification, sendUserNotification as pushUserNotification } from './notificationService.js'
 
 /**
  * 检测并记录封控账号
@@ -107,34 +106,24 @@ export async function detectAndRecordBlock(params) {
     await updateUserBlockStats(userId)
 
     // 5. 发送管理员通知
-    await pushAdminNotification({
+    await sendAdminNotification({
       type: ADMIN_NOTIFICATION_TYPES.BLOCK_DETECTED,
-      title: '检测到疑似封控账号',
-      content: `用户 ${userId} 任务 ${claimId} 出现疑似封控账号，请尽快检查。`,
-      data: {
-        blockId: String(newBlock.id),
-        userId: String(userId),
-        claimId: String(claimId),
-        platform,
-        platformUserId,
-        platformUsername,
-        failReason,
-      },
-      priority: 'high',
+      blockId: newBlock.id,
+      userId,
+      claimId,
+      platform,
+      platformUserId,
+      platformUsername,
+      failReason,
     })
 
     // 6. 发送用户通知
-    await pushUserNotification({
+    await sendUserNotification({
       type: USER_NOTIFICATION_TYPES.BLOCK_DETECTED,
       userId,
-      title: '账号异常提醒',
-      content: `检测到您的 ${platform} 账号可能存在异常，请检查后重试。`,
-      data: {
-        claimId: String(claimId),
-        platform,
-        failReason,
-      },
-      priority: 'high',
+      claimId,
+      platform,
+      failReason,
     })
 
     return {
