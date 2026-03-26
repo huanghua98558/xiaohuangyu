@@ -1,0 +1,60 @@
+.DS_Store
+
+# dependencies
+node_modules/
+
+# build outputs
+dist/
+build/
+.next/
+coverage/
+
+# logs
+*.log
+logs/
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# runtime files
+*.pid
+*.seed
+*.pid.lock
+
+# env files
+.env
+.env.local
+.env.production
+.env.test
+.env.bak
+.env.*
+!.env.example
+!admin/.env.example
+!user-app/.env.example
+!backend/.env.example
+
+# caches
+.pnpm-store/
+.npm/
+.cache/
+.vite/
+
+# uploads and local data
+uploads/
+temp/
+tmp/
+review_tmp/
+
+# backups and archives
+backup/
+*.bak
+*.old
+
+# editor files
+.vscode/
+.idea/
+
+# large local assets not needed in git
+*.pt
+test_screenshot.jpg

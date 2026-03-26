@@ -1,0 +1,658 @@
+#!/usr/bin/env python3
+"""
+Browser Pool Service - 浏览器池化服务
+功能：
+1. 浏览器持久化，不重复启动
+2. 页面池复用
+3. 动态页面调整（空闲5/正常10/高峰20）
+4. 支持 Worker 传入 proxy_url
+5. 保留原有评论获取逻辑
+"""
+
+import asyncio
+import os
+import re
+import json
+import logging
+import time
+import httpx
+from datetime import datetime, timedelta
+from typing import List, Optional, Dict, Any
+from dataclasses import dataclass, field
+from fastapi import FastAPI
+from pydantic import BaseModel
+import uvicorn
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+CONFIG = {
+    "backend_url": os.environ.get("BACKEND_URL", "http://127.0.0.1:5000"),
+    "timeout": 60000,
+}
+
+# PC端 User-Agent
+PC_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+# ============ 数据模型 ============
+
+class VisitRequest(BaseModel):
+    url: str
+    check_comment: bool = False
+    target_comment: Optional[str] = None
+    max_comments: int = 100
+    proxy_url: Optional[str] = None  # Worker 传入的代理 URL
+
+class CommentInfo(BaseModel):
+    nickname: str
+    content: str
+
+class VisitResponse(BaseModel):
+    success: bool
+    has_comment: bool = False
+    comment_text: Optional[str] = None
+    page_title: Optional[str] = None
+    author_name: Optional[str] = None
+    comments: List[CommentInfo] = []
+    total_comments: int = 0
+    mode: str = "pc"
+    ip_mode: str = "direct"
+    proxy_used: Optional[str] = None
+    error: Optional[str] = None
+    duration_ms: int = 0
+    debug_info: Optional[Dict[str, Any]] = None
+
+# ============ 页面配置 ============
+
+@dataclass
+class PageConfig:
+    """页面动态配置"""
+    MIN_PAGES: int = 5          # 空闲期
+    NORMAL_PAGES: int = 10      # 正常期
+    MAX_PAGES: int = 20         # 高峰期
+    
+    # 队列阈值
+    SCALE_UP_THRESHOLD: int = 20     # 队列 > 20 扩展
+    SCALE_DOWN_THRESHOLD: int = 5    # 队列 < 5 收缩
+    SCALE_DOWN_DELAY: int = 180      # 3分钟后收缩
+    
+    # 浏览器重启
+    MAX_REQUESTS: int = 500          # 500次请求后重启
+    MAX_AGE_MINUTES: int = 60        # 60分钟后重启
+
+# ============ 浏览器池 ============
+
+@dataclass
+class PageInstance:
+    """页面实例"""
+    page: Any = None
+    created_at: datetime = field(default_factory=datetime.now)
+    last_used: datetime = field(default_factory=datetime.now)
+    request_count: int = 0
+
+class BrowserPool:
+    """
+    浏览器池 - 核心类
+    
+    特性:
+    1. 浏览器持久化
+    2. 页面动态调整
+    3. 自动重启防泄漏
+    """
+    
+    def __init__(self, port: int):
+        self.port = port
+        self.config = PageConfig()
+        
+        # 浏览器实例
+        self.playwright = None
+        self.browser = None
+        self.default_context = None
+        
+        # 页面池
+        self.pages: List[PageInstance] = []
+        self.available_pages: List[PageInstance] = []
+        self.lock = asyncio.Lock()
+        
+        # 状态
+        self.request_count = 0
+        self.created_at = None
+        self.target_pages = self.config.MIN_PAGES
+        
+        # 动态调整
+        self.low_load_since: Optional[datetime] = None
+        self.monitor_task = None
+        
+    async def initialize(self):
+        """初始化浏览器池"""
+        logger.info(f"[Pool:{self.port}] 初始化...")
+        
+        try:
+            from playwright.async_api import async_playwright
+            
+            self.playwright = await async_playwright().start()
+            
+            self.browser = await self.playwright.chromium.launch(
+                headless=True,
+                args=[
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-blink-features=AutomationControlled',
+                    '--disable-gpu',
+                    '--disable-dev-shm-usage',
+                ]
+            )
+            
+            self.default_context = await self.browser.new_context(
+                user_agent=PC_UA,
+                viewport={'width': 1920, 'height': 1080},
+                locale='zh-CN',
+            )
+            
+            # 创建初始页面
+            for _ in range(self.config.MIN_PAGES):
+                page = await self.default_context.new_page()
+                page_instance = PageInstance(page=page)
+                self.pages.append(page_instance)
+                self.available_pages.append(page_instance)
+            
+            self.created_at = datetime.now()
+            
+            # 启动监控任务
+            self.monitor_task = asyncio.create_task(self._monitor_loop())
+            
+            logger.info(f"[Pool:{self.port}] ✅ 初始化完成，{len(self.pages)} 个页面")
+            
+        except Exception as e:
+            logger.error(f"[Pool:{self.port}] 初始化失败: {e}")
+            raise
+    
+    async def _monitor_loop(self):
+        """监控循环 - 动态调整页面数量"""
+        while True:
+            try:
+                await asyncio.sleep(10)  # 每10秒检查
+                
+                # 获取队列积压
+                queue_size = await self._get_queue_size()
+                
+                # 计算目标页面数
+                new_target = self._calculate_target_pages(queue_size)
+                
+                if new_target != self.target_pages:
+                    self.target_pages = new_target
+                    await self._adjust_pages()
+                    
+            except Exception as e:
+                logger.warning(f"[Pool:{self.port}] 监控异常: {e}")
+    
+    async def _get_queue_size(self) -> int:
+        """获取队列积压数量"""
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                res = await client.get(f"{CONFIG['backend_url']}/api/internal/queue/status")
+                if res.status_code == 200:
+                    data = res.json().get("data", {})
+                    if isinstance(data, dict) and "waiting" in data:
+                        return int(data.get("waiting", 0) or 0)
+                    queues = data.get("queues", []) if isinstance(data, dict) else []
+                    return sum(int((q or {}).get("waiting", 0) or 0) + int((q or {}).get("active", 0) or 0) for q in queues)
+        except:
+            pass
+        return 0
+    
+    def _calculate_target_pages(self, queue_size: int) -> int:
+        """计算目标页面数"""
+        if queue_size > self.config.SCALE_UP_THRESHOLD:
+            # 高峰期
+            self.low_load_since = None
+            return self.config.MAX_PAGES
+        elif queue_size > self.config.SCALE_DOWN_THRESHOLD:
+            # 正常期
+            self.low_load_since = None
+            return self.config.NORMAL_PAGES
+        else:
+            # 空闲期 - 延迟收缩
+            if self.low_load_since is None:
+                self.low_load_since = datetime.now()
+            elif (datetime.now() - self.low_load_since).total_seconds() > self.config.SCALE_DOWN_DELAY:
+                return self.config.MIN_PAGES
+            return self.config.NORMAL_PAGES
+    
+    async def _adjust_pages(self):
+        """调整页面数量"""
+        async with self.lock:
+            current = len(self.pages)
+            target = self.target_pages
+            
+            if current < target:
+                # 扩展
+                to_create = target - current
+                logger.info(f"[Pool:{self.port}] 扩展页面: +{to_create}")
+                for _ in range(to_create):
+                    try:
+                        page = await self.default_context.new_page()
+                        page_instance = PageInstance(page=page)
+                        self.pages.append(page_instance)
+                        self.available_pages.append(page_instance)
+                    except Exception as e:
+                        logger.warning(f"[Pool:{self.port}] 创建页面失败: {e}")
+                        break
+                        
+            elif current > target:
+                # 收缩 - 只关闭空闲页面
+                to_remove = current - target
+                removed = 0
+                while removed < to_remove and len(self.available_pages) > 0:
+                    page_instance = self.available_pages.pop()
+                    try:
+                        await page_instance.page.close()
+                    except:
+                        pass
+                    self.pages.remove(page_instance)
+                    removed += 1
+                logger.info(f"[Pool:{self.port}] 收缩页面: -{removed}")
+    
+    async def acquire(self, proxy_url: Optional[str] = None):
+        """
+        获取页面
+        
+        Returns:
+            (page, context, page_instance, is_proxy_context)
+        """
+        async with self.lock:
+            # 检查是否需要重启
+            if await self._should_restart():
+                await self._restart()
+            
+            # 如果需要代理，创建临时上下文
+            if proxy_url:
+                try:
+                    proxy_context = await self.browser.new_context(
+                        proxy={"server": proxy_url},
+                        user_agent=PC_UA,
+                        viewport={'width': 1920, 'height': 1080},
+                        locale='zh-CN',
+                    )
+                    proxy_page = await proxy_context.new_page()
+                    logger.info(f"[Pool:{self.port}] 创建代理页面: {proxy_url}")
+                    return proxy_page, proxy_context, None, True
+                except Exception as e:
+                    logger.error(f"[Pool:{self.port}] 创建代理上下文失败: {e}")
+                    raise
+            
+            # 从池中获取页面
+            if not self.available_pages:
+                # 没有空闲页面，尝试创建
+                if len(self.pages) < self.config.MAX_PAGES:
+                    try:
+                        page = await self.default_context.new_page()
+                        page_instance = PageInstance(page=page)
+                        self.pages.append(page_instance)
+                        logger.info(f"[Pool:{self.port}] 动态创建页面: {len(self.pages)}")
+                    except Exception as e:
+                        logger.warning(f"[Pool:{self.port}] 创建页面失败: {e}")
+                else:
+                    # 等待页面释放
+                    logger.warning(f"[Pool:{self.port}] 页面池已满，等待...")
+            
+            # 再次尝试获取
+            if self.available_pages:
+                page_instance = self.available_pages.pop(0)
+                page_instance.last_used = datetime.now()
+                return page_instance.page, None, page_instance, False
+            
+            raise Exception("无可用页面")
+    
+    async def release(self, page, context=None, page_instance=None, is_proxy=False):
+        """归还页面"""
+        try:
+            if is_proxy and context:
+                # 代理上下文，直接关闭
+                await page.close()
+                await context.close()
+                logger.debug(f"[Pool:{self.port}] 关闭代理上下文")
+            elif page_instance:
+                # 直连页面，重置后归还
+                try:
+                    await page.goto('about:blank', timeout=3000)
+                    await page.evaluate('() => { localStorage.clear(); }')
+                except:
+                    pass
+                
+                page_instance.request_count += 1
+                self.available_pages.append(page_instance)
+                self.request_count += 1
+                logger.debug(f"[Pool:{self.port}] 归还页面")
+                
+        except Exception as e:
+            logger.warning(f"[Pool:{self.port}] 归还页面异常: {e}")
+    
+    async def _should_restart(self) -> bool:
+        """检查是否需要重启"""
+        if not self.browser:
+            return True
+        
+        # 请求次数
+        if self.request_count >= self.config.MAX_REQUESTS:
+            logger.info(f"[Pool:{self.port}] 触发重启: 请求次数 {self.request_count}")
+            return True
+        
+        # 运行时间
+        if self.created_at:
+            age = (datetime.now() - self.created_at).total_seconds() / 60
+            if age >= self.config.MAX_AGE_MINUTES:
+                logger.info(f"[Pool:{self.port}] 触发重启: 运行 {age:.0f} 分钟")
+                return True
+        
+        # 浏览器断开
+        if not self.browser.is_connected():
+            logger.warning(f"[Pool:{self.port}] 触发重启: 浏览器断开")
+            return True
+        
+        return False
+    
+    async def _restart(self):
+        """重启浏览器"""
+        logger.info(f"[Pool:{self.port}] 重启浏览器...")
+        
+        # 关闭所有页面
+        for p in self.pages:
+            try:
+                await p.page.close()
+            except:
+                pass
+        self.pages.clear()
+        self.available_pages.clear()
+        
+        # 关闭浏览器
+        if self.browser:
+            try:
+                await self.browser.close()
+            except:
+                pass
+        if self.playwright:
+            try:
+                await self.playwright.stop()
+            except:
+                pass
+        
+        # 重新初始化
+        self.browser = None
+        self.default_context = None
+        self.request_count = 0
+        self.created_at = None
+        
+        await self.initialize()
+    
+    async def get_status(self) -> dict:
+        """获取状态"""
+        return {
+            "healthy": self.browser.is_connected() if self.browser else False,
+            "port": self.port,
+            "available_pages": len(self.available_pages),
+            "total_pages": len(self.pages),
+            "target_pages": self.target_pages,
+            "request_count": self.request_count,
+            "age_minutes": (datetime.now() - self.created_at).total_seconds() / 60 if self.created_at else 0,
+        }
+    
+    async def shutdown(self):
+        """关闭浏览器池"""
+        logger.info(f"[Pool:{self.port}] 关闭...")
+        
+        if self.monitor_task:
+            self.monitor_task.cancel()
+        
+        for p in self.pages:
+            try:
+                await p.page.close()
+            except:
+                pass
+        
+        if self.browser:
+            await self.browser.close()
+        if self.playwright:
+            await self.playwright.stop()
+
+
+# ============ FastAPI 应用 ============
+
+app = FastAPI(title="Browser Pool Service")
+
+browser_pool: Optional[BrowserPool] = None
+PORT = 8000
+
+
+@app.on_event("startup")
+async def startup():
+    global browser_pool, PORT
+    PORT = int(os.environ.get("PORT", 8000))
+    browser_pool = BrowserPool(PORT)
+    await browser_pool.initialize()
+    logger.info(f"[Browser Pool] 启动在端口 {PORT}")
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    if browser_pool:
+        await browser_pool.shutdown()
+
+
+@app.get("/")
+async def health():
+    return {"status": "ok", "port": PORT}
+
+
+@app.get("/browser/health")
+async def browser_health():
+    if browser_pool and browser_pool.browser:
+        return {"status": "ok", "connected": browser_pool.browser.is_connected()}
+    return {"status": "error", "connected": False}
+
+
+@app.get("/browser/status")
+async def browser_status():
+    if browser_pool:
+        return await browser_pool.get_status()
+    return {"healthy": False}
+
+
+@app.post("/browser/visit", response_model=VisitResponse)
+async def visit_page(request: VisitRequest):
+    """
+    访问页面并获取评论
+    
+    保留原有评论获取逻辑:
+    1. 处理短链接 (v.douyin.com)
+    2. 提取视频 ID
+    3. 使用 page.evaluate 调用抖音评论 API
+    4. DOM 提取作为备选
+    5. 去重
+    """
+    start_time = time.time()
+    
+    page = None
+    context = None
+    page_instance = None
+    is_proxy = False
+    
+    comments_data = []
+    debug_info = {"steps": [], "video_id": None, "api_status": None}
+    
+    try:
+        # 获取页面
+        page, context, page_instance, is_proxy = await browser_pool.acquire(request.proxy_url)
+        debug_info["steps"].append("获取页面成功")
+        
+        url = request.url
+        
+        # ========== 1. 处理短链接 ==========
+        if 'v.douyin.com' in url:
+            debug_info["steps"].append("检测到短链接")
+            try:
+                await page.goto(url, timeout=15000, wait_until='domcontentloaded')
+                url = page.url
+                debug_info["steps"].append(f"跳转到: {url[:60]}...")
+            except Exception as e:
+                logger.warning(f"[Browser] 短链接跳转超时: {e}")
+        
+        # ========== 2. 提取视频 ID ==========
+        video_id = None
+        match = re.search(r'video/(\d+)', url)
+        if match:
+            video_id = match.group(1)
+            debug_info["video_id"] = video_id
+            debug_info["steps"].append(f"视频ID: {video_id}")
+        
+        # ========== 3. 访问页面 ==========
+        try:
+            await page.goto(url, timeout=30000, wait_until='domcontentloaded')
+            await asyncio.sleep(0.5)
+            title = await page.title()
+            debug_info["steps"].append(f"页面标题: {title[:30]}...")
+        except Exception as e:
+            logger.warning(f"[Browser] 页面加载超时: {e}")
+            title = ""
+        
+        # ========== 4. 提取达人名字 ==========
+        author_name = None
+        try:
+            author_name = await page.evaluate("""
+                () => {
+                    const title = document.title;
+                    const match = title.match(/(.+?)的作品/);
+                    if (match) return match[1].trim();
+                    const authorEl = document.querySelector("[class*=author] [class*=name], [class*=AuthorCard] [class*=name]");
+                    if (authorEl) return authorEl.textContent.trim();
+                    return null;
+                }
+            """)
+            if author_name:
+                debug_info["steps"].append(f"达人: {author_name}")
+                logger.info(f"[Browser] 提取达人: {author_name}")
+        except Exception as e:
+            debug_info["steps"].append(f"达人提取失败: {str(e)[:30]}")
+
+        # ========== 4. 获取评论 (核心逻辑) ==========
+        
+        if video_id:
+            # 方式1: 使用 page.evaluate 调用抖音评论 API
+            api_url = f"https://www.douyin.com/aweme/v1/web/comment/list/?aweme_id={video_id}&count={request.max_comments}"
+            
+            try:
+                result = await page.evaluate(f'''
+                    async () => {{
+                        try {{
+                            const res = await fetch("{api_url}", {{ credentials: "include" }});
+                            const data = await res.json();
+                            return data.comments?.map(c => ({{
+                                nickname: c.user?.nickname || '',
+                                content: c.text || ''
+                            }})) || [];
+                        }} catch (e) {{ return []; }}
+                    }}
+                ''')
+                
+                if result:
+                    comments_data = result
+                    debug_info["api_status"] = "success"
+                    debug_info["steps"].append(f"API获取: {len(comments_data)} 条")
+                    logger.info(f"[Browser] API获取 {len(comments_data)} 条评论")
+            except Exception as e:
+                debug_info["api_status"] = f"failed: {str(e)[:50]}"
+                debug_info["steps"].append(f"API获取失败: {str(e)[:30]}")
+        
+        # 方式2: DOM 提取作为备选 (如果 API 没有获取到评论)
+        if not comments_data:
+            debug_info["steps"].append("尝试 DOM 提取")
+            try:
+                dom_comments = await page.evaluate('''
+                    () => {
+                        const comments = [];
+                        // 尝试多种 DOM 结构
+                        const selectors = [
+                            '[class*="comment"] [class*="content"]',
+                            '[class*="CommentItem"]',
+                            '[class*="comment-text"]',
+                        ];
+                        
+                        for (const selector of selectors) {
+                            const elements = document.querySelectorAll(selector);
+                            elements.forEach(el => {
+                                const text = el.innerText?.trim();
+                                if (text && text.length > 2 && text.length < 500) {
+                                    comments.push({nickname: '', content: text});
+                                }
+                            });
+                            if (comments.length > 0) break;
+                        }
+                        return comments.slice(0, 30);
+                    }
+                ''')
+                
+                if dom_comments:
+                    comments_data = dom_comments
+                    debug_info["steps"].append(f"DOM提取: {len(comments_data)} 条")
+                    logger.info(f"[Browser] DOM提取 {len(comments_data)} 条评论")
+            except Exception as e:
+                logger.warning(f"[Browser] DOM提取失败: {e}")
+        
+        # ========== 5. 去重 ==========
+        seen = set()
+        unique = []
+        for c in comments_data:
+            if c['content'] not in seen:
+                seen.add(c['content'])
+                unique.append(c)
+        
+        # ========== 6. 返回结果 ==========
+        has_comment = len(unique) > 0
+        comment_text = "\n".join([f"{c['nickname']}: {c['content']}" for c in unique[:10]]) if has_comment else None
+        
+        duration_ms = int((time.time() - start_time) * 1000)
+        
+        logger.info(f"[Browser] ✅ 完成: 评论数={len(unique)}, 耗时={duration_ms}ms")
+        
+        return VisitResponse(
+            success=True,
+            has_comment=has_comment,
+            comment_text=comment_text,
+            page_title=title,
+            author_name=author_name,
+            comments=[CommentInfo(**c) for c in unique[:request.max_comments]],
+            total_comments=len(unique),
+            mode="pc",
+            ip_mode="proxy" if request.proxy_url else "direct",
+            proxy_used=request.proxy_url,
+            duration_ms=duration_ms,
+            debug_info=debug_info
+        )
+        
+    except Exception as e:
+        logger.error(f"[Browser] ❌ 错误: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        duration_ms = int((time.time() - start_time) * 1000)
+        
+        return VisitResponse(
+            success=False,
+            error=str(e),
+            ip_mode="proxy" if request.proxy_url else "direct",
+            proxy_used=request.proxy_url,
+            duration_ms=duration_ms,
+            debug_info=debug_info
+        )
+    
+    finally:
+        if page:
+            await browser_pool.release(page, context, page_instance, is_proxy)
+
+
+if __name__ == "__main__":
+    import sys
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
+    os.environ["PORT"] = str(port)
+    logger.info(f"[Browser Pool Service] 启动在端口 {port}")
+    uvicorn.run(app, host="0.0.0.0", port=port)

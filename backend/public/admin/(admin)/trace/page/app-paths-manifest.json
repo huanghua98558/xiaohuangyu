@@ -1,0 +1,3 @@
+{
+  "/(admin)/trace/page": "app/(admin)/trace/page.js"
+}

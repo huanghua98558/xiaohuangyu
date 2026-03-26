@@ -1,0 +1,25 @@
+import { Router } from 'express'
+import taskTemplateController from '../controllers/taskTemplateController.js'
+import { authMiddleware, adminOnly } from '../middlewares/auth.js'
+
+const router = Router()
+
+// 所有接口都需要管理员权限
+router.use(authMiddleware)
+router.use(adminOnly)
+
+router.get('/', async (req, res, next) => {
+  try {
+    await taskTemplateController.getTemplates(req, res, next)
+  } catch (err) {
+    res.json({ code: 0, data: { list: [], total: 0 }, message: '获取模板失败: ' + err.message })
+  }
+})
+router.get('/hot', taskTemplateController.getHotTemplates)
+router.get('/:id', taskTemplateController.getTemplate)
+router.post('/', taskTemplateController.createTemplate)
+router.put('/:id', taskTemplateController.updateTemplate)
+router.delete('/:id', taskTemplateController.deleteTemplate)
+router.post('/:id/use', taskTemplateController.useTemplate)
+
+export default router

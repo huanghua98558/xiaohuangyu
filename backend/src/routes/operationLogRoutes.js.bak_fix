@@ -1,0 +1,15 @@
+import { Router } from 'express'
+import operationLogController from '../controllers/operationLogController.js'
+import { authMiddleware, adminOnly } from '../middlewares/auth.js'
+
+const router = Router()
+
+// 所有接口都需要管理员权限
+router.use(authMiddleware)
+router.use(adminOnly)
+
+router.get('/', operationLogController.getLogs)
+router.get('/stats', operationLogController.getActionStats)
+router.get('/:targetType/:targetId', operationLogController.getTargetLogs)
+
+export default router

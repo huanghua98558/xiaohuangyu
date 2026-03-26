@@ -1,0 +1,2724 @@
+{
+  "cities": [
+    {
+      "name": "北京市",
+      "province": "北京市",
+      "minLng": 115.42,
+      "maxLng": 117.5,
+      "minLat": 39.45,
+      "maxLat": 41.06
+    },
+    {
+      "name": "上海市",
+      "province": "上海市",
+      "minLng": 120.86,
+      "maxLng": 122.2,
+      "minLat": 30.68,
+      "maxLat": 31.88
+    },
+    {
+      "name": "天津市",
+      "province": "天津市",
+      "minLng": 116.71,
+      "maxLng": 118.04,
+      "minLat": 38.56,
+      "maxLat": 40.25
+    },
+    {
+      "name": "重庆市",
+      "province": "重庆市",
+      "minLng": 105.28,
+      "maxLng": 110.2,
+      "minLat": 28.16,
+      "maxLat": 32.19
+    },
+    {
+      "name": "广州市",
+      "province": "广东省",
+      "minLng": 112.95,
+      "maxLng": 114.05,
+      "minLat": 22.53,
+      "maxLat": 23.93
+    },
+    {
+      "name": "深圳市",
+      "province": "广东省",
+      "minLng": 113.75,
+      "maxLng": 114.65,
+      "minLat": 22.4,
+      "maxLat": 22.9
+    },
+    {
+      "name": "东莞市",
+      "province": "广东省",
+      "minLng": 113.7,
+      "maxLng": 114.25,
+      "minLat": 22.58,
+      "maxLat": 23.1
+    },
+    {
+      "name": "佛山市",
+      "province": "广东省",
+      "minLng": 112.6,
+      "maxLng": 113.45,
+      "minLat": 22.58,
+      "maxLat": 23.5
+    },
+    {
+      "name": "珠海市",
+      "province": "广东省",
+      "minLng": 113.25,
+      "maxLng": 113.9,
+      "minLat": 21.8,
+      "maxLat": 22.45
+    },
+    {
+      "name": "惠州市",
+      "province": "广东省",
+      "minLng": 113.8,
+      "maxLng": 115.2,
+      "minLat": 22.5,
+      "maxLat": 23.9
+    },
+    {
+      "name": "中山市",
+      "province": "广东省",
+      "minLng": 113.2,
+      "maxLng": 113.6,
+      "minLat": 22.3,
+      "maxLat": 22.7
+    },
+    {
+      "name": "汕头市",
+      "province": "广东省",
+      "minLng": 116.2,
+      "maxLng": 117.0,
+      "minLat": 23.05,
+      "maxLat": 23.6
+    },
+    {
+      "name": "杭州市",
+      "province": "浙江省",
+      "minLng": 118.2,
+      "maxLng": 120.8,
+      "minLat": 29.8,
+      "maxLat": 30.8
+    },
+    {
+      "name": "宁波市",
+      "province": "浙江省",
+      "minLng": 120.8,
+      "maxLng": 122.4,
+      "minLat": 29.0,
+      "maxLat": 30.3
+    },
+    {
+      "name": "温州市",
+      "province": "浙江省",
+      "minLng": 119.8,
+      "maxLng": 121.2,
+      "minLat": 27.6,
+      "maxLat": 28.5
+    },
+    {
+      "name": "嘉兴市",
+      "province": "浙江省",
+      "minLng": 120.2,
+      "maxLng": 121.4,
+      "minLat": 30.3,
+      "maxLat": 31.2
+    },
+    {
+      "name": "绍兴市",
+      "province": "浙江省",
+      "minLng": 119.8,
+      "maxLng": 121.0,
+      "minLat": 29.2,
+      "maxLat": 30.2
+    },
+    {
+      "name": "金华市",
+      "province": "浙江省",
+      "minLng": 119.3,
+      "maxLng": 120.7,
+      "minLat": 28.7,
+      "maxLat": 29.7
+    },
+    {
+      "name": "台州市",
+      "province": "浙江省",
+      "minLng": 120.6,
+      "maxLng": 121.8,
+      "minLat": 28.3,
+      "maxLat": 29.3
+    },
+    {
+      "name": "湖州市",
+      "province": "浙江省",
+      "minLng": 119.3,
+      "maxLng": 120.3,
+      "minLat": 30.5,
+      "maxLat": 31.2
+    },
+    {
+      "name": "南京市",
+      "province": "江苏省",
+      "minLng": 118.2,
+      "maxLng": 119.4,
+      "minLat": 31.5,
+      "maxLat": 32.7
+    },
+    {
+      "name": "苏州市",
+      "province": "江苏省",
+      "minLng": 120.0,
+      "maxLng": 121.3,
+      "minLat": 31.0,
+      "maxLat": 32.0
+    },
+    {
+      "name": "无锡市",
+      "province": "江苏省",
+      "minLng": 119.8,
+      "maxLng": 120.7,
+      "minLat": 31.3,
+      "maxLat": 32.1
+    },
+    {
+      "name": "常州市",
+      "province": "江苏省",
+      "minLng": 119.6,
+      "maxLng": 120.4,
+      "minLat": 31.4,
+      "maxLat": 32.2
+    },
+    {
+      "name": "南通市",
+      "province": "江苏省",
+      "minLng": 120.2,
+      "maxLng": 121.9,
+      "minLat": 31.7,
+      "maxLat": 32.6
+    },
+    {
+      "name": "徐州市",
+      "province": "江苏省",
+      "minLng": 116.8,
+      "maxLng": 118.6,
+      "minLat": 33.7,
+      "maxLat": 34.8
+    },
+    {
+      "name": "扬州市",
+      "province": "江苏省",
+      "minLng": 118.9,
+      "maxLng": 119.8,
+      "minLat": 31.9,
+      "maxLat": 33.4
+    },
+    {
+      "name": "成都市",
+      "province": "四川省",
+      "minLng": 103.0,
+      "maxLng": 104.9,
+      "minLat": 30.2,
+      "maxLat": 31.5
+    },
+    {
+      "name": "绵阳市",
+      "province": "四川省",
+      "minLng": 103.7,
+      "maxLng": 105.9,
+      "minLat": 30.9,
+      "maxLat": 33.2
+    },
+    {
+      "name": "德阳市",
+      "province": "四川省",
+      "minLng": 103.8,
+      "maxLng": 104.9,
+      "minLat": 30.8,
+      "maxLat": 31.7
+    },
+    {
+      "name": "武汉市",
+      "province": "湖北省",
+      "minLng": 113.6,
+      "maxLng": 115.2,
+      "minLat": 29.9,
+      "maxLat": 31.5
+    },
+    {
+      "name": "宜昌市",
+      "province": "湖北省",
+      "minLng": 110.4,
+      "maxLng": 111.7,
+      "minLat": 30.4,
+      "maxLat": 31.4
+    },
+    {
+      "name": "襄阳市",
+      "province": "湖北省",
+      "minLng": 111.6,
+      "maxLng": 112.7,
+      "minLat": 31.8,
+      "maxLat": 32.7
+    },
+    {
+      "name": "长沙市",
+      "province": "湖南省",
+      "minLng": 111.8,
+      "maxLng": 114.3,
+      "minLat": 27.8,
+      "maxLat": 28.9
+    },
+    {
+      "name": "株洲市",
+      "province": "湖南省",
+      "minLng": 112.9,
+      "maxLng": 114.0,
+      "minLat": 27.4,
+      "maxLat": 28.4
+    },
+    {
+      "name": "湘潭市",
+      "province": "湖南省",
+      "minLng": 112.4,
+      "maxLng": 113.3,
+      "minLat": 27.4,
+      "maxLat": 28.3
+    },
+    {
+      "name": "西安市",
+      "province": "陕西省",
+      "minLng": 108.6,
+      "maxLng": 109.4,
+      "minLat": 33.9,
+      "maxLat": 34.8
+    },
+    {
+      "name": "咸阳市",
+      "province": "陕西省",
+      "minLng": 108.0,
+      "maxLng": 109.3,
+      "minLat": 34.1,
+      "maxLat": 35.3
+    },
+    {
+      "name": "济南市",
+      "province": "山东省",
+      "minLng": 116.5,
+      "maxLng": 117.7,
+      "minLat": 36.3,
+      "maxLat": 37.2
+    },
+    {
+      "name": "青岛市",
+      "province": "山东省",
+      "minLng": 119.8,
+      "maxLng": 121.2,
+      "minLat": 35.7,
+      "maxLat": 36.6
+    },
+    {
+      "name": "烟台市",
+      "province": "山东省",
+      "minLng": 120.5,
+      "maxLng": 122.0,
+      "minLat": 36.8,
+      "maxLat": 37.9
+    },
+    {
+      "name": "潍坊市",
+      "province": "山东省",
+      "minLng": 118.4,
+      "maxLng": 120.2,
+      "minLat": 35.7,
+      "maxLat": 37.4
+    },
+    {
+      "name": "郑州市",
+      "province": "河南省",
+      "minLng": 113.0,
+      "maxLng": 114.2,
+      "minLat": 34.4,
+      "maxLat": 35.1
+    },
+    {
+      "name": "洛阳市",
+      "province": "河南省",
+      "minLng": 111.8,
+      "maxLng": 112.9,
+      "minLat": 34.4,
+      "maxLat": 35.3
+    },
+    {
+      "name": "福州市",
+      "province": "福建省",
+      "minLng": 118.8,
+      "maxLng": 120.0,
+      "minLat": 25.7,
+      "maxLat": 26.5
+    },
+    {
+      "name": "厦门市",
+      "province": "福建省",
+      "minLng": 117.8,
+      "maxLng": 118.6,
+      "minLat": 24.3,
+      "maxLat": 25.0
+    },
+    {
+      "name": "泉州市",
+      "province": "福建省",
+      "minLng": 118.0,
+      "maxLng": 119.1,
+      "minLat": 24.6,
+      "maxLat": 25.6
+    },
+    {
+      "name": "合肥市",
+      "province": "安徽省",
+      "minLng": 116.9,
+      "maxLng": 117.9,
+      "minLat": 31.4,
+      "maxLat": 32.4
+    },
+    {
+      "name": "芜湖市",
+      "province": "安徽省",
+      "minLng": 118.0,
+      "maxLng": 118.9,
+      "minLat": 31.0,
+      "maxLat": 31.9
+    },
+    {
+      "name": "南昌市",
+      "province": "江西省",
+      "minLng": 115.6,
+      "maxLng": 116.5,
+      "minLat": 28.4,
+      "maxLat": 29.1
+    },
+    {
+      "name": "石家庄市",
+      "province": "河北省",
+      "minLng": 113.9,
+      "maxLng": 115.3,
+      "minLat": 37.7,
+      "maxLat": 38.8
+    },
+    {
+      "name": "唐山市",
+      "province": "河北省",
+      "minLng": 117.7,
+      "maxLng": 119.1,
+      "minLat": 39.2,
+      "maxLat": 40.2
+    },
+    {
+      "name": "沈阳市",
+      "province": "辽宁省",
+      "minLng": 123.0,
+      "maxLng": 124.0,
+      "minLat": 41.5,
+      "maxLat": 42.3
+    },
+    {
+      "name": "大连市",
+      "province": "辽宁省",
+      "minLng": 121.0,
+      "maxLng": 122.3,
+      "minLat": 38.6,
+      "maxLat": 39.5
+    },
+    {
+      "name": "哈尔滨市",
+      "province": "黑龙江省",
+      "minLng": 125.7,
+      "maxLng": 127.6,
+      "minLat": 45.4,
+      "maxLat": 46.5
+    },
+    {
+      "name": "长春市",
+      "province": "吉林省",
+      "minLng": 125.1,
+      "maxLng": 126.4,
+      "minLat": 43.5,
+      "maxLat": 44.4
+    },
+    {
+      "name": "昆明市",
+      "province": "云南省",
+      "minLng": 102.1,
+      "maxLng": 103.3,
+      "minLat": 24.6,
+      "maxLat": 25.6
+    },
+    {
+      "name": "大理市",
+      "province": "云南省",
+      "minLng": 99.8,
+      "maxLng": 100.6,
+      "minLat": 25.5,
+      "maxLat": 26.2
+    },
+    {
+      "name": "贵阳市",
+      "province": "贵州省",
+      "minLng": 106.3,
+      "maxLng": 107.2,
+      "minLat": 26.2,
+      "maxLat": 27.0
+    },
+    {
+      "name": "南宁市",
+      "province": "广西壮族自治区",
+      "minLng": 107.8,
+      "maxLng": 108.9,
+      "minLat": 22.5,
+      "maxLat": 23.3
+    },
+    {
+      "name": "桂林市",
+      "province": "广西壮族自治区",
+      "minLng": 109.9,
+      "maxLng": 111.2,
+      "minLat": 24.8,
+      "maxLat": 25.8
+    },
+    {
+      "name": "柳州市",
+      "province": "广西壮族自治区",
+      "minLng": 108.9,
+      "maxLng": 109.9,
+      "minLat": 23.8,
+      "maxLat": 24.8
+    },
+    {
+      "name": "海口市",
+      "province": "海南省",
+      "minLng": 110.0,
+      "maxLng": 110.8,
+      "minLat": 19.9,
+      "maxLat": 20.3
+    },
+    {
+      "name": "三亚市",
+      "province": "海南省",
+      "minLng": 109.3,
+      "maxLng": 109.9,
+      "minLat": 18.1,
+      "maxLat": 18.6
+    },
+    {
+      "name": "兰州市",
+      "province": "甘肃省",
+      "minLng": 103.4,
+      "maxLng": 104.3,
+      "minLat": 35.8,
+      "maxLat": 36.4
+    },
+    {
+      "name": "太原市",
+      "province": "山西省",
+      "minLng": 112.2,
+      "maxLng": 113.1,
+      "minLat": 37.6,
+      "maxLat": 38.3
+    },
+    {
+      "name": "呼和浩特市",
+      "province": "内蒙古自治区",
+      "minLng": 111.2,
+      "maxLng": 112.4,
+      "minLat": 40.5,
+      "maxLat": 41.4
+    },
+    {
+      "name": "乌鲁木齐市",
+      "province": "新疆维吾尔自治区",
+      "minLng": 87.2,
+      "maxLng": 88.0,
+      "minLat": 43.6,
+      "maxLat": 44.2
+    },
+    {
+      "name": "拉萨市",
+      "province": "西藏自治区",
+      "minLng": 90.8,
+      "maxLng": 91.4,
+      "minLat": 29.5,
+      "maxLat": 30.0
+    },
+    {
+      "name": "西宁市",
+      "province": "青海省",
+      "minLng": 101.3,
+      "maxLng": 102.1,
+      "minLat": 36.4,
+      "maxLat": 37.0
+    },
+    {
+      "name": "银川市",
+      "province": "宁夏回族自治区",
+      "minLng": 105.9,
+      "maxLng": 106.7,
+      "minLat": 38.1,
+      "maxLat": 38.8
+    },
+    {
+      "name": "湘西土家族苗族自治州",
+      "province": "湖南省",
+      "minLng": 109.4,
+      "maxLng": 111.3,
+      "minLat": 27.6,
+      "maxLat": 29.7
+    },
+    {
+      "name": "怀化市",
+      "province": "湖南省",
+      "minLng": 108.9,
+      "maxLng": 111.0,
+      "minLat": 26.3,
+      "maxLat": 27.9
+    },
+    {
+      "name": "邵阳市",
+      "province": "湖南省",
+      "minLng": 109.7,
+      "maxLng": 112.2,
+      "minLat": 25.9,
+      "maxLat": 27.6
+    },
+    {
+      "name": "永州市",
+      "province": "湖南省",
+      "minLng": 110.5,
+      "maxLng": 112.8,
+      "minLat": 24.4,
+      "maxLat": 26.8
+    },
+    {
+      "name": "郴州市",
+      "province": "湖南省",
+      "minLng": 112.4,
+      "maxLng": 114.2,
+      "minLat": 24.5,
+      "maxLat": 26.4
+    },
+    {
+      "name": "衡阳市",
+      "province": "湖南省",
+      "minLng": 111.5,
+      "maxLng": 113.6,
+      "minLat": 26.0,
+      "maxLat": 27.7
+    },
+    {
+      "name": "岳阳市",
+      "province": "湖南省",
+      "minLng": 112.8,
+      "maxLng": 114.5,
+      "minLat": 28.5,
+      "maxLat": 30.0
+    },
+    {
+      "name": "常德市",
+      "province": "湖南省",
+      "minLng": 110.4,
+      "maxLng": 112.4,
+      "minLat": 28.5,
+      "maxLat": 30.2
+    },
+    {
+      "name": "张家界市",
+      "province": "湖南省",
+      "minLng": 109.7,
+      "maxLng": 111.3,
+      "minLat": 28.8,
+      "maxLat": 29.9
+    },
+    {
+      "name": "益阳市",
+      "province": "湖南省",
+      "minLng": 110.8,
+      "maxLng": 112.5,
+      "minLat": 27.9,
+      "maxLat": 29.5
+    },
+    {
+      "name": "娄底市",
+      "province": "湖南省",
+      "minLng": 110.8,
+      "maxLng": 112.5,
+      "minLat": 27.2,
+      "maxLat": 28.5
+    },
+    {
+      "name": "怀化市",
+      "province": "湖南省",
+      "minLng": 108.9,
+      "maxLng": 111.0,
+      "minLat": 26.3,
+      "maxLat": 27.9
+    },
+    {
+      "name": "永顺县",
+      "province": "湖南省",
+      "minLng": 109.5,
+      "maxLng": 110.7,
+      "minLat": 28.6,
+      "maxLat": 29.4
+    },
+    {
+      "name": "泸溪县",
+      "province": "湖南省",
+      "minLng": 110.0,
+      "maxLng": 110.6,
+      "minLat": 27.8,
+      "maxLat": 28.6
+    },
+    {
+      "name": "沅陵县",
+      "province": "湖南省",
+      "minLng": 110.0,
+      "maxLng": 111.3,
+      "minLat": 28.1,
+      "maxLat": 29.3
+    },
+    {
+      "name": "江门市",
+      "province": "广东省",
+      "minLng": 112.0,
+      "maxLng": 113.2,
+      "minLat": 21.6,
+      "maxLat": 22.7
+    },
+    {
+      "name": "湛江市",
+      "province": "广东省",
+      "minLng": 109.6,
+      "maxLng": 110.8,
+      "minLat": 20.9,
+      "maxLat": 21.7
+    },
+    {
+      "name": "茂名市",
+      "province": "广东省",
+      "minLng": 110.2,
+      "maxLng": 111.5,
+      "minLat": 21.3,
+      "maxLat": 22.5
+    },
+    {
+      "name": "肇庆市",
+      "province": "广东省",
+      "minLng": 111.2,
+      "maxLng": 112.8,
+      "minLat": 22.8,
+      "maxLat": 24.0
+    },
+    {
+      "name": "清远市",
+      "province": "广东省",
+      "minLng": 111.9,
+      "maxLng": 113.8,
+      "minLat": 23.3,
+      "maxLat": 24.9
+    },
+    {
+      "name": "韶关市",
+      "province": "广东省",
+      "minLng": 112.9,
+      "maxLng": 114.5,
+      "minLat": 24.3,
+      "maxLat": 25.6
+    },
+    {
+      "name": "揭阳市",
+      "province": "广东省",
+      "minLng": 115.6,
+      "maxLng": 116.8,
+      "minLat": 22.9,
+      "maxLat": 23.8
+    },
+    {
+      "name": "潮州市",
+      "province": "广东省",
+      "minLng": 116.2,
+      "maxLng": 117.2,
+      "minLat": 23.4,
+      "maxLat": 24.0
+    },
+    {
+      "name": "梅州市",
+      "province": "广东省",
+      "minLng": 115.2,
+      "maxLng": 116.6,
+      "minLat": 23.7,
+      "maxLat": 24.9
+    },
+    {
+      "name": "汕尾市",
+      "province": "广东省",
+      "minLng": 114.8,
+      "maxLng": 116.3,
+      "minLat": 22.4,
+      "maxLat": 23.3
+    },
+    {
+      "name": "河源市",
+      "province": "广东省",
+      "minLng": 114.3,
+      "maxLng": 115.8,
+      "minLat": 23.4,
+      "maxLat": 24.7
+    },
+    {
+      "name": "阳江市",
+      "province": "广东省",
+      "minLng": 111.0,
+      "maxLng": 112.3,
+      "minLat": 21.4,
+      "maxLat": 22.5
+    },
+    {
+      "name": "云浮市",
+      "province": "广东省",
+      "minLng": 111.2,
+      "maxLng": 112.5,
+      "minLat": 22.2,
+      "maxLat": 23.4
+    },
+    {
+      "name": "衢州市",
+      "province": "浙江省",
+      "minLng": 118.0,
+      "maxLng": 119.3,
+      "minLat": 28.5,
+      "maxLat": 29.5
+    },
+    {
+      "name": "丽水市",
+      "province": "浙江省",
+      "minLng": 118.9,
+      "maxLng": 120.5,
+      "minLat": 27.4,
+      "maxLat": 28.8
+    },
+    {
+      "name": "舟山市",
+      "province": "浙江省",
+      "minLng": 121.8,
+      "maxLng": 123.2,
+      "minLat": 29.5,
+      "maxLat": 30.8
+    },
+    {
+      "name": "盐城市",
+      "province": "江苏省",
+      "minLng": 119.5,
+      "maxLng": 121.0,
+      "minLat": 32.8,
+      "maxLat": 34.3
+    },
+    {
+      "name": "镇江市",
+      "province": "江苏省",
+      "minLng": 118.8,
+      "maxLng": 119.8,
+      "minLat": 31.6,
+      "maxLat": 32.4
+    },
+    {
+      "name": "泰州市",
+      "province": "江苏省",
+      "minLng": 119.5,
+      "maxLng": 120.6,
+      "minLat": 31.9,
+      "maxLat": 32.8
+    },
+    {
+      "name": "淮安市",
+      "province": "江苏省",
+      "minLng": 118.1,
+      "maxLng": 119.5,
+      "minLat": 32.8,
+      "maxLat": 34.2
+    },
+    {
+      "name": "连云港市",
+      "province": "江苏省",
+      "minLng": 118.8,
+      "maxLng": 119.9,
+      "minLat": 34.2,
+      "maxLat": 35.2
+    },
+    {
+      "name": "宿迁市",
+      "province": "江苏省",
+      "minLng": 117.6,
+      "maxLng": 119.2,
+      "minLat": 33.4,
+      "maxLat": 34.4
+    },
+    {
+      "name": "宜宾市",
+      "province": "四川省",
+      "minLng": 103.6,
+      "maxLng": 105.3,
+      "minLat": 27.8,
+      "maxLat": 29.2
+    },
+    {
+      "name": "南充市",
+      "province": "四川省",
+      "minLng": 105.5,
+      "maxLng": 107.0,
+      "minLat": 30.3,
+      "maxLat": 31.8
+    },
+    {
+      "name": "泸州市",
+      "province": "四川省",
+      "minLng": 105.0,
+      "maxLng": 106.5,
+      "minLat": 27.8,
+      "maxLat": 29.3
+    },
+    {
+      "name": "达州市",
+      "province": "四川省",
+      "minLng": 106.6,
+      "maxLng": 108.5,
+      "minLat": 30.6,
+      "maxLat": 32.5
+    },
+    {
+      "name": "自贡市",
+      "province": "四川省",
+      "minLng": 104.0,
+      "maxLng": 105.0,
+      "minLat": 29.1,
+      "maxLat": 29.7
+    },
+    {
+      "name": "内江市",
+      "province": "四川省",
+      "minLng": 104.8,
+      "maxLng": 105.8,
+      "minLat": 29.2,
+      "maxLat": 30.0
+    },
+    {
+      "name": "乐山市",
+      "province": "四川省",
+      "minLng": 102.8,
+      "maxLng": 104.4,
+      "minLat": 28.7,
+      "maxLat": 29.8
+    },
+    {
+      "name": "眉山市",
+      "province": "四川省",
+      "minLng": 103.3,
+      "maxLng": 104.7,
+      "minLat": 29.4,
+      "maxLat": 30.5
+    },
+    {
+      "name": "资阳市",
+      "province": "四川省",
+      "minLng": 104.2,
+      "maxLng": 105.5,
+      "minLat": 29.8,
+      "maxLat": 30.7
+    },
+    {
+      "name": "遂宁市",
+      "province": "四川省",
+      "minLng": 105.1,
+      "maxLng": 106.1,
+      "minLat": 30.2,
+      "maxLat": 31.0
+    },
+    {
+      "name": "广安市",
+      "province": "四川省",
+      "minLng": 106.2,
+      "maxLng": 107.3,
+      "minLat": 30.1,
+      "maxLat": 31.0
+    },
+    {
+      "name": "广元市",
+      "province": "四川省",
+      "minLng": 104.8,
+      "maxLng": 106.5,
+      "minLat": 31.6,
+      "maxLat": 32.8
+    },
+    {
+      "name": "攀枝花市",
+      "province": "四川省",
+      "minLng": 101.0,
+      "maxLng": 102.3,
+      "minLat": 26.2,
+      "maxLat": 27.2
+    },
+    {
+      "name": "雅安市",
+      "province": "四川省",
+      "minLng": 102.0,
+      "maxLng": 103.5,
+      "minLat": 29.2,
+      "maxLat": 30.7
+    },
+    {
+      "name": "巴中市",
+      "province": "四川省",
+      "minLng": 106.2,
+      "maxLng": 107.6,
+      "minLat": 31.5,
+      "maxLat": 32.7
+    },
+    {
+      "name": "凉山彝族自治州",
+      "province": "四川省",
+      "minLng": 100.0,
+      "maxLng": 103.8,
+      "minLat": 26.0,
+      "maxLat": 29.3
+    },
+    {
+      "name": "甘孜藏族自治州",
+      "province": "四川省",
+      "minLng": 97.0,
+      "maxLng": 102.5,
+      "minLat": 27.5,
+      "maxLat": 34.2
+    },
+    {
+      "name": "阿坝藏族羌族自治州",
+      "province": "四川省",
+      "minLng": 100.0,
+      "maxLng": 104.5,
+      "minLat": 30.0,
+      "maxLat": 34.0
+    },
+    {
+      "name": "荆州市",
+      "province": "湖北省",
+      "minLng": 111.8,
+      "maxLng": 113.2,
+      "minLat": 29.7,
+      "maxLat": 30.8
+    },
+    {
+      "name": "黄石市",
+      "province": "湖北省",
+      "minLng": 114.7,
+      "maxLng": 115.6,
+      "minLat": 29.8,
+      "maxLat": 30.5
+    },
+    {
+      "name": "十堰市",
+      "province": "湖北省",
+      "minLng": 109.3,
+      "maxLng": 111.5,
+      "minLat": 32.1,
+      "maxLat": 33.4
+    },
+    {
+      "name": "孝感市",
+      "province": "湖北省",
+      "minLng": 113.4,
+      "maxLng": 114.7,
+      "minLat": 30.4,
+      "maxLat": 31.6
+    },
+    {
+      "name": "荆门市",
+      "province": "湖北省",
+      "minLng": 111.8,
+      "maxLng": 113.2,
+      "minLat": 30.6,
+      "maxLat": 31.6
+    },
+    {
+      "name": "鄂州市",
+      "province": "湖北省",
+      "minLng": 114.7,
+      "maxLng": 115.2,
+      "minLat": 30.1,
+      "maxLat": 30.6
+    },
+    {
+      "name": "黄冈市",
+      "province": "湖北省",
+      "minLng": 114.7,
+      "maxLng": 116.3,
+      "minLat": 29.7,
+      "maxLat": 31.5
+    },
+    {
+      "name": "咸宁市",
+      "province": "湖北省",
+      "minLng": 113.6,
+      "maxLng": 114.9,
+      "minLat": 29.1,
+      "maxLat": 30.0
+    },
+    {
+      "name": "随州市",
+      "province": "湖北省",
+      "minLng": 112.8,
+      "maxLng": 114.3,
+      "minLat": 31.2,
+      "maxLat": 32.2
+    },
+    {
+      "name": "恩施土家族苗族自治州",
+      "province": "湖北省",
+      "minLng": 108.2,
+      "maxLng": 110.5,
+      "minLat": 29.4,
+      "maxLat": 31.4
+    },
+    {
+      "name": "临沂市",
+      "province": "山东省",
+      "minLng": 117.2,
+      "maxLng": 119.3,
+      "minLat": 34.3,
+      "maxLat": 36.2
+    },
+    {
+      "name": "淄博市",
+      "province": "山东省",
+      "minLng": 117.3,
+      "maxLng": 118.6,
+      "minLat": 35.7,
+      "maxLat": 37.2
+    },
+    {
+      "name": "济宁市",
+      "province": "山东省",
+      "minLng": 115.9,
+      "maxLng": 117.5,
+      "minLat": 34.8,
+      "maxLat": 35.9
+    },
+    {
+      "name": "泰安市",
+      "province": "山东省",
+      "minLng": 116.5,
+      "maxLng": 117.8,
+      "minLat": 35.6,
+      "maxLat": 36.6
+    },
+    {
+      "name": "威海市",
+      "province": "山东省",
+      "minLng": 121.3,
+      "maxLng": 122.7,
+      "minLat": 36.8,
+      "maxLat": 37.6
+    },
+    {
+      "name": "日照市",
+      "province": "山东省",
+      "minLng": 118.9,
+      "maxLng": 120.1,
+      "minLat": 35.0,
+      "maxLat": 35.9
+    },
+    {
+      "name": "德州市",
+      "province": "山东省",
+      "minLng": 115.6,
+      "maxLng": 117.5,
+      "minLat": 36.6,
+      "maxLat": 38.0
+    },
+    {
+      "name": "聊城市",
+      "province": "山东省",
+      "minLng": 115.0,
+      "maxLng": 116.5,
+      "minLat": 35.6,
+      "maxLat": 37.0
+    },
+    {
+      "name": "滨州市",
+      "province": "山东省",
+      "minLng": 117.0,
+      "maxLng": 118.5,
+      "minLat": 36.8,
+      "maxLat": 38.1
+    },
+    {
+      "name": "东营市",
+      "province": "山东省",
+      "minLng": 118.0,
+      "maxLng": 119.5,
+      "minLat": 37.1,
+      "maxLat": 38.3
+    },
+    {
+      "name": "菏泽市",
+      "province": "山东省",
+      "minLng": 114.8,
+      "maxLng": 116.5,
+      "minLat": 34.4,
+      "maxLat": 36.0
+    },
+    {
+      "name": "枣庄市",
+      "province": "山东省",
+      "minLng": 116.8,
+      "maxLng": 117.9,
+      "minLat": 34.3,
+      "maxLat": 35.3
+    },
+    {
+      "name": "开封市",
+      "province": "河南省",
+      "minLng": 114.0,
+      "maxLng": 115.1,
+      "minLat": 34.3,
+      "maxLat": 35.0
+    },
+    {
+      "name": "新乡市",
+      "province": "河南省",
+      "minLng": 113.3,
+      "maxLng": 114.7,
+      "minLat": 35.0,
+      "maxLat": 35.7
+    },
+    {
+      "name": "安阳市",
+      "province": "河南省",
+      "minLng": 113.8,
+      "maxLng": 114.8,
+      "minLat": 35.6,
+      "maxLat": 36.4
+    },
+    {
+      "name": "南阳市",
+      "province": "河南省",
+      "minLng": 110.8,
+      "maxLng": 113.3,
+      "minLat": 32.4,
+      "maxLat": 33.8
+    },
+    {
+      "name": "许昌市",
+      "province": "河南省",
+      "minLng": 113.1,
+      "maxLng": 114.3,
+      "minLat": 33.6,
+      "maxLat": 34.4
+    },
+    {
+      "name": "平顶山市",
+      "province": "河南省",
+      "minLng": 112.6,
+      "maxLng": 114.0,
+      "minLat": 33.4,
+      "maxLat": 34.3
+    },
+    {
+      "name": "焦作市",
+      "province": "河南省",
+      "minLng": 112.8,
+      "maxLng": 113.8,
+      "minLat": 34.9,
+      "maxLat": 35.6
+    },
+    {
+      "name": "商丘市",
+      "province": "河南省",
+      "minLng": 114.6,
+      "maxLng": 116.3,
+      "minLat": 33.7,
+      "maxLat": 34.8
+    },
+    {
+      "name": "信阳市",
+      "province": "河南省",
+      "minLng": 113.6,
+      "maxLng": 115.8,
+      "minLat": 31.4,
+      "maxLat": 32.8
+    },
+    {
+      "name": "周口市",
+      "province": "河南省",
+      "minLng": 114.1,
+      "maxLng": 115.8,
+      "minLat": 33.2,
+      "maxLat": 34.4
+    },
+    {
+      "name": "驻马店市",
+      "province": "河南省",
+      "minLng": 113.5,
+      "maxLng": 115.4,
+      "minLat": 32.6,
+      "maxLat": 33.6
+    },
+    {
+      "name": "濮阳市",
+      "province": "河南省",
+      "minLng": 114.7,
+      "maxLng": 116.0,
+      "minLat": 35.3,
+      "maxLat": 36.3
+    },
+    {
+      "name": "漯河市",
+      "province": "河南省",
+      "minLng": 113.6,
+      "maxLng": 114.3,
+      "minLat": 33.4,
+      "maxLat": 33.9
+    },
+    {
+      "name": "鹤壁市",
+      "province": "河南省",
+      "minLng": 113.7,
+      "maxLng": 114.5,
+      "minLat": 35.6,
+      "maxLat": 36.2
+    },
+    {
+      "name": "三门峡市",
+      "province": "河南省",
+      "minLng": 110.2,
+      "maxLng": 111.9,
+      "minLat": 33.7,
+      "maxLat": 35.0
+    },
+    {
+      "name": "济源市",
+      "province": "河南省",
+      "minLng": 112.0,
+      "maxLng": 112.8,
+      "minLat": 34.9,
+      "maxLat": 35.4
+    },
+    {
+      "name": "漳州市",
+      "province": "福建省",
+      "minLng": 116.8,
+      "maxLng": 118.0,
+      "minLat": 23.5,
+      "maxLat": 25.0
+    },
+    {
+      "name": "莆田市",
+      "province": "福建省",
+      "minLng": 118.7,
+      "maxLng": 119.5,
+      "minLat": 25.0,
+      "maxLat": 25.8
+    },
+    {
+      "name": "宁德市",
+      "province": "福建省",
+      "minLng": 118.8,
+      "maxLng": 120.5,
+      "minLat": 26.4,
+      "maxLat": 27.8
+    },
+    {
+      "name": "南平市",
+      "province": "福建省",
+      "minLng": 117.0,
+      "maxLng": 119.3,
+      "minLat": 26.3,
+      "maxLat": 28.4
+    },
+    {
+      "name": "三明市",
+      "province": "福建省",
+      "minLng": 116.8,
+      "maxLng": 118.5,
+      "minLat": 25.6,
+      "maxLat": 27.2
+    },
+    {
+      "name": "龙岩市",
+      "province": "福建省",
+      "minLng": 115.8,
+      "maxLng": 117.6,
+      "minLat": 24.7,
+      "maxLat": 26.1
+    },
+    {
+      "name": "宝鸡市",
+      "province": "陕西省",
+      "minLng": 106.2,
+      "maxLng": 107.8,
+      "minLat": 33.6,
+      "maxLat": 35.2
+    },
+    {
+      "name": "渭南市",
+      "province": "陕西省",
+      "minLng": 109.2,
+      "maxLng": 110.6,
+      "minLat": 34.0,
+      "maxLat": 35.7
+    },
+    {
+      "name": "汉中市",
+      "province": "陕西省",
+      "minLng": 105.5,
+      "maxLng": 108.0,
+      "minLat": 32.5,
+      "maxLat": 34.0
+    },
+    {
+      "name": "榆林市",
+      "province": "陕西省",
+      "minLng": 107.0,
+      "maxLng": 111.2,
+      "minLat": 36.5,
+      "maxLat": 39.8
+    },
+    {
+      "name": "延安市",
+      "province": "陕西省",
+      "minLng": 107.4,
+      "maxLng": 110.5,
+      "minLat": 35.2,
+      "maxLat": 37.5
+    },
+    {
+      "name": "安康市",
+      "province": "陕西省",
+      "minLng": 108.0,
+      "maxLng": 110.3,
+      "minLat": 31.6,
+      "maxLat": 33.7
+    },
+    {
+      "name": "商洛市",
+      "province": "陕西省",
+      "minLng": 108.8,
+      "maxLng": 111.2,
+      "minLat": 33.1,
+      "maxLat": 34.4
+    },
+    {
+      "name": "铜川市",
+      "province": "陕西省",
+      "minLng": 108.3,
+      "maxLng": 109.3,
+      "minLat": 34.8,
+      "maxLat": 35.6
+    },
+    {
+      "name": "蚌埠市",
+      "province": "安徽省",
+      "minLng": 116.9,
+      "maxLng": 117.9,
+      "minLat": 32.7,
+      "maxLat": 33.5
+    },
+    {
+      "name": "阜阳市",
+      "province": "安徽省",
+      "minLng": 114.6,
+      "maxLng": 116.4,
+      "minLat": 32.3,
+      "maxLat": 33.6
+    },
+    {
+      "name": "安庆市",
+      "province": "安徽省",
+      "minLng": 115.7,
+      "maxLng": 117.4,
+      "minLat": 29.7,
+      "maxLat": 31.3
+    },
+    {
+      "name": "淮南市",
+      "province": "安徽省",
+      "minLng": 116.2,
+      "maxLng": 117.4,
+      "minLat": 32.3,
+      "maxLat": 33.1
+    },
+    {
+      "name": "淮北市",
+      "province": "安徽省",
+      "minLng": 116.0,
+      "maxLng": 117.0,
+      "minLat": 33.4,
+      "maxLat": 34.1
+    },
+    {
+      "name": "马鞍山市",
+      "province": "安徽省",
+      "minLng": 118.0,
+      "maxLng": 118.9,
+      "minLat": 31.2,
+      "maxLat": 31.9
+    },
+    {
+      "name": "铜陵市",
+      "province": "安徽省",
+      "minLng": 117.4,
+      "maxLng": 118.2,
+      "minLat": 30.6,
+      "maxLat": 31.2
+    },
+    {
+      "name": "黄山市",
+      "province": "安徽省",
+      "minLng": 117.6,
+      "maxLng": 118.8,
+      "minLat": 29.4,
+      "maxLat": 30.6
+    },
+    {
+      "name": "滁州市",
+      "province": "安徽省",
+      "minLng": 117.2,
+      "maxLng": 119.2,
+      "minLat": 31.8,
+      "maxLat": 33.2
+    },
+    {
+      "name": "宿州市",
+      "province": "安徽省",
+      "minLng": 116.1,
+      "maxLng": 117.8,
+      "minLat": 33.1,
+      "maxLat": 34.4
+    },
+    {
+      "name": "六安市",
+      "province": "安徽省",
+      "minLng": 115.6,
+      "maxLng": 117.4,
+      "minLat": 31.1,
+      "maxLat": 32.6
+    },
+    {
+      "name": "亳州市",
+      "province": "安徽省",
+      "minLng": 115.3,
+      "maxLng": 116.8,
+      "minLat": 33.1,
+      "maxLat": 34.2
+    },
+    {
+      "name": "池州市",
+      "province": "安徽省",
+      "minLng": 116.8,
+      "maxLng": 118.2,
+      "minLat": 29.7,
+      "maxLat": 30.8
+    },
+    {
+      "name": "宣城市",
+      "province": "安徽省",
+      "minLng": 117.8,
+      "maxLng": 119.7,
+      "minLat": 29.8,
+      "maxLat": 31.4
+    },
+    {
+      "name": "保定市",
+      "province": "河北省",
+      "minLng": 113.6,
+      "maxLng": 115.7,
+      "minLat": 38.2,
+      "maxLat": 39.7
+    },
+    {
+      "name": "邯郸市",
+      "province": "河北省",
+      "minLng": 113.6,
+      "maxLng": 115.5,
+      "minLat": 35.8,
+      "maxLat": 37.2
+    },
+    {
+      "name": "秦皇岛市",
+      "province": "河北省",
+      "minLng": 118.8,
+      "maxLng": 119.9,
+      "minLat": 39.4,
+      "maxLat": 40.2
+    },
+    {
+      "name": "邢台市",
+      "province": "河北省",
+      "minLng": 113.6,
+      "maxLng": 115.7,
+      "minLat": 36.5,
+      "maxLat": 37.7
+    },
+    {
+      "name": "张家口市",
+      "province": "河北省",
+      "minLng": 113.5,
+      "maxLng": 116.5,
+      "minLat": 39.5,
+      "maxLat": 42.2
+    },
+    {
+      "name": "承德市",
+      "province": "河北省",
+      "minLng": 115.5,
+      "maxLng": 119.3,
+      "minLat": 40.4,
+      "maxLat": 42.5
+    },
+    {
+      "name": "沧州市",
+      "province": "河北省",
+      "minLng": 115.7,
+      "maxLng": 117.8,
+      "minLat": 37.6,
+      "maxLat": 38.9
+    },
+    {
+      "name": "廊坊市",
+      "province": "河北省",
+      "minLng": 116.2,
+      "maxLng": 117.3,
+      "minLat": 38.8,
+      "maxLat": 39.7
+    },
+    {
+      "name": "衡水市",
+      "province": "河北省",
+      "minLng": 115.0,
+      "maxLng": 116.6,
+      "minLat": 37.2,
+      "maxLat": 38.3
+    },
+    {
+      "name": "鞍山市",
+      "province": "辽宁省",
+      "minLng": 122.4,
+      "maxLng": 123.6,
+      "minLat": 40.6,
+      "maxLat": 41.4
+    },
+    {
+      "name": "抚顺市",
+      "province": "辽宁省",
+      "minLng": 123.3,
+      "maxLng": 124.7,
+      "minLat": 41.3,
+      "maxLat": 42.3
+    },
+    {
+      "name": "丹东市",
+      "province": "辽宁省",
+      "minLng": 123.2,
+      "maxLng": 125.5,
+      "minLat": 39.5,
+      "maxLat": 41.2
+    },
+    {
+      "name": "锦州市",
+      "province": "辽宁省",
+      "minLng": 120.6,
+      "maxLng": 122.3,
+      "minLat": 40.6,
+      "maxLat": 42.0
+    },
+    {
+      "name": "营口市",
+      "province": "辽宁省",
+      "minLng": 121.8,
+      "maxLng": 122.9,
+      "minLat": 40.3,
+      "maxLat": 40.9
+    },
+    {
+      "name": "阜新市",
+      "province": "辽宁省",
+      "minLng": 121.0,
+      "maxLng": 122.7,
+      "minLat": 41.7,
+      "maxLat": 42.8
+    },
+    {
+      "name": "辽阳市",
+      "province": "辽宁省",
+      "minLng": 122.7,
+      "maxLng": 123.7,
+      "minLat": 40.8,
+      "maxLat": 41.5
+    },
+    {
+      "name": "盘锦市",
+      "province": "辽宁省",
+      "minLng": 121.2,
+      "maxLng": 122.5,
+      "minLat": 40.5,
+      "maxLat": 41.3
+    },
+    {
+      "name": "铁岭市",
+      "province": "辽宁省",
+      "minLng": 122.8,
+      "maxLng": 125.0,
+      "minLat": 41.9,
+      "maxLat": 43.4
+    },
+    {
+      "name": "朝阳市",
+      "province": "辽宁省",
+      "minLng": 119.0,
+      "maxLng": 121.2,
+      "minLat": 40.5,
+      "maxLat": 42.4
+    },
+    {
+      "name": "葫芦岛市",
+      "province": "辽宁省",
+      "minLng": 119.2,
+      "maxLng": 121.0,
+      "minLat": 39.8,
+      "maxLat": 41.1
+    },
+    {
+      "name": "本溪市",
+      "province": "辽宁省",
+      "minLng": 123.3,
+      "maxLng": 125.2,
+      "minLat": 40.6,
+      "maxLat": 41.5
+    },
+    {
+      "name": "九江市",
+      "province": "江西省",
+      "minLng": 113.9,
+      "maxLng": 116.5,
+      "minLat": 28.8,
+      "maxLat": 30.1
+    },
+    {
+      "name": "赣州市",
+      "province": "江西省",
+      "minLng": 113.8,
+      "maxLng": 116.0,
+      "minLat": 24.4,
+      "maxLat": 26.0
+    },
+    {
+      "name": "景德镇市",
+      "province": "江西省",
+      "minLng": 117.0,
+      "maxLng": 117.9,
+      "minLat": 29.0,
+      "maxLat": 29.8
+    },
+    {
+      "name": "萍乡市",
+      "province": "江西省",
+      "minLng": 113.4,
+      "maxLng": 114.4,
+      "minLat": 27.3,
+      "maxLat": 28.2
+    },
+    {
+      "name": "新余市",
+      "province": "江西省",
+      "minLng": 114.5,
+      "maxLng": 115.3,
+      "minLat": 27.5,
+      "maxLat": 28.2
+    },
+    {
+      "name": "鹰潭市",
+      "province": "江西省",
+      "minLng": 116.5,
+      "maxLng": 117.4,
+      "minLat": 27.8,
+      "maxLat": 28.6
+    },
+    {
+      "name": "吉安市",
+      "province": "江西省",
+      "minLng": 113.7,
+      "maxLng": 115.8,
+      "minLat": 25.9,
+      "maxLat": 27.9
+    },
+    {
+      "name": "宜春市",
+      "province": "江西省",
+      "minLng": 113.4,
+      "maxLng": 115.6,
+      "minLat": 27.3,
+      "maxLat": 28.9
+    },
+    {
+      "name": "抚州市",
+      "province": "江西省",
+      "minLng": 115.6,
+      "maxLng": 117.2,
+      "minLat": 26.8,
+      "maxLat": 28.4
+    },
+    {
+      "name": "上饶市",
+      "province": "江西省",
+      "minLng": 116.8,
+      "maxLng": 118.6,
+      "minLat": 27.7,
+      "maxLat": 29.9
+    },
+    {
+      "name": "丽江市",
+      "province": "云南省",
+      "minLng": 99.7,
+      "maxLng": 100.8,
+      "minLat": 26.5,
+      "maxLat": 27.5
+    },
+    {
+      "name": "曲靖市",
+      "province": "云南省",
+      "minLng": 103.0,
+      "maxLng": 105.0,
+      "minLat": 24.8,
+      "maxLat": 27.0
+    },
+    {
+      "name": "玉溪市",
+      "province": "云南省",
+      "minLng": 101.8,
+      "maxLng": 103.2,
+      "minLat": 23.5,
+      "maxLat": 24.8
+    },
+    {
+      "name": "保山市",
+      "province": "云南省",
+      "minLng": 98.3,
+      "maxLng": 99.7,
+      "minLat": 24.4,
+      "maxLat": 25.8
+    },
+    {
+      "name": "昭通市",
+      "province": "云南省",
+      "minLng": 102.8,
+      "maxLng": 105.5,
+      "minLat": 26.5,
+      "maxLat": 28.7
+    },
+    {
+      "name": "普洱市",
+      "province": "云南省",
+      "minLng": 99.2,
+      "maxLng": 102.2,
+      "minLat": 22.0,
+      "maxLat": 24.8
+    },
+    {
+      "name": "临沧市",
+      "province": "云南省",
+      "minLng": 98.7,
+      "maxLng": 100.5,
+      "minLat": 23.0,
+      "maxLat": 24.7
+    },
+    {
+      "name": "西双版纳傣族自治州",
+      "province": "云南省",
+      "minLng": 99.5,
+      "maxLng": 101.8,
+      "minLat": 21.0,
+      "maxLat": 22.6
+    },
+    {
+      "name": "德宏傣族景颇族自治州",
+      "province": "云南省",
+      "minLng": 97.3,
+      "maxLng": 99.0,
+      "minLat": 23.7,
+      "maxLat": 25.4
+    },
+    {
+      "name": "红河哈尼族彝族自治州",
+      "province": "云南省",
+      "minLng": 101.5,
+      "maxLng": 104.5,
+      "minLat": 22.3,
+      "maxLat": 24.0
+    },
+    {
+      "name": "文山壮族苗族自治州",
+      "province": "云南省",
+      "minLng": 103.5,
+      "maxLng": 106.2,
+      "minLat": 22.5,
+      "maxLat": 24.3
+    },
+    {
+      "name": "楚雄彝族自治州",
+      "province": "云南省",
+      "minLng": 100.5,
+      "maxLng": 102.8,
+      "minLat": 24.2,
+      "maxLat": 26.3
+    },
+    {
+      "name": "遵义市",
+      "province": "贵州省",
+      "minLng": 105.5,
+      "maxLng": 108.2,
+      "minLat": 27.0,
+      "maxLat": 29.2
+    },
+    {
+      "name": "六盘水市",
+      "province": "贵州省",
+      "minLng": 104.2,
+      "maxLng": 105.6,
+      "minLat": 25.8,
+      "maxLat": 26.8
+    },
+    {
+      "name": "安顺市",
+      "province": "贵州省",
+      "minLng": 105.0,
+      "maxLng": 106.5,
+      "minLat": 25.5,
+      "maxLat": 26.7
+    },
+    {
+      "name": "毕节市",
+      "province": "贵州省",
+      "minLng": 103.5,
+      "maxLng": 106.5,
+      "minLat": 26.0,
+      "maxLat": 27.9
+    },
+    {
+      "name": "铜仁市",
+      "province": "贵州省",
+      "minLng": 107.8,
+      "maxLng": 109.6,
+      "minLat": 27.0,
+      "maxLat": 28.6
+    },
+    {
+      "name": "黔西南布依族苗族自治州",
+      "province": "贵州省",
+      "minLng": 104.0,
+      "maxLng": 106.5,
+      "minLat": 24.5,
+      "maxLat": 26.0
+    },
+    {
+      "name": "黔东南苗族侗族自治州",
+      "province": "贵州省",
+      "minLng": 106.5,
+      "maxLng": 109.5,
+      "minLat": 25.5,
+      "maxLat": 27.7
+    },
+    {
+      "name": "黔南布依族苗族自治州",
+      "province": "贵州省",
+      "minLng": 106.0,
+      "maxLng": 108.5,
+      "minLat": 25.2,
+      "maxLat": 26.9
+    },
+    {
+      "name": "齐齐哈尔市",
+      "province": "黑龙江省",
+      "minLng": 122.8,
+      "maxLng": 125.0,
+      "minLat": 46.3,
+      "maxLat": 48.0
+    },
+    {
+      "name": "牡丹江市",
+      "province": "黑龙江省",
+      "minLng": 128.5,
+      "maxLng": 131.3,
+      "minLat": 43.5,
+      "maxLat": 45.5
+    },
+    {
+      "name": "大庆市",
+      "province": "黑龙江省",
+      "minLng": 123.8,
+      "maxLng": 126.0,
+      "minLat": 45.3,
+      "maxLat": 47.0
+    },
+    {
+      "name": "佳木斯市",
+      "province": "黑龙江省",
+      "minLng": 129.0,
+      "maxLng": 134.0,
+      "minLat": 45.5,
+      "maxLat": 48.5
+    },
+    {
+      "name": "鸡西市",
+      "province": "黑龙江省",
+      "minLng": 130.0,
+      "maxLng": 133.5,
+      "minLat": 44.5,
+      "maxLat": 46.5
+    },
+    {
+      "name": "鹤岗市",
+      "province": "黑龙江省",
+      "minLng": 129.5,
+      "maxLng": 131.5,
+      "minLat": 47.0,
+      "maxLat": 48.5
+    },
+    {
+      "name": "双鸭山市",
+      "province": "黑龙江省",
+      "minLng": 130.5,
+      "maxLng": 134.0,
+      "minLat": 45.8,
+      "maxLat": 47.5
+    },
+    {
+      "name": "伊春市",
+      "province": "黑龙江省",
+      "minLng": 127.0,
+      "maxLng": 131.0,
+      "minLat": 46.5,
+      "maxLat": 49.5
+    },
+    {
+      "name": "七台河市",
+      "province": "黑龙江省",
+      "minLng": 130.0,
+      "maxLng": 131.5,
+      "minLat": 45.5,
+      "maxLat": 46.5
+    },
+    {
+      "name": "黑河市",
+      "province": "黑龙江省",
+      "minLng": 125.0,
+      "maxLng": 129.5,
+      "minLat": 47.0,
+      "maxLat": 51.0
+    },
+    {
+      "name": "绥化市",
+      "province": "黑龙江省",
+      "minLng": 124.5,
+      "maxLng": 127.5,
+      "minLat": 45.5,
+      "maxLat": 48.0
+    },
+    {
+      "name": "大兴安岭地区",
+      "province": "黑龙江省",
+      "minLng": 121.0,
+      "maxLng": 127.5,
+      "minLat": 50.0,
+      "maxLat": 54.0
+    },
+    {
+      "name": "吉林市",
+      "province": "吉林省",
+      "minLng": 125.8,
+      "maxLng": 127.5,
+      "minLat": 42.8,
+      "maxLat": 44.5
+    },
+    {
+      "name": "四平市",
+      "province": "吉林省",
+      "minLng": 123.0,
+      "maxLng": 125.0,
+      "minLat": 42.8,
+      "maxLat": 44.0
+    },
+    {
+      "name": "通化市",
+      "province": "吉林省",
+      "minLng": 125.0,
+      "maxLng": 127.0,
+      "minLat": 41.5,
+      "maxLat": 43.0
+    },
+    {
+      "name": "白山市",
+      "province": "吉林省",
+      "minLng": 126.0,
+      "maxLng": 128.5,
+      "minLat": 41.0,
+      "maxLat": 42.5
+    },
+    {
+      "name": "松原市",
+      "province": "吉林省",
+      "minLng": 123.5,
+      "maxLng": 126.0,
+      "minLat": 44.0,
+      "maxLat": 45.5
+    },
+    {
+      "name": "白城市",
+      "province": "吉林省",
+      "minLng": 122.0,
+      "maxLng": 124.5,
+      "minLat": 44.5,
+      "maxLat": 46.5
+    },
+    {
+      "name": "延边朝鲜族自治州",
+      "province": "吉林省",
+      "minLng": 127.5,
+      "maxLng": 131.5,
+      "minLat": 41.5,
+      "maxLat": 44.5
+    },
+    {
+      "name": "大同市",
+      "province": "山西省",
+      "minLng": 112.5,
+      "maxLng": 114.5,
+      "minLat": 39.5,
+      "maxLat": 40.8
+    },
+    {
+      "name": "临汾市",
+      "province": "山西省",
+      "minLng": 110.2,
+      "maxLng": 112.5,
+      "minLat": 35.2,
+      "maxLat": 37.0
+    },
+    {
+      "name": "运城市",
+      "province": "山西省",
+      "minLng": 110.0,
+      "maxLng": 112.0,
+      "minLat": 34.5,
+      "maxLat": 36.0
+    },
+    {
+      "name": "长治市",
+      "province": "山西省",
+      "minLng": 111.5,
+      "maxLng": 113.5,
+      "minLat": 35.8,
+      "maxLat": 37.2
+    },
+    {
+      "name": "晋城市",
+      "province": "山西省",
+      "minLng": 111.8,
+      "maxLng": 113.5,
+      "minLat": 35.0,
+      "maxLat": 36.3
+    },
+    {
+      "name": "晋中市",
+      "province": "山西省",
+      "minLng": 111.5,
+      "maxLng": 114.0,
+      "minLat": 36.5,
+      "maxLat": 38.0
+    },
+    {
+      "name": "朔州市",
+      "province": "山西省",
+      "minLng": 111.5,
+      "maxLng": 113.5,
+      "minLat": 39.0,
+      "maxLat": 40.5
+    },
+    {
+      "name": "忻州市",
+      "province": "山西省",
+      "minLng": 110.8,
+      "maxLng": 114.0,
+      "minLat": 38.0,
+      "maxLat": 40.0
+    },
+    {
+      "name": "吕梁市",
+      "province": "山西省",
+      "minLng": 110.5,
+      "maxLng": 113.0,
+      "minLat": 36.5,
+      "maxLat": 39.5
+    },
+    {
+      "name": "阳泉市",
+      "province": "山西省",
+      "minLng": 112.8,
+      "maxLng": 114.0,
+      "minLat": 37.5,
+      "maxLat": 38.5
+    },
+    {
+      "name": "天水市",
+      "province": "甘肃省",
+      "minLng": 104.5,
+      "maxLng": 107.0,
+      "minLat": 34.0,
+      "maxLat": 35.5
+    },
+    {
+      "name": "酒泉市",
+      "province": "甘肃省",
+      "minLng": 93.0,
+      "maxLng": 100.0,
+      "minLat": 38.0,
+      "maxLat": 43.0
+    },
+    {
+      "name": "白银市",
+      "province": "甘肃省",
+      "minLng": 103.5,
+      "maxLng": 106.0,
+      "minLat": 35.5,
+      "maxLat": 37.5
+    },
+    {
+      "name": "武威市",
+      "province": "甘肃省",
+      "minLng": 101.0,
+      "maxLng": 104.0,
+      "minLat": 37.0,
+      "maxLat": 39.0
+    },
+    {
+      "name": "张掖市",
+      "province": "甘肃省",
+      "minLng": 97.5,
+      "maxLng": 102.5,
+      "minLat": 37.5,
+      "maxLat": 40.0
+    },
+    {
+      "name": "平凉市",
+      "province": "甘肃省",
+      "minLng": 105.0,
+      "maxLng": 107.5,
+      "minLat": 34.5,
+      "maxLat": 36.0
+    },
+    {
+      "name": "庆阳市",
+      "province": "甘肃省",
+      "minLng": 106.0,
+      "maxLng": 108.5,
+      "minLat": 35.0,
+      "maxLat": 37.5
+    },
+    {
+      "name": "定西市",
+      "province": "甘肃省",
+      "minLng": 103.0,
+      "maxLng": 105.5,
+      "minLat": 34.0,
+      "maxLat": 36.0
+    },
+    {
+      "name": "陇南市",
+      "province": "甘肃省",
+      "minLng": 104.0,
+      "maxLng": 107.0,
+      "minLat": 32.5,
+      "maxLat": 34.5
+    },
+    {
+      "name": "金昌市",
+      "province": "甘肃省",
+      "minLng": 101.5,
+      "maxLng": 102.8,
+      "minLat": 37.8,
+      "maxLat": 38.8
+    },
+    {
+      "name": "嘉峪关市",
+      "province": "甘肃省",
+      "minLng": 97.0,
+      "maxLng": 98.5,
+      "minLat": 39.0,
+      "maxLat": 40.0
+    },
+    {
+      "name": "临夏回族自治州",
+      "province": "甘肃省",
+      "minLng": 102.5,
+      "maxLng": 104.0,
+      "minLat": 34.5,
+      "maxLat": 36.0
+    },
+    {
+      "name": "甘南藏族自治州",
+      "province": "甘肃省",
+      "minLng": 100.0,
+      "maxLng": 103.0,
+      "minLat": 33.0,
+      "maxLat": 36.0
+    },
+    {
+      "name": "包头市",
+      "province": "内蒙古自治区",
+      "minLng": 109.0,
+      "maxLng": 111.0,
+      "minLat": 40.0,
+      "maxLat": 41.5
+    },
+    {
+      "name": "鄂尔多斯市",
+      "province": "内蒙古自治区",
+      "minLng": 106.0,
+      "maxLng": 111.5,
+      "minLat": 37.0,
+      "maxLat": 40.5
+    },
+    {
+      "name": "赤峰市",
+      "province": "内蒙古自治区",
+      "minLng": 116.5,
+      "maxLng": 121.0,
+      "minLat": 41.5,
+      "maxLat": 45.0
+    },
+    {
+      "name": "通辽市",
+      "province": "内蒙古自治区",
+      "minLng": 119.0,
+      "maxLng": 124.0,
+      "minLat": 42.0,
+      "maxLat": 46.0
+    },
+    {
+      "name": "呼伦贝尔市",
+      "province": "内蒙古自治区",
+      "minLng": 115.0,
+      "maxLng": 126.5,
+      "minLat": 47.0,
+      "maxLat": 54.0
+    },
+    {
+      "name": "巴彦淖尔市",
+      "province": "内蒙古自治区",
+      "minLng": 105.0,
+      "maxLng": 109.5,
+      "minLat": 40.0,
+      "maxLat": 42.5
+    },
+    {
+      "name": "乌兰察布市",
+      "province": "内蒙古自治区",
+      "minLng": 110.0,
+      "maxLng": 114.5,
+      "minLat": 40.0,
+      "maxLat": 43.0
+    },
+    {
+      "name": "锡林郭勒盟",
+      "province": "内蒙古自治区",
+      "minLng": 111.5,
+      "maxLng": 120.0,
+      "minLat": 41.5,
+      "maxLat": 46.5
+    },
+    {
+      "name": "兴安盟",
+      "province": "内蒙古自治区",
+      "minLng": 119.5,
+      "maxLng": 124.0,
+      "minLat": 44.5,
+      "maxLat": 47.5
+    },
+    {
+      "name": "阿拉善盟",
+      "province": "内蒙古自治区",
+      "minLng": 97.0,
+      "maxLng": 106.5,
+      "minLat": 37.0,
+      "maxLat": 43.5
+    },
+    {
+      "name": "乌海市",
+      "province": "内蒙古自治区",
+      "minLng": 106.0,
+      "maxLng": 107.2,
+      "minLat": 39.0,
+      "maxLat": 40.0
+    },
+    {
+      "name": "北海市",
+      "province": "广西壮族自治区",
+      "minLng": 108.8,
+      "maxLng": 109.8,
+      "minLat": 21.2,
+      "maxLat": 21.7
+    },
+    {
+      "name": "梧州市",
+      "province": "广西壮族自治区",
+      "minLng": 110.5,
+      "maxLng": 112.0,
+      "minLat": 22.5,
+      "maxLat": 24.0
+    },
+    {
+      "name": "钦州市",
+      "province": "广西壮族自治区",
+      "minLng": 107.5,
+      "maxLng": 109.5,
+      "minLat": 21.5,
+      "maxLat": 22.8
+    },
+    {
+      "name": "贵港市",
+      "province": "广西壮族自治区",
+      "minLng": 109.0,
+      "maxLng": 110.5,
+      "minLat": 22.8,
+      "maxLat": 24.0
+    },
+    {
+      "name": "玉林市",
+      "province": "广西壮族自治区",
+      "minLng": 109.5,
+      "maxLng": 111.5,
+      "minLat": 22.0,
+      "maxLat": 23.5
+    },
+    {
+      "name": "百色市",
+      "province": "广西壮族自治区",
+      "minLng": 104.5,
+      "maxLng": 107.5,
+      "minLat": 22.5,
+      "maxLat": 25.0
+    },
+    {
+      "name": "贺州市",
+      "province": "广西壮族自治区",
+      "minLng": 110.5,
+      "maxLng": 112.5,
+      "minLat": 23.8,
+      "maxLat": 25.2
+    },
+    {
+      "name": "河池市",
+      "province": "广西壮族自治区",
+      "minLng": 106.0,
+      "maxLng": 109.5,
+      "minLat": 23.5,
+      "maxLat": 25.5
+    },
+    {
+      "name": "来宾市",
+      "province": "广西壮族自治区",
+      "minLng": 108.5,
+      "maxLng": 110.5,
+      "minLat": 23.0,
+      "maxLat": 24.5
+    },
+    {
+      "name": "崇左市",
+      "province": "广西壮族自治区",
+      "minLng": 106.0,
+      "maxLng": 108.5,
+      "minLat": 21.5,
+      "maxLat": 23.0
+    },
+    {
+      "name": "防城港市",
+      "province": "广西壮族自治区",
+      "minLng": 107.0,
+      "maxLng": 108.8,
+      "minLat": 21.2,
+      "maxLat": 22.5
+    },
+    {
+      "name": "儋州市",
+      "province": "海南省",
+      "minLng": 109.0,
+      "maxLng": 109.8,
+      "minLat": 19.2,
+      "maxLat": 19.8
+    },
+    {
+      "name": "三沙市",
+      "province": "海南省",
+      "minLng": 110.0,
+      "maxLng": 117.0,
+      "minLat": 5.0,
+      "maxLat": 20.0
+    },
+    {
+      "name": "琼海市",
+      "province": "海南省",
+      "minLng": 110.0,
+      "maxLng": 111.0,
+      "minLat": 18.8,
+      "maxLat": 19.5
+    },
+    {
+      "name": "文昌市",
+      "province": "海南省",
+      "minLng": 110.2,
+      "maxLng": 111.2,
+      "minLat": 19.2,
+      "maxLat": 20.0
+    },
+    {
+      "name": "万宁市",
+      "province": "海南省",
+      "minLng": 110.0,
+      "maxLng": 111.0,
+      "minLat": 18.5,
+      "maxLat": 19.2
+    },
+    {
+      "name": "东方市",
+      "province": "海南省",
+      "minLng": 108.2,
+      "maxLng": 109.2,
+      "minLat": 18.8,
+      "maxLat": 19.5
+    },
+    {
+      "name": "克拉玛依市",
+      "province": "新疆维吾尔自治区",
+      "minLng": 84.0,
+      "maxLng": 86.0,
+      "minLat": 44.8,
+      "maxLat": 46.0
+    },
+    {
+      "name": "喀什市",
+      "province": "新疆维吾尔自治区",
+      "minLng": 75.0,
+      "maxLng": 76.5,
+      "minLat": 39.0,
+      "maxLat": 40.0
+    },
+    {
+      "name": "伊宁市",
+      "province": "新疆维吾尔自治区",
+      "minLng": 80.5,
+      "maxLng": 82.0,
+      "minLat": 43.5,
+      "maxLat": 44.2
+    },
+    {
+      "name": "哈密市",
+      "province": "新疆维吾尔自治区",
+      "minLng": 92.0,
+      "maxLng": 97.0,
+      "minLat": 41.0,
+      "maxLat": 45.5
+    },
+    {
+      "name": "阿克苏市",
+      "province": "新疆维吾尔自治区",
+      "minLng": 79.5,
+      "maxLng": 81.5,
+      "minLat": 40.0,
+      "maxLat": 42.0
+    },
+    {
+      "name": "吐鲁番市",
+      "province": "新疆维吾尔自治区",
+      "minLng": 88.0,
+      "maxLng": 90.0,
+      "minLat": 42.0,
+      "maxLat": 43.5
+    },
+    {
+      "name": "昌吉回族自治州",
+      "province": "新疆维吾尔自治区",
+      "minLng": 85.0,
+      "maxLng": 91.0,
+      "minLat": 43.0,
+      "maxLat": 45.5
+    },
+    {
+      "name": "巴音郭楞蒙古自治州",
+      "province": "新疆维吾尔自治区",
+      "minLng": 82.0,
+      "maxLng": 95.0,
+      "minLat": 35.0,
+      "maxLat": 43.0
+    },
+    {
+      "name": "阿勒泰地区",
+      "province": "新疆维吾尔自治区",
+      "minLng": 85.0,
+      "maxLng": 91.5,
+      "minLat": 45.0,
+      "maxLat": 49.0
+    },
+    {
+      "name": "和田地区",
+      "province": "新疆维吾尔自治区",
+      "minLng": 77.0,
+      "maxLng": 85.0,
+      "minLat": 34.0,
+      "maxLat": 38.0
+    },
+    {
+      "name": "石嘴山市",
+      "province": "宁夏回族自治区",
+      "minLng": 106.0,
+      "maxLng": 107.2,
+      "minLat": 38.8,
+      "maxLat": 39.5
+    },
+    {
+      "name": "吴忠市",
+      "province": "宁夏回族自治区",
+      "minLng": 105.5,
+      "maxLng": 107.5,
+      "minLat": 36.5,
+      "maxLat": 38.0
+    },
+    {
+      "name": "固原市",
+      "province": "宁夏回族自治区",
+      "minLng": 105.0,
+      "maxLng": 107.0,
+      "minLat": 35.0,
+      "maxLat": 36.8
+    },
+    {
+      "name": "中卫市",
+      "province": "宁夏回族自治区",
+      "minLng": 104.5,
+      "maxLng": 106.5,
+      "minLat": 36.5,
+      "maxLat": 38.0
+    },
+    {
+      "name": "海东市",
+      "province": "青海省",
+      "minLng": 100.5,
+      "maxLng": 103.5,
+      "minLat": 35.0,
+      "maxLat": 37.0
+    },
+    {
+      "name": "海北藏族自治州",
+      "province": "青海省",
+      "minLng": 98.0,
+      "maxLng": 102.5,
+      "minLat": 36.0,
+      "maxLat": 39.0
+    },
+    {
+      "name": "黄南藏族自治州",
+      "province": "青海省",
+      "minLng": 100.0,
+      "maxLng": 103.0,
+      "minLat": 34.5,
+      "maxLat": 36.0
+    },
+    {
+      "name": "海南藏族自治州",
+      "province": "青海省",
+      "minLng": 98.5,
+      "maxLng": 102.5,
+      "minLat": 34.5,
+      "maxLat": 37.0
+    },
+    {
+      "name": "果洛藏族自治州",
+      "province": "青海省",
+      "minLng": 96.0,
+      "maxLng": 101.5,
+      "minLat": 32.5,
+      "maxLat": 35.5
+    },
+    {
+      "name": "玉树藏族自治州",
+      "province": "青海省",
+      "minLng": 93.0,
+      "maxLng": 99.0,
+      "minLat": 31.5,
+      "maxLat": 36.0
+    },
+    {
+      "name": "海西蒙古族藏族自治州",
+      "province": "青海省",
+      "minLng": 90.0,
+      "maxLng": 99.5,
+      "minLat": 35.0,
+      "maxLat": 40.0
+    },
+    {
+      "name": "日喀则市",
+      "province": "西藏自治区",
+      "minLng": 87.0,
+      "maxLng": 90.0,
+      "minLat": 27.5,
+      "maxLat": 30.0
+    },
+    {
+      "name": "昌都市",
+      "province": "西藏自治区",
+      "minLng": 95.0,
+      "maxLng": 99.0,
+      "minLat": 28.5,
+      "maxLat": 32.5
+    },
+    {
+      "name": "林芝市",
+      "province": "西藏自治区",
+      "minLng": 92.0,
+      "maxLng": 99.0,
+      "minLat": 26.5,
+      "maxLat": 30.5
+    },
+    {
+      "name": "山南市",
+      "province": "西藏自治区",
+      "minLng": 90.0,
+      "maxLng": 93.0,
+      "minLat": 26.5,
+      "maxLat": 29.5
+    },
+    {
+      "name": "那曲市",
+      "province": "西藏自治区",
+      "minLng": 85.0,
+      "maxLng": 97.0,
+      "minLat": 29.5,
+      "maxLat": 36.5
+    },
+    {
+      "name": "阿里地区",
+      "province": "西藏自治区",
+      "minLng": 78.0,
+      "maxLng": 87.0,
+      "minLat": 29.0,
+      "maxLat": 35.5
+    }
+  ]
+}

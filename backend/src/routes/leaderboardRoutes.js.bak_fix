@@ -1,0 +1,15 @@
+import { Router } from 'express'
+import leaderboardController from '../controllers/leaderboardController.js'
+import { authMiddleware } from '../middlewares/auth.js'
+
+const router = Router()
+
+// 公开接口
+router.get('/total', leaderboardController.getTotalRank)
+router.get('/weekly', leaderboardController.getWeeklyRank)
+router.get('/monthly', leaderboardController.getMonthlyRank)
+
+// 需要登录的接口
+router.get('/my', authMiddleware, leaderboardController.getMyRank)
+
+export default router

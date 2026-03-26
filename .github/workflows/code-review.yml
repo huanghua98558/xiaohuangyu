@@ -1,0 +1,83 @@
+name: Code Review
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        language:
+          - javascript-typescript
+          - python
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+
+  review-checks:
+    name: Review Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Check backend entry
+        working-directory: backend
+        run: node --check src/app.js
+
+      - name: Install admin dependencies
+        working-directory: admin
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Type check admin
+        working-directory: admin
+        run: pnpm ts-check
+
+      - name: Build admin
+        working-directory: admin
+        run: pnpm build
+
+      - name: Install user app dependencies
+        working-directory: user-app
+        run: npm install
+
+      - name: Build user app
+        working-directory: user-app
+        run: npm run build

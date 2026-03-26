@@ -1,0 +1,421 @@
+import supabase from '../utils/supabaseToPrismaAdapter.js'
+import logger from '../utils/logger.js'
+import pointsRewardService from './pointsRewardService.js'
+import { notifyLeaderboardReward } from './notificationService.js'
+
+/**
+ * 排行榜快照服务
+ */
+class LeaderboardSnapshotService {
+  /**
+   * 生成周榜快照
+   */
+  async generateWeeklySnapshot() {
+    const now = new Date()
+    
+    // 计算上周时间范围
+    const dayOfWeek = now.getDay() || 7
+    const lastWeekEnd = new Date(now)
+    lastWeekEnd.setDate(now.getDate() - dayOfWeek)
+    lastWeekEnd.setHours(23, 59, 59, 999)
+    
+    const lastWeekStart = new Date(lastWeekEnd)
+    lastWeekStart.setDate(lastWeekEnd.getDate() - 6)
+    lastWeekStart.setHours(0, 0, 0, 0)
+    
+    // 生成快照周期标识
+    const weekNumber = this.getWeekNumber(lastWeekStart)
+    const periodKey = `${lastWeekStart.getFullYear()}-W${String(weekNumber).padStart(2, '0')}`
+    
+    logger.info(`开始生成周榜快照: ${periodKey}`)
+    
+    // 查询上周积分排名
+    const { data: weeklyClaims, error } = await supabase
+      .from('claims')
+      .select('user_id, reward')
+      .in('status', ['approved', 'done'])
+      .gte('reviewed_at', lastWeekStart.toISOString())
+      .lte('reviewed_at', lastWeekEnd.toISOString())
+
+    // 按用户聚合
+    const userStatsMap = new Map()
+    for (const claim of (weeklyClaims || [])) {
+      if (!userStatsMap.has(claim.user_id)) {
+        userStatsMap.set(claim.user_id, { totalPoints: 0, taskCount: 0 })
+      }
+      const stats = userStatsMap.get(claim.user_id)
+      stats.totalPoints += claim.reward || 0
+      stats.taskCount++
+    }
+
+    // 排序并取前100
+    const weeklyRankings = Array.from(userStatsMap.entries())
+      .map(([userId, stats]) => ({
+        userId,
+        totalPoints: stats.totalPoints,
+        taskCount: stats.taskCount
+      }))
+      .sort((a, b) => b.totalPoints - a.totalPoints)
+      .slice(0, 100)
+    
+    if (weeklyRankings.length === 0) {
+      logger.info(`周榜快照 ${periodKey} 无数据`)
+      return null
+    }
+    
+    // 创建快照
+    const { data: snapshot, error: insertError } = await supabase
+      .from('leaderboard_snapshots')
+      .insert({
+        type: 'weekly',
+        period_key: periodKey,
+        start_date: lastWeekStart.toISOString(),
+        end_date: lastWeekEnd.toISOString(),
+        total_participants: weeklyRankings.length,
+        snapshot_data: JSON.stringify(weeklyRankings.map((r, i) => ({
+          rank: i + 1,
+          userId: r.userId,
+          points: r.totalPoints,
+          taskCount: r.taskCount
+        })))
+      })
+      .select()
+      .single()
+    
+    if (insertError) {
+      logger.error('创建周榜快照失败:', insertError)
+      return null
+    }
+    
+    logger.info(`周榜快照 ${periodKey} 创建成功，共 ${weeklyRankings.length} 人`)
+    
+    // 发放奖励
+    await this.distributeRewards(snapshot.id, 'weekly', weeklyRankings, periodKey)
+    
+    return snapshot
+  }
+  
+  /**
+   * 生成月榜快照
+   */
+  async generateMonthlySnapshot() {
+    const now = new Date()
+    
+    // 计算上月时间范围
+    const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999)
+    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0)
+    
+    // 生成快照周期标识
+    const periodKey = `${lastMonthStart.getFullYear()}-M${String(lastMonthStart.getMonth() + 1).padStart(2, '0')}`
+    
+    logger.info(`开始生成月榜快照: ${periodKey}`)
+    
+    // 查询上月积分排名
+    const { data: monthlyClaims, error } = await supabase
+      .from('claims')
+      .select('user_id, reward')
+      .in('status', ['approved', 'done'])
+      .gte('reviewed_at', lastMonthStart.toISOString())
+      .lte('reviewed_at', lastMonthEnd.toISOString())
+
+    // 按用户聚合
+    const userStatsMap = new Map()
+    for (const claim of (monthlyClaims || [])) {
+      if (!userStatsMap.has(claim.user_id)) {
+        userStatsMap.set(claim.user_id, { totalPoints: 0, taskCount: 0 })
+      }
+      const stats = userStatsMap.get(claim.user_id)
+      stats.totalPoints += claim.reward || 0
+      stats.taskCount++
+    }
+
+    // 排序并取前100
+    const monthlyRankings = Array.from(userStatsMap.entries())
+      .map(([userId, stats]) => ({
+        userId,
+        totalPoints: stats.totalPoints,
+        taskCount: stats.taskCount
+      }))
+      .sort((a, b) => b.totalPoints - a.totalPoints)
+      .slice(0, 100)
+    
+    if (monthlyRankings.length === 0) {
+      logger.info(`月榜快照 ${periodKey} 无数据`)
+      return null
+    }
+    
+    // 创建快照
+    const { data: snapshot, error: insertError } = await supabase
+      .from('leaderboard_snapshots')
+      .insert({
+        type: 'monthly',
+        period_key: periodKey,
+        start_date: lastMonthStart.toISOString(),
+        end_date: lastMonthEnd.toISOString(),
+        total_participants: monthlyRankings.length,
+        snapshot_data: JSON.stringify(monthlyRankings.map((r, i) => ({
+          rank: i + 1,
+          userId: r.userId,
+          points: r.totalPoints,
+          taskCount: r.taskCount
+        })))
+      })
+      .select()
+      .single()
+    
+    if (insertError) {
+      logger.error('创建月榜快照失败:', insertError)
+      return null
+    }
+    
+    logger.info(`月榜快照 ${periodKey} 创建成功，共 ${monthlyRankings.length} 人`)
+    
+    // 发放奖励
+    await this.distributeRewards(snapshot.id, 'monthly', monthlyRankings, periodKey)
+    
+    return snapshot
+  }
+  
+  /**
+   * 发放排行榜奖励
+   */
+  async distributeRewards(snapshotId, type, rankings, periodKey = '') {
+    // 从系统配置读取奖励值
+    const configs = await pointsRewardService.getConfigs()
+    
+    // 奖励配置 - 从系统配置读取
+    // 周榜：第1名、第2名、第3-5名
+    // 月榜：第1名、第2名、第3-5名
+    const rewardConfig = type === 'weekly' ? {
+      1: configs.rank_weekly_top1 || 300,
+      2: configs.rank_weekly_top2 || 100,
+      3: configs.rank_weekly_top3 || 50,  // 3-5名
+    } : {
+      1: configs.rank_monthly_top1 || 2000,
+      2: configs.rank_monthly_top2 || 1000,
+      3: configs.rank_monthly_top3 || 500,  // 3-5名
+    }
+    
+    const rewards = []
+    
+    for (let i = 0; i < rankings.length; i++) {
+      const rank = i + 1
+      const userId = rankings[i].userId
+      
+      // 只有前5名有奖励
+      if (rank > 5) break
+      
+      // 计算奖励积分
+      let points = 0
+      if (rank <= 2) {
+        points = rewardConfig[rank] || 0
+      } else {
+        points = rewardConfig[3] || 0  // 3-5名使用相同积分
+      }
+      
+      if (points > 0) {
+        // 创建奖励记录
+        const { data: reward, error: rewardError } = await supabase
+          .from('leaderboard_rewards')
+          .insert({
+            snapshot_id: snapshotId,
+            user_id: userId,
+            rank,
+            points,
+            status: 'settled',
+            settled_at: new Date().toISOString()
+          })
+          .select()
+          .single()
+        
+        // 获取用户当前积分
+        const { data: user } = await supabase
+          .from('users')
+          .select('points, total_points')
+          .eq('id', userId)
+          .single()
+
+        // 增加用户积分（同时更新 points 和 total_points）
+        await supabase
+          .from('users')
+          .update({ 
+            points: (user?.points || 0) + points,
+            total_points: (user?.total_points || user?.points || 0) + points
+          })
+          .eq('id', userId)
+        
+        // 记录到 points_logs 表（统一积分流水）
+        await supabase
+          .from('points_logs')
+          .insert({
+            user_id: userId,
+            type: 'reward',
+            change: points,
+            balance: (user?.points || 0) + points,
+            reason: `${type === 'weekly' ? '周榜' : '月榜'}奖励`,
+            desc: `${type === 'weekly' ? '周榜' : '月榜'}第${rank}名奖励`
+          })
+        
+        // 记录到 records 表（兼容旧逻辑）
+        await supabase
+          .from('records')
+          .insert({
+            user_id: userId,
+            type: 'reward',
+            desc: `${type === 'weekly' ? '周榜' : '月榜'}第${rank}名奖励`,
+            points,
+            balance: 0
+          })
+        
+        if (reward) {
+          rewards.push(reward)
+        }
+        logger.info(`发放奖励: 用户${userId} ${type === 'weekly' ? '周榜' : '月榜'}第${rank}名 +${points}积分`)
+
+        try {
+          await notifyLeaderboardReward(userId, {
+            type,
+            rank,
+            points,
+            periodKey,
+          })
+        } catch (notifyError) {
+          logger.error(`发送排行榜奖励通知失败: 用户${userId}`, notifyError)
+        }
+      }
+    }
+    
+    return rewards
+  }
+  
+  /**
+   * 获取周数
+   */
+  getWeekNumber(date) {
+    const firstDayOfYear = new Date(date.getFullYear(), 0, 1)
+    const pastDaysOfYear = (date - firstDayOfYear) / 86400000
+    return Math.ceil((pastDaysOfYear + firstDayOfYear.getDay() + 1) / 7)
+  }
+  
+  /**
+   * 获取快照历史列表
+   */
+  async getSnapshots(type, page = 1, size = 20) {
+    const offset = (page - 1) * size
+    
+    let query = supabase
+      .from('leaderboard_snapshots')
+      .select('*', { count: 'exact' })
+    
+    if (type) {
+      query = query.eq('type', type)
+    }
+
+    const { data: list, count, error } = await query
+      .order('created_at', { ascending: false })
+      .range(offset, offset + size - 1)
+    
+    return {
+      list: (list || []).map(s => ({
+        id: s.id,
+        type: s.type,
+        periodKey: s.period_key,
+        startDate: s.start_date,
+        endDate: s.end_date,
+        totalParticipants: s.total_participants,
+        createdAt: s.created_at
+      })),
+      total: count || 0,
+      page,
+      size
+    }
+  }
+  
+  /**
+   * 获取快照详情
+   */
+  async getSnapshotDetail(snapshotId) {
+    const { data: snapshot, error } = await supabase
+      .from('leaderboard_snapshots')
+      .select('*')
+      .eq('id', snapshotId)
+      .single()
+    
+    if (!snapshot) {
+      throw new Error('快照不存在')
+    }
+    
+    const rankingData = JSON.parse(snapshot.snapshot_data)
+    
+    // 获取用户信息
+    const userIds = rankingData.map(r => r.userId)
+    const { data: users } = await supabase
+      .from('users')
+      .select('id, username, level')
+      .in('id', userIds)
+    
+    const userMap = new Map((users || []).map(u => [u.id, u]))
+    
+    // 获取奖励信息
+    const { data: rewards } = await supabase
+      .from('leaderboard_rewards')
+      .select('user_id, rank, points')
+      .eq('snapshot_id', snapshotId)
+    
+    const rewardMap = new Map((rewards || []).map(r => [`${r.user_id}-${r.rank}`, r.points]))
+    
+    return {
+      id: snapshot.id,
+      type: snapshot.type,
+      periodKey: snapshot.period_key,
+      startDate: snapshot.start_date,
+      endDate: snapshot.end_date,
+      totalParticipants: snapshot.total_participants,
+      createdAt: snapshot.created_at,
+      rankings: rankingData.map(r => ({
+        ...r,
+        username: userMap.get(r.userId)?.username || '未知用户',
+        level: userMap.get(r.userId)?.level || 1,
+        rewardPoints: rewardMap.get(`${r.userId}-${r.rank}`) || 0
+      }))
+    }
+  }
+  
+  /**
+   * 获取用户的排行榜奖励记录
+   */
+  async getUserRewards(userId, page = 1, size = 20) {
+    const offset = (page - 1) * size
+
+    const { data: rewards, count, error } = await supabase
+      .from('leaderboard_rewards')
+      .select(`
+        id,
+        rank,
+        points,
+        status,
+        created_at,
+        leaderboard_snapshots:snapshot_id (type, period_key)
+      `, { count: 'exact' })
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + size - 1)
+    
+    return {
+      list: (rewards || []).map(r => ({
+        id: r.id,
+        type: r.leaderboard_snapshots?.type,
+        periodKey: r.leaderboard_snapshots?.period_key,
+        rank: r.rank,
+        points: r.points,
+        status: r.status,
+        createdAt: r.created_at
+      })),
+      total: count || 0,
+      page,
+      size
+    }
+  }
+}
+
+export default new LeaderboardSnapshotService()

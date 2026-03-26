@@ -1,0 +1,103 @@
+/**
+ * 封控账号管理路由
+ */
+
+import express from 'express'
+import { authMiddleware, adminOnly } from '../middlewares/auth.js'
+import {
+  getBlockedAccounts,
+  getBlockStats,
+  confirmBlock,
+  markAsFalsePositive,
+  checkAccountBlocked,
+} from '../services/blockedAccountsService.js'
+import { BLOCK_STATUS } from '../constants/taskActions.js'
+
+const router = express.Router()
+
+// 所有路由需要管理员权限
+router.use(authMiddleware, adminOnly)
+
+/**
+ * GET /api/blocked-accounts/stats
+ */
+router.get('/stats', async (req, res) => {
+  try {
+    const stats = await getBlockStats()
+    res.json({ code: 0, data: stats })
+  } catch (error) {
+    console.error('[BlockedAccounts] 获取统计失败:', error)
+    res.status(500).json({ code: 500, message: error.message })
+  }
+})
+
+/**
+ * GET /api/blocked-accounts/check
+ */
+router.get('/check', async (req, res) => {
+  try {
+    const { platform, platformUserId } = req.query
+    if (!platform || !platformUserId) {
+      return res.status(400).json({ code: 400, message: '缺少必要参数' })
+    }
+    const result = await checkAccountBlocked(platform, platformUserId)
+    res.json({ code: 0, data: result })
+  } catch (error) {
+    console.error('[BlockedAccounts] 检查失败:', error)
+    res.status(500).json({ code: 500, message: error.message })
+  }
+})
+
+/**
+ * GET /api/blocked-accounts
+ */
+router.get('/', async (req, res) => {
+  try {
+    const { status, platform, userId, page = 1, pageSize = 20 } = req.query
+    const result = await getBlockedAccounts({
+      status,
+      platform,
+      userId,
+      page: parseInt(page),
+      pageSize: parseInt(pageSize),
+    })
+    res.json({ code: 0, data: result })
+  } catch (error) {
+    console.error('[BlockedAccounts] 查询列表失败:', error)
+    res.status(500).json({ code: 500, message: error.message })
+  }
+})
+
+/**
+ * POST /api/blocked-accounts/:id/confirm
+ */
+router.post('/:id/confirm', async (req, res) => {
+  try {
+    const { id } = req.params
+    const { notes } = req.body
+    const adminId = req.userId // 从认证中间件获取
+    const result = await confirmBlock(id, adminId, notes)
+    res.json({ code: 0, data: result, message: '已确认封控' })
+  } catch (error) {
+    console.error('[BlockedAccounts] 确认失败:', error)
+    res.status(500).json({ code: 500, message: error.message })
+  }
+})
+
+/**
+ * POST /api/blocked-accounts/:id/false-positive
+ */
+router.post('/:id/false-positive', async (req, res) => {
+  try {
+    const { id } = req.params
+    const { notes } = req.body
+    const adminId = req.userId // 从认证中间件获取
+    const result = await markAsFalsePositive(id, adminId, notes)
+    res.json({ code: 0, data: result, message: '已标记为误报' })
+  } catch (error) {
+    console.error('[BlockedAccounts] 标记误报失败:', error)
+    res.status(500).json({ code: 500, message: error.message })
+  }
+})
+
+export default router

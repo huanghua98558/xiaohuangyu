@@ -1,0 +1,19 @@
+import { Router } from 'express'
+import notificationController from '../controllers/notificationController.js'
+import { authMiddleware, adminOnly } from '../middlewares/auth.js'
+
+const router = Router()
+
+// 用户端接口
+router.use(authMiddleware)
+
+router.get('/', notificationController.getNotifications)
+router.get('/unread-count', notificationController.getUnreadCount)
+router.put('/:id/read', notificationController.markAsRead)
+router.put('/read-all', notificationController.markAllAsRead)
+router.delete('/:id', notificationController.deleteNotification)
+
+// 管理员接口
+router.post('/announcement', adminOnly, notificationController.sendAnnouncement)
+
+export default router

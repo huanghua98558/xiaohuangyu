@@ -1,0 +1,77 @@
+import prisma from '../utils/prisma.js'
+import express from 'express'
+import { getOverview, getReviewerStats, getPublisherStats, getTrendData } from '../controllers/statisticsController.js'
+import { authMiddleware, adminOnly } from '../middlewares/auth.js'
+
+const router = express.Router()
+
+// 所有路由都需要先认证，再检查管理员权限
+router.use(authMiddleware)
+router.use(adminOnly)
+
+// 获取概览统计
+router.get('/overview', async (req, res) => {
+  try {
+    const supabase = (await import('../utils/supabaseToPrismaAdapter.js')).default
+    const [userCount, taskCount, claimCount] = await Promise.all([
+      supabase.from('users').select('*', { count: 'exact', head: true }).then(r => r.count || 0).catch(() => 0),
+      supabase.from('tasks').select('*', { count: 'exact', head: true }).then(r => r.count || 0).catch(() => 0),
+      supabase.from('claims').select('*', { count: 'exact', head: true }).then(r => r.count || 0).catch(() => 0),
+    ])
+    res.json({ code: 0, data: { users: userCount, tasks: taskCount, claims: claimCount } })
+  } catch (err) {
+    res.json({ code: 0, data: { users: 0, tasks: 0, claims: 0 } })
+  }
+})
+
+router.get('/hourly', authMiddleware, adminOnly, async (req, res, next) => {
+  try {
+    const rows = await prisma.$queryRawUnsafe("SELECT EXTRACT(HOUR FROM claimed_at)::int as hour, COUNT(*)::int as count FROM claims WHERE claimed_at >= NOW() - INTERVAL '24 hours' GROUP BY 1 ORDER BY 1").catch(() => [])
+    const hourly = Array.from({length: 24}, (_, i) => ({ hour: i, count: 0 }))
+    rows.forEach(r => { if (r.hour >= 0 && r.hour < 24) hourly[r.hour].count = r.count })
+    res.json({ code: 0, data: hourly })
+  } catch (e) { next(e) }
+})
+
+router.get('/platform', authMiddleware, adminOnly, async (req, res, next) => {
+  try {
+    const rows = await prisma.$queryRawUnsafe("SELECT COALESCE(platform, 'unknown') as platform, COUNT(*)::int as count FROM tasks GROUP BY 1").catch(() => [])
+    res.json({ code: 0, data: rows })
+  } catch (e) { next(e) }
+})
+
+router.get('/users', authMiddleware, adminOnly, async (req, res, next) => {
+  try {
+    const [total, active, today] = await Promise.all([
+      prisma.$queryRawUnsafe("SELECT COUNT(*)::int as c FROM users").then(r => r[0]?.c || 0).catch(() => 0),
+      prisma.$queryRawUnsafe("SELECT COUNT(*)::int as c FROM users WHERE updated_at >= NOW() - INTERVAL '7 days'").then(r => r[0]?.c || 0).catch(() => 0),
+      prisma.$queryRawUnsafe("SELECT COUNT(*)::int as c FROM users WHERE created_at >= CURRENT_DATE").then(r => r[0]?.c || 0).catch(() => 0),
+    ])
+    res.json({ code: 0, data: { total, active, todayNew: today } })
+  } catch (e) { next(e) }
+})
+
+
+router.get('/daily', async (req, res, next) => {
+  try {
+    const days = parseInt(req.query.days) || 7
+    const result = []
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date(); d.setDate(d.getDate() - i)
+      const dateStr = d.toISOString().split('T')[0]
+      const nextD = new Date(d); nextD.setDate(nextD.getDate() + 1)
+      const nextStr = nextD.toISOString().split('T')[0]
+      const [newUsers, claims, completions] = await Promise.all([
+        prisma.$queryRawUnsafe("SELECT COUNT(*)::int as c FROM users WHERE created_at >= $1 AND created_at < $2", dateStr, nextStr).then(r => r[0]?.c || 0).catch(() => 0),
+        prisma.$queryRawUnsafe("SELECT COUNT(*)::int as c FROM claims WHERE claimed_at >= $1 AND claimed_at < $2", dateStr, nextStr).then(r => r[0]?.c || 0).catch(() => 0),
+        prisma.$queryRawUnsafe("SELECT COUNT(*)::int as c FROM claims WHERE status IN ('approved', 'done') AND reviewed_at >= $1 AND reviewed_at < $2", dateStr, nextStr).then(r => r[0]?.c || 0).catch(() => 0),
+      ])
+      result.push({ date: dateStr, newUsers, claims, completions })
+    }
+    res.json({ code: 0, data: result })
+  } catch (e) {
+    res.json({ code: 0, data: [] })
+  }
+})
+
+export default router

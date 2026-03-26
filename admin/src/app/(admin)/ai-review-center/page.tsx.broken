@@ -1,0 +1,710 @@
+'use client'
+
+import { useState, useEffect } from 'react'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Textarea } from '@/components/ui/textarea'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  CheckCircle, XCircle, Bot, RefreshCw, Scan, Globe, ClipboardCheck,
+  ChevronLeft, ChevronRight, Eye, Clock, TrendingUp,
+  FileText, ExternalLink, Loader2, AlertCircle
+} from 'lucide-react'
+import { toast } from 'sonner'
+import { cn } from '@/lib/utils'
+
+// 类型定义
+interface Task { id: number; title: string; platform: string; action: string }
+interface UserInfo { id: number; username: string }
+interface ReviewItem {
+  id: number
+  user_id: number
+  task_id: number
+  screenshots: string
+  status: string
+  ai_review_status?: string
+  ai_confidence?: number
+  ai_reason?: string
+  image_review_status?: string
+  image_review_reason?: string
+  link_review_status?: string
+  link_review_reason?: string
+  claimed_at: string
+  tasks?: Task
+  users?: UserInfo
+}
+interface LogItem {
+  id: number
+  user_id: number
+  task_id: number
+  screenshots: string
+  status: string
+  ai_review_status: string
+  ai_confidence?: number
+  ai_reason?: string
+  review_note?: string
+  claimed_at: string
+  reviewed_at?: string
+  tasks?: Task
+  users?: UserInfo
+}
+interface Stats {
+  total: number
+  pending: number
+  aiApproved: number
+  aiRejected: number
+  manual: number
+  autoRate: number
+  imageReviewing?: number
+  linkReviewing?: number
+  rejected?: number
+}
+interface ServiceStatus {
+  ocr: { healthy: boolean; url: string }
+  yolo: { healthy: boolean; url: string }
+  browser: { healthy: boolean; url: string }
+}
+
+// 常量
+const PLATFORM_NAMES: Record<string, string> = {
+  xiaohongshu: '小红书', douyin: '抖音', weibo: '微博', kuaishou: '快手', bilibili: 'B站'
+}
+const PLATFORM_COLORS: Record<string, string> = {
+  xiaohongshu: 'text-rose-400', douyin: 'text-cyan-400', weibo: 'text-orange-400',
+  kuaishou: 'text-amber-400', bilibili: 'text-sky-400'
+}
+const ACTION_NAMES: Record<string, string> = {
+  like: '点赞', comment: '评论', follow: '关注', collect: '收藏',
+  short_video_research: '短视频体验', like_collect: '点赞+收藏', like_follow: '点赞+关注'
+}
+const STATUS_CONFIG: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
+  'image_reviewing': { label: '图片审核中', color: 'bg-yellow-500/10 text-yellow-600 border-yellow-500/30', icon: <Scan className="w-3 h-3" /> },
+  'link_reviewing': { label: '链接验证中', color: 'bg-purple-500/10 text-purple-600 border-purple-500/30', icon: <Globe className="w-3 h-3" /> },
+  'pending': { label: 'AI审核中', color: 'bg-blue-500/10 text-blue-600 border-blue-500/30', icon: <Bot className="w-3 h-3" /> },
+  'manual': { label: '待人工', color: 'bg-orange-500/10 text-orange-600 border-orange-500/30', icon: <ClipboardCheck className="w-3 h-3" /> },
+  'approved': { label: '已通过', color: 'bg-green-500/10 text-green-600 border-green-500/30', icon: <CheckCircle className="w-3 h-3" /> },
+  'rejected': { label: '已拒绝', color: 'bg-red-500/10 text-red-600 border-red-500/30', icon: <XCircle className="w-3 h-3" /> },
+}
+
+export default function AIReviewCenterPage() {
+  const [activeTab, setActiveTab] = useState('image')
+  const [imageQueue, setImageQueue] = useState<ReviewItem[]>([])
+  const [linkQueue, setLinkQueue] = useState<ReviewItem[]>([])
+  const [manualQueue, setManualQueue] = useState<ReviewItem[]>([])
+  const [logsQueue, setLogsQueue] = useState<LogItem[]>([])
+  const [rejectedQueue, setRejectedQueue] = useState<LogItem[]>([])
+  const [stats, setStats] = useState<Stats>({ total: 0, pending: 0, aiApproved: 0, aiRejected: 0, manual: 0, autoRate: 0 })
+  const [serviceStatus, setServiceStatus] = useState<ServiceStatus>({
+    ocr: { healthy: true, url: '9001' },
+    yolo: { healthy: true, url: '8003' },
+    browser: { healthy: true, url: '8002' }
+  })
+  const [loading, setLoading] = useState(true)
+  const [selectedItem, setSelectedItem] = useState<ReviewItem | null>(null)
+  const [showDetail, setShowDetail] = useState(false)
+  const [showImagePreview, setShowImagePreview] = useState(false)
+  const [previewImages, setPreviewImages] = useState<string[]>([])
+  const [previewIndex, setPreviewIndex] = useState(0)
+  const [reviewNote, setReviewNote] = useState('')
+  const [processing, setProcessing] = useState(false)
+
+  const getAuthHeaders = () => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('admin_token') : null
+    return { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) }
+  }
+
+  // 加载所有数据
+  const loadAllData = async () => {
+    try {
+      const headers = getAuthHeaders()
+      
+      // 并行请求
+      const [statsRes, imageRes, linkRes, manualRes, rejectedRes, logsRes] = await Promise.all([
+        fetch('/api/ai/reviewer/stats', { headers }),
+        fetch('/api/ai/reviewer/queue?status=image_reviewing', { headers }),
+        fetch('/api/ai/reviewer/queue?status=link_reviewing', { headers }),
+        fetch('/api/ai/reviewer/queue?status=manual', { headers }),
+        fetch('/api/ai/reviewer/queue?status=rejected', { headers }),
+        fetch('/api/ai/reviewer/logs', { headers })
+      ])
+      
+      const [statsData, imageData, linkData, manualData, rejectedData, logsData] = await Promise.all([
+        statsRes.json(), imageRes.json(), linkRes.json(), manualRes.json(), rejectedRes.json(), logsRes.json()
+      ])
+      
+      if (statsData.code === 200) setStats(statsData.data)
+      if (imageData.code === 200) setImageQueue(imageData.data.list || [])
+      if (linkData.code === 200) setLinkQueue(linkData.data.list || [])
+      if (manualData.code === 200) setManualQueue(manualData.data.list || [])
+      if (rejectedData.code === 200) setRejectedQueue(rejectedData.data.list || [])
+      if (logsData.code === 200) setLogsQueue(logsData.data.list || [])
+      
+      // 加载服务状态
+      await loadServiceStatus()
+    } catch (e) {
+      console.error('加载数据失败:', e)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // 加载服务状态
+  const loadServiceStatus = async () => {
+    try {
+      const res = await fetch('/api/ai/admin/browser-health', { headers: getAuthHeaders() })
+      const data = await res.json()
+      if (data.code === 200 && data.data) {
+        setServiceStatus({
+          ocr: { healthy: true, url: '9001' },
+          yolo: { healthy: true, url: '8003' },
+          browser: { healthy: data.data.healthy || false, url: '8002' }
+        })
+      }
+    } catch (e) {
+      console.error('加载服务状态失败:', e)
+    }
+  }
+
+  useEffect(() => {
+    loadAllData()
+    const t = setInterval(loadAllData, 30000)
+    return () => clearInterval(t)
+  }, [])
+
+  // 人工审核操作
+  const handleManualReview = async (claimId: number, action: 'approve' | 'reject', note?: string) => {
+    if (processing) return
+    setProcessing(true)
+    try {
+      const res = await fetch('/api/ai/reviewer/manual', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ claimId, action, note: note || '' })
+      })
+      const data = await res.json()
+      if (data.code === 200) {
+        toast.success(action === 'approve' ? '已通过' : '已拒绝')
+        setShowDetail(false)
+        setSelectedItem(null)
+        setReviewNote('')
+        await loadAllData()
+      } else {
+        toast.error(data.message || '操作失败')
+      }
+    } catch (e) {
+      toast.error('操作失败')
+    } finally {
+      setProcessing(false)
+    }
+  }
+
+  // 触发队列处理
+  const triggerProcess = async () => {
+    try {
+      const res = await fetch('/api/ai/reviewer/batch-review', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ count: 10 })
+      })
+      const data = await res.json()
+      if (data.code === 200) {
+        toast.success(`处理完成: ${data.data.processed}条`)
+        await loadAllData()
+      }
+    } catch (e) {
+      toast.error('触发处理失败')
+    }
+  }
+
+  // 工具函数
+  const openImagePreview = (images: string[], index: number = 0) => {
+    setPreviewImages(images)
+    setPreviewIndex(index)
+    setShowImagePreview(true)
+  }
+  
+  const parseScreenshots = (s: string | null | undefined): string[] => {
+    if (!s) return []
+    try { return JSON.parse(s) } catch { return [] }
+  }
+  
+  const getStatusBadge = (item: ReviewItem) => {
+    const statusKey = item.status === 'image_reviewing' ? 'image_reviewing' :
+                      item.status === 'link_reviewing' ? 'link_reviewing' :
+                      item.ai_review_status || 'pending'
+    const config = STATUS_CONFIG[statusKey]
+    if (!config) return null
+    return (
+      <Badge variant="outline" className={cn("text-[10px] h-5 px-1.5 gap-1", config.color)}>
+        {config.icon}
+        {config.label}
+      </Badge>
+    )
+  }
+  
+  const getTaskLink = (item: ReviewItem | LogItem) => `/admin/tasks?taskId=${item.task_id}`
+
+  const getRelativeTime = (dateStr: string) => {
+    if (!dateStr) return '-'
+    const diff = Date.now() - new Date(dateStr).getTime()
+    const mins = Math.floor(diff / 60000)
+    if (mins < 60) return `${mins}分钟前`
+    const hours = Math.floor(mins / 60)
+    if (hours < 24) return `${hours}小时前`
+    return `${Math.floor(hours / 24)}天前`
+  }
+
+  // Tab配置 - 新的审核流程
+  const tabs = [
+    { key: 'image', label: '图片审核', count: stats.imageReviewing || imageQueue.length, icon: Scan },
+    { key: 'link', label: '链接验证', count: stats.linkReviewing || linkQueue.length, icon: Globe },
+    { key: 'manual', label: '待人工', count: stats.manual || manualQueue.length, icon: ClipboardCheck },
+    { key: 'rejected', label: '已拒绝', count: stats.rejected || 0, icon: XCircle },
+    { key: 'logs', label: '已处理', count: logsQueue.length, icon: FileText },
+  ]
+
+  // 获取当前列表
+  const getCurrentList = () => {
+    switch (activeTab) {
+      case 'image': return imageQueue
+      case 'link': return linkQueue
+      case 'manual': return manualQueue
+      case 'rejected': return rejectedQueue
+      case 'logs': return logsQueue
+      default: return []
+    }
+  }
+
+  // 渲染列表项
+  const renderListItem = (item: ReviewItem) => {
+    const screenshots = parseScreenshots(item.screenshots)
+    const isImageReviewing = item.status === 'image_reviewing'
+    const isLinkReviewing = item.status === 'link_reviewing'
+    const isManual = item.ai_review_status === 'manual'
+    
+    return (
+      <div
+        key={item.id}
+        className="group flex items-center gap-3 px-4 py-3 border-b border-border/50 cursor-pointer hover:bg-accent/30 transition-colors"
+        onClick={() => { setSelectedItem(item); setShowDetail(true) }}
+      >
+        {/* ID */}
+        <span className="font-mono text-sm w-14 text-muted-foreground">#{item.id}</span>
+        
+        {/* 截图缩略图 */}
+        <div className="flex gap-1.5">
+          {screenshots.slice(0, 3).map((url, idx) => (
+            <img
+              key={idx}
+              src={url}
+              alt=""
+              className="w-10 h-10 rounded object-cover ring-1 ring-border/50 hover:ring-primary cursor-pointer"
+              onClick={(e) => { e.stopPropagation(); openImagePreview(screenshots, idx) }}
+            />
+          ))}
+          {screenshots.length === 0 && (
+            <div className="w-10 h-10 rounded bg-muted flex items-center justify-center">
+              <Eye className="w-4 h-4 text-muted-foreground" />
+            </div>
+          )}
+        </div>
+        
+        {/* 任务信息 */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-sm truncate">{item.tasks?.title || `任务#${item.task_id}`}</span>
+            {getStatusBadge(item)}
+          </div>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground mt-0.5">
+            <span>@{item.users?.username || '未知'}</span>
+            <span className={cn(PLATFORM_COLORS[item.tasks?.platform || ''])}>
+              {PLATFORM_NAMES[item.tasks?.platform || ''] || item.tasks?.platform}
+            </span>
+            <span>·</span>
+            <span>{ACTION_NAMES[item.tasks?.action || ''] || item.tasks?.action}</span>
+          </div>
+          
+          {/* 审核状态详情 - 关键修改 */}
+          <div className="flex items-center gap-2 mt-1 text-xs">
+            {isImageReviewing && (
+              <span className="text-yellow-600">
+                <Scan className="w-3 h-3 inline mr-1" />
+                OCR识别中... YOLO检测中...
+              </span>
+            )}
+            {isLinkReviewing && (
+              <span className="text-purple-600">
+                <Globe className="w-3 h-3 inline mr-1" />
+                验证视频链接、评论存在性...
+              </span>
+            )}
+            {isManual && item.ai_reason && (
+              <span className="text-orange-600 truncate max-w-[200px]">
+                {item.ai_reason.split('\n')[0]}
+              </span>
+            )}
+          </div>
+        </div>
+        
+        {/* 时间 */}
+        <div className="text-xs text-muted-foreground w-16 text-right">
+          {getRelativeTime(item.claimed_at)}
+        </div>
+        
+        {/* 操作按钮 */}
+        {isManual && (
+          <div className="flex gap-1 opacity-0 group-hover:opacity-100" onClick={e => e.stopPropagation()}>
+            <Button size="sm" variant="ghost" className="h-7 text-xs text-red-500 hover:bg-red-500/10" disabled={processing} onClick={() => handleManualReview(item.id, 'reject')}>拒绝</Button>
+            <Button size="sm" variant="ghost" className="h-7 text-xs text-green-500 hover:bg-green-500/10" disabled={processing} onClick={() => handleManualReview(item.id, 'approve')}>通过</Button>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // 渲染日志项
+  const renderLogItem = (item: LogItem) => {
+    const screenshots = parseScreenshots(item.screenshots)
+    const isApproved = item.ai_review_status === 'approved'
+    
+    return (
+      <div
+        key={item.id}
+        className="flex items-center gap-2 px-3 py-2 border-b border-border/30 cursor-pointer hover:bg-accent/20"
+        onClick={() => { setSelectedItem(item as any); setShowDetail(true) }}
+      >
+        <span className="font-mono text-xs w-10 text-muted-foreground">#{item.id}</span>
+        <div className="flex gap-1">
+          {screenshots.slice(0, 2).map((url, idx) => (
+            <img key={idx} src={url} alt="" className="w-6 h-6 rounded object-cover" onClick={e => { e.stopPropagation(); openImagePreview(screenshots, idx) }} />
+          ))}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs truncate">{item.tasks?.title || `#${item.task_id}`}</span>
+            <Badge variant={isApproved ? 'default' : 'destructive'} className="text-[9px] h-4 px-1">{isApproved ? '通过' : '拒绝'}</Badge>
+          </div>
+        </div>
+        <div className="text-[10px] text-muted-foreground">{getRelativeTime(item.reviewed_at || item.claimed_at)}</div>
+      </div>
+    )
+  }
+
+  return (
+    <>
+      <div className="h-full flex flex-col bg-background">
+      {/* 顶部标题栏 */}
+      <div className="flex items-center justify-between px-6 py-4 border-b shrink-0">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center">
+            <Bot className="w-5 h-5 text-primary-foreground" />
+          </div>
+          <div>
+            <h1 className="text-xl font-bold">AI 审核中心</h1>
+            <p className="text-xs text-muted-foreground">图片审核 → 链接验证 → 完成</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" className="gap-2" onClick={loadAllData} disabled={loading}>
+            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+            刷新
+          </Button>
+          <Button variant="default" size="sm" className="gap-2" onClick={triggerProcess}>
+            <Bot className="w-4 h-4" />
+            触发处理
+          </Button>
+        </div>
+      </div>
+
+      {/* 统计卡片 - 新的审核流程 */}
+      <div className="grid grid-cols-6 gap-3 p-4 shrink-0">
+        <StatCard
+          label="图片审核中"
+          value={stats.imageReviewing || 0}
+          icon={Scan}
+          color="from-yellow-500 to-orange-500"
+          subtitle="OCR + YOLO"
+        />
+        <StatCard
+          label="链接验证中"
+          value={stats.linkReviewing || 0}
+          icon={Globe}
+          color="from-purple-500 to-violet-500"
+          subtitle="验证视频/评论"
+        />
+        <StatCard
+          label="待人工"
+          value={stats.manual || 0}
+          icon={ClipboardCheck}
+          color="from-orange-500 to-amber-500"
+          subtitle="需人工确认"
+        />
+        <StatCard
+          label="已通过"
+          value={stats.approved || stats.aiApproved || 0}
+          icon={CheckCircle}
+          color="from-emerald-500 to-green-500"
+          subtitle="累计通过"
+        />
+        <StatCard
+          label="已拒绝"
+          value={stats.rejected || 0}
+          icon={XCircle}
+          color="from-red-500 to-rose-500"
+          subtitle="累计拒绝"
+        />
+        <StatCard
+          label="已处理"
+          value={logsQueue.length}
+          icon={FileText}
+          color="from-gray-500 to-slate-500"
+          subtitle="今日记录"
+        />
+      </div>
+
+      {/* Tab 导航 */}
+      <div className="flex border-b shrink-0">
+        {tabs.map(tab => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
+            className={cn(
+              'flex items-center gap-2 px-4 py-2.5 text-sm font-medium transition-colors relative',
+              activeTab === tab.key
+                ? 'text-primary border-b-2 border-primary'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+          >
+            <tab.icon className="w-4 h-4" />
+            {tab.label}
+            {tab.count > 0 && (
+              <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-xs">
+                {tab.count}
+              </Badge>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* 列表内容 */}
+          <div className="flex-1 min-h-0 overflow-auto border-t">
+            {loading ? (
+              <div className="p-4 space-y-3">
+                {[...Array(5)].map((_, i) => <Skeleton key={i} className="h-16 w-full" />)}
+              </div>
+            ) : activeTab === 'logs' ? (
+              logsQueue.length === 0 ? (
+                <EmptyState icon={FileText} message="暂无审核记录" />
+              ) : (
+                <div>{logsQueue.map(renderLogItem)}</div>
+              )
+            ) : getCurrentList().length === 0 ? (
+              <EmptyState icon={CheckCircle} message={activeTab === 'manual' ? '暂无待审核项' : '队列为空'} />
+            ) : (
+              <div>{getCurrentList().map(renderListItem)}</div>
+            )}
+          </div>
+        </div>
+
+      {/* 图片预览弹窗 */}
+      <Dialog open={showImagePreview} onOpenChange={setShowImagePreview}>
+        <DialogContent className="max-w-4xl p-0 bg-black/95 border-none">
+          <div className="relative flex items-center justify-center min-h-[300px]">
+            {previewImages[previewIndex] && (
+              <img src={previewImages[previewIndex]} alt="" className="max-w-full max-h-[70vh] object-contain" />
+            )}
+            {previewImages.length > 1 && (
+              <>
+                <Button variant="ghost" size="icon" className="absolute left-4 text-white/70 hover:text-white h-10 w-10 rounded-full" onClick={() => setPreviewIndex(i => (i - 1 + previewImages.length) % previewImages.length)}>
+                  <ChevronLeft className="w-5 h-5" />
+                </Button>
+                <Button variant="ghost" size="icon" className="absolute right-4 text-white/70 hover:text-white h-10 w-10 rounded-full" onClick={() => setPreviewIndex(i => (i + 1) % previewImages.length)}>
+                  <ChevronRight className="w-5 h-5" />
+                </Button>
+                <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/60 px-3 py-1 rounded-full text-white text-sm">
+                  {previewIndex + 1} / {previewImages.length}
+                </div>
+              </>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* 详情弹窗 */}
+      <Dialog open={showDetail} onOpenChange={setShowDetail}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Eye className="w-5 h-5 text-primary" />
+              审核详情 #{selectedItem?.id}
+            </DialogTitle>
+          </DialogHeader>
+          
+          {selectedItem && (
+            <div className="space-y-4">
+              {/* 基础信息 */}
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="p-3 rounded bg-muted/50">
+                  <div className="text-xs text-muted-foreground mb-1">任务</div>
+                  <div className="font-medium truncate">{selectedItem.tasks?.title || '-'}</div>
+                </div>
+                <div className="p-3 rounded bg-muted/50">
+                  <div className="text-xs text-muted-foreground mb-1">用户</div>
+                  <div className="font-medium">{selectedItem.users?.username || '-'}</div>
+                </div>
+                <div className="p-3 rounded bg-muted/50">
+                  <div className="text-xs text-muted-foreground mb-1">平台</div>
+                  <div className={cn("font-medium", PLATFORM_COLORS[selectedItem.tasks?.platform || ''])}>
+                    {PLATFORM_NAMES[selectedItem.tasks?.platform || ''] || '-'}
+                  </div>
+                </div>
+                <div className="p-3 rounded bg-muted/50">
+                  <div className="text-xs text-muted-foreground mb-1">状态</div>
+                  {getStatusBadge(selectedItem)}
+                </div>
+              </div>
+
+              {/* 任务链接 */}
+              <div className="p-3 rounded bg-blue-500/10 border border-blue-500/20">
+                <div className="text-xs text-blue-400 font-medium mb-2">任务链接</div>
+                <Button variant="link" className="h-auto p-0 text-blue-400 hover:text-blue-300 flex items-center gap-1" onClick={() => window.open(getTaskLink(selectedItem), '_blank')}>
+                  <ExternalLink className="w-3 h-3" />
+                  查看任务详情 / 视频 / 评论
+                </Button>
+              </div>
+
+              {/* 图片审核结果 */}
+              {selectedItem.image_review_status && (
+                <div className="p-3 rounded border">
+                  <div className="text-xs font-medium mb-2 flex items-center gap-1">
+                    <Scan className="w-3 h-3" />
+                    图片审核结果
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge variant={selectedItem.image_review_status === 'approved' ? 'default' : 'destructive'}>
+                      {selectedItem.image_review_status === 'approved' ? '✅ 通过' : '❌ 失败'}
+                    </Badge>
+                    {selectedItem.image_review_reason && (
+                      <span className="text-xs text-muted-foreground">{selectedItem.image_review_reason}</span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* 链接验证结果 */}
+              {selectedItem.link_review_status && (
+                <div className="p-3 rounded border">
+                  <div className="text-xs font-medium mb-2 flex items-center gap-1">
+                    <Globe className="w-3 h-3" />
+                    链接验证结果
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge variant={selectedItem.link_review_status === 'approved' ? 'default' : 'destructive'}>
+                      {selectedItem.link_review_status === 'approved' ? '✅ 通过' : '❌ 失败'}
+                    </Badge>
+                    {selectedItem.link_review_reason && (
+                      <span className="text-xs text-muted-foreground">{selectedItem.link_review_reason}</span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* AI审核原因 */}
+              {selectedItem.ai_reason && (
+                <div className="p-3 rounded bg-muted/50 text-sm">
+                  <div className="text-xs text-muted-foreground mb-1">AI分析</div>
+                  <pre className="whitespace-pre-wrap text-xs">{selectedItem.ai_reason}</pre>
+                </div>
+              )}
+
+              {/* 截图 */}
+              {selectedItem.screenshots && (
+                <div>
+                  <div className="text-xs text-muted-foreground mb-2">截图 ({parseScreenshots(selectedItem.screenshots).length}张)</div>
+                  <div className="grid grid-cols-4 gap-2">
+                    {parseScreenshots(selectedItem.screenshots).map((url, i) => (
+                      <img
+                        key={i}
+                        src={url}
+                        alt=""
+                        className="w-full aspect-square rounded object-cover cursor-pointer hover:ring-2 ring-primary"
+                        onClick={() => openImagePreview(parseScreenshots(selectedItem.screenshots), i)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* 操作按钮 */}
+              {selectedItem.ai_review_status === 'manual' && (
+                <>
+                  <div className="space-y-2">
+                    <div className="text-xs text-muted-foreground">审核备注（可选）</div>
+                    <Textarea
+                      value={reviewNote}
+                      onChange={(e) => setReviewNote(e.target.value)}
+                      placeholder="输入审核备注..."
+                      className="h-20"
+                  </div>
+                  <div className="flex gap-3 justify-end pt-4 border-t">
+                    <Button variant="outline" onClick={() => setShowDetail(false)}>取消</Button>
+                    <Button variant="destructive" disabled={processing} onClick={() => handleManualReview(selectedItem.id, 'reject', reviewNote)}>
+                      {processing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <XCircle className="w-4 h-4 mr-2" />}
+                      拒绝
+                    </Button>
+                    <Button disabled={processing} onClick={() => handleManualReview(selectedItem.id, 'approve', reviewNote)}>
+                      {processing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle className="w-4 h-4 mr-2" />}
+                      通过
+                    </Button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+}
+
+// 统计卡片组件
+function StatCard({ label, value, icon: Icon, color, subtitle }: {
+  label: string
+  value: number | string
+  icon: React.ElementType
+  color: string
+  subtitle?: string
+}) {
+  return (
+    <div className="rounded-lg p-3 border bg-gradient-to-br from-muted/50 to-background">
+      <div className="flex items-center gap-2 mb-1">
+        <Icon className="w-4 h-4 text-muted-foreground" />
+        <span className="text-xs text-muted-foreground">{label}</span>
+      </div>
+      <div className={cn("text-2xl font-bold bg-gradient-to-r bg-clip-text text-transparent", color)}>{value}</div>
+      {subtitle && <div className="text-[10px] text-muted-foreground mt-0.5">{subtitle}</div>}
+    </div>
+  )
+}
+
+// 服务状态指示器
+function ServiceIndicator({ name, healthy, port }: { name: string; healthy: boolean; port: string }) {
+  return (
+    <div className="flex items-center gap-1.5 text-xs">
+      <div className={cn("w-2 h-2 rounded-full", healthy ? "bg-green-500" : "bg-red-500")} />
+      <span className={healthy ? "text-foreground" : "text-red-500"}>{name}</span>
+      <span className="text-muted-foreground">(:{port})</span>
+    </div>
+  )
+}
+
+// 空状态组件
+function EmptyState({ icon: Icon, message }: { icon: React.ElementType; message: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center h-full text-muted-foreground py-20">
+      <Icon className="w-12 h-12 mb-4 opacity-50" />
+      <p>{message}</p>
+    </div>
+  )
+}

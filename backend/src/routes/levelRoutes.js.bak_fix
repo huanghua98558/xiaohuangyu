@@ -1,0 +1,17 @@
+import { Router } from 'express'
+import levelController from '../controllers/levelController.js'
+import { authMiddleware, adminOnly } from '../middlewares/auth.js'
+
+const router = Router()
+
+// 公开接口
+router.get('/configs', levelController.getLevelConfigs)
+
+// 需要登录的接口
+router.get('/my', authMiddleware, levelController.getMyLevel)
+router.get('/progress', authMiddleware, levelController.getUpgradeProgress)
+
+// 管理员接口
+router.put('/configs/:level', authMiddleware, adminOnly, levelController.updateLevelConfig)
+
+export default router

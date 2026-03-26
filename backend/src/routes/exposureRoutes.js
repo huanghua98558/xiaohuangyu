@@ -1,0 +1,197 @@
+import { Router } from 'express'
+import exposureController from '../controllers/exposureController.js'
+import { authMiddleware, adminOnly, optionalAuth } from '../middlewares/auth.js'
+
+const router = Router()
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 用户端接口（需要登录）
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * 用户心跳上报
+ * @route POST /api/exposure/heartbeat
+ * @body { level, city, province, currentPage, deviceId }
+ */
+router.post('/heartbeat', authMiddleware, exposureController.heartbeat)
+
+/**
+ * 用户离线
+ * @route POST /api/exposure/offline
+ */
+router.post('/offline', authMiddleware, exposureController.offline)
+
+/**
+ * 获取用户曝光额度
+ * @route GET /api/exposure/quota
+ */
+router.get('/quota', authMiddleware, exposureController.getExposureQuota)
+
+/**
+ * 获取用户选择分数
+ * @route GET /api/exposure/selection-score
+ */
+router.get('/selection-score', authMiddleware, exposureController.getSelectionScore)
+
+/**
+ * 获取供需统计
+ * @route GET /api/exposure/supply-demand
+ */
+router.get('/supply-demand', optionalAuth, exposureController.getSupplyDemandStats)
+
+/**
+ * 获取全局在线统计
+ * @route GET /api/exposure/online-stats
+ */
+router.get('/online-stats', optionalAuth, exposureController.getOnlineStats)
+
+/**
+ * 获取城市在线用户
+ * @route GET /api/exposure/city-online/:city
+ */
+router.get('/city-online/:city', optionalAuth, exposureController.getCityOnlineUsers)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 管理员接口
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * 获取曝光配置
+ * @route GET /api/exposure/config
+ */
+router.get('/config', authMiddleware, adminOnly, exposureController.getConfig)
+
+/**
+ * 更新曝光配置
+ * @route PUT /api/exposure/config
+ * @body { exposureMode, cityExposureLimit, ... }
+ */
+router.put('/config', authMiddleware, adminOnly, exposureController.updateConfig)
+
+/**
+ * 更新城市曝光限制
+ * @route PUT /api/exposure/city-limit
+ * @body { limit }
+ */
+router.put('/city-limit', authMiddleware, adminOnly, exposureController.updateCityLimit)
+
+/**
+ * 获取任务曝光详情
+ * @route GET /api/exposure/task/:taskId
+ */
+router.get('/task/:taskId', authMiddleware, adminOnly, exposureController.getTaskExposureDetail)
+
+/**
+ * 获取任务动态容量
+ * @route GET /api/exposure/task/:taskId/capacity
+ */
+router.get('/task/:taskId/capacity', authMiddleware, adminOnly, exposureController.getTaskDynamicCapacity)
+
+/**
+ * 获取曝光统计
+ * @route GET /api/exposure/stats
+ * @query { startDate, endDate }
+ */
+router.get('/stats', authMiddleware, adminOnly, exposureController.getStats)
+
+/**
+ * 获取在线用户快照
+ * @route GET /api/exposure/online-snapshot
+ */
+router.get('/online-snapshot', authMiddleware, adminOnly, exposureController.getOnlineSnapshot)
+
+/**
+ * 设置用户曝光等级
+ * @route PUT /api/exposure/user/:userId/level
+ * @body { level, priority }
+ */
+router.put('/user/:userId/level', authMiddleware, adminOnly, exposureController.setUserExposureLevel)
+
+/**
+ * 设置用户白名单
+ * @route PUT /api/exposure/user/:userId/whitelist
+ * @body { isWhitelist }
+ */
+router.put('/user/:userId/whitelist', authMiddleware, adminOnly, exposureController.setUserWhitelist)
+
+/**
+ * 设置用户黑名单
+ * @route PUT /api/exposure/user/:userId/blacklist
+ * @body { isBlacklist }
+ */
+router.put('/user/:userId/blacklist', authMiddleware, adminOnly, exposureController.setUserBlacklist)
+
+/**
+ * 获取用户曝光详情
+ * @route GET /api/exposure/user/:userId
+ */
+router.get('/user/:userId', authMiddleware, adminOnly, exposureController.getUserExposureDetail)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 手动触发接口（管理员）
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * 手动触发曝光检查
+ * @route POST /api/exposure/trigger/check
+ */
+router.post('/trigger/check', authMiddleware, adminOnly, exposureController.triggerCheck)
+
+/**
+ * 手动触发离线缓冲检查
+ * @route POST /api/exposure/trigger/offline-buffer
+ */
+router.post('/trigger/offline-buffer', authMiddleware, adminOnly, exposureController.triggerOfflineBuffer)
+
+/**
+ * 手动触发质量评分计算
+ * @route POST /api/exposure/trigger/quality-score
+ */
+router.post('/trigger/quality-score', authMiddleware, adminOnly, exposureController.triggerQualityScore)
+
+/**
+ * 手动触发曝光分配
+ * @route POST /api/exposure/trigger/allocate
+ */
+router.post('/trigger/allocate', authMiddleware, adminOnly, exposureController.triggerAllocate)
+
+/**
+ * 刷新全局统计
+ * @route POST /api/exposure/refresh-stats
+ */
+router.post('/refresh-stats', authMiddleware, adminOnly, exposureController.refreshStats)
+
+/**
+ * 初始化现有任务的曝光记录
+ * @route POST /api/exposure/init-existing-tasks
+ */
+router.post('/init-existing-tasks', authMiddleware, adminOnly, exposureController.initExistingTasks)
+
+
+
+// ============ 补充列表接口（admin前端使用） ============
+router.get('/tasks', authMiddleware, adminOnly, async (req, res, next) => {
+  try {
+    const supabaseModule = await import('../utils/supabaseToPrismaAdapter.js')
+    const sb = supabaseModule.default
+    const { data } = await sb.from('tasks').select('id, title, platform, status, exposure_count, claimed_count').eq('status', 'active').order('created_at', { ascending: false }).limit(50)
+    res.json({ code: 0, data: data || [] })
+  } catch (e) {
+    res.json({ code: 0, data: [] })
+  }
+})
+
+router.get('/users', authMiddleware, adminOnly, async (req, res, next) => {
+  try {
+    const supabaseModule = await import('../utils/supabaseToPrismaAdapter.js')
+    const sb = supabaseModule.default
+    const { page = 1, size = 20 } = req.query
+    const offset = (parseInt(page) - 1) * parseInt(size)
+    const { data, count } = await sb.from('users').select('id, username, level, points, status', { count: 'exact' }).order('points', { ascending: false }).range(offset, offset + parseInt(size) - 1)
+    res.json({ code: 0, data: { list: data || [], total: count || 0 } })
+  } catch (e) {
+    res.json({ code: 0, data: { list: [], total: 0 } })
+  }
+})
+
+export default router
