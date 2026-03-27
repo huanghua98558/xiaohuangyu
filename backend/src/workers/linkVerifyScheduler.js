@@ -21,11 +21,16 @@ const PLATFORM_DELAY = {
 
 // 批量触发配置
 const BATCH_CONFIG = {
-  maxBatchSize: 10,            // 最大批量大小（10 个链接）
-  timeTriggerMinutes: 10,      // 时间触发：每 10 分钟执行一次
-  minBatchSize: 3,             // 最小批量大小（达到 3 个也执行）
-  ipExpiryMinutes: 30,         // IP 有效期：30 分钟
-  retryCount: 3
+  maxBatchSize: readIntegerConfig(process.env.LINK_VERIFY_BATCH_SIZE, 10, 1),
+  timeTriggerMinutes: readIntegerConfig(process.env.LINK_VERIFY_TIME_TRIGGER_MINUTES, 10, 1),
+  minBatchSize: readIntegerConfig(process.env.LINK_VERIFY_BATCH_THRESHOLD, 3, 1),
+  ipExpiryMinutes: readIntegerConfig(process.env.LINK_VERIFY_IP_EXPIRY_MINUTES, 30, 1),
+  retryCount: readIntegerConfig(process.env.LINK_VERIFY_RETRY_COUNT, 3, 1),
+  schedulerIntervalMs: readIntegerConfig(process.env.LINK_VERIFY_SCHEDULER_INTERVAL_MS, 60000, 5000),
+  delayWorkerConcurrency: readIntegerConfig(process.env.LINK_VERIFY_DELAY_WORKER_CONCURRENCY, 5, 1),
+  delayWorkerLimiterMax: readIntegerConfig(process.env.LINK_VERIFY_DELAY_RATE_LIMIT_MAX, 10, 1),
+  delayWorkerLimiterDurationMs: readIntegerConfig(process.env.LINK_VERIFY_DELAY_RATE_LIMIT_DURATION_MS, 1000, 100),
+  queueSoftCapacity: readIntegerConfig(process.env.LINK_VERIFY_QUEUE_SOFT_CAPACITY, 20, 1)
 };
 
 // 链接验证队列
@@ -78,7 +83,7 @@ async function getRuntimeBatchConfig() {
 
   try {
     const rows = await db.queryMany(
-      "SELECT key, value FROM ai_configs WHERE key IN ('link_verify_batch_size', 'link_verify_batch_threshold', 'link_verify_retry_count')"
+      "SELECT key, value FROM ai_configs WHERE key IN ('link_verify_batch_size', 'link_verify_batch_threshold', 'link_verify_retry_count', 'link_verify_time_trigger_minutes')"
     );
 
     for (const row of rows) {
@@ -91,11 +96,15 @@ async function getRuntimeBatchConfig() {
       if (row.key === 'link_verify_retry_count') {
         config.retryCount = readIntegerConfig(row.value, config.retryCount, 1);
       }
+      if (row.key === 'link_verify_time_trigger_minutes') {
+        config.timeTriggerMinutes = readIntegerConfig(row.value, config.timeTriggerMinutes, 1);
+      }
     }
   } catch (error) {
     logger.warn(`读取连接审核批量配置失败，使用默认值: ${error.message}`);
   }
 
+  config.queueSoftCapacity = Math.max(config.queueSoftCapacity, config.maxBatchSize * 2);
   return config;
 }
 
@@ -179,14 +188,14 @@ function startScheduler() {
                 `最小批量=${runtimeConfig.minBatchSize}`);
   }).catch(() => {});
   
-  // 每 1 分钟检查一次
+  // 按配置检查
   const checkInterval = setInterval(async () => {
     try {
       await processBatch();
     } catch (error) {
       logger.error('调度器检查失败:', error);
     }
-  }, 60 * 1000);
+  }, BATCH_CONFIG.schedulerIntervalMs);
   
   // 优雅关闭
   process.on('SIGINT', () => {
@@ -226,8 +235,8 @@ const delayWorker = new Worker('link-delay-queue', async (job) => {
   ]);
   const currentDepth = waitingCount + activeCount;
 
-  if (currentDepth >= runtimeConfig.maxBatchSize) {
-    logger.info(`⏳ 连接审核队列已满，延后重新调度：claimId=${claimId}, depth=${currentDepth}/${runtimeConfig.maxBatchSize}`);
+  if (currentDepth >= runtimeConfig.queueSoftCapacity) {
+    logger.info(`⏳ 连接审核队列已满，延后重新调度：claimId=${claimId}, depth=${currentDepth}/${runtimeConfig.queueSoftCapacity}`);
     await delayQueue.add('link-delay', {
       ...job.data,
       retryCount: job.data.retryCount || runtimeConfig.retryCount,
@@ -261,10 +270,10 @@ const delayWorker = new Worker('link-delay-queue', async (job) => {
   
 }, {
   connection: redisConnection,
-  concurrency: 5,
+  concurrency: BATCH_CONFIG.delayWorkerConcurrency,
   limiter: {
-    max: 10,
-    duration: 1000
+    max: BATCH_CONFIG.delayWorkerLimiterMax,
+    duration: BATCH_CONFIG.delayWorkerLimiterDurationMs
   }
 });
 
@@ -279,6 +288,8 @@ delayWorker.on('failed', (job, err) => {
 // 启动调度器
 startScheduler();
 
-logger.info('✅ Link Verify Scheduler 已启动');
+logger.info(
+  `✅ Link Verify Scheduler 已启动: batch=${BATCH_CONFIG.maxBatchSize}, threshold=${BATCH_CONFIG.minBatchSize}, interval=${BATCH_CONFIG.schedulerIntervalMs}ms, queueSoftCapacity=${BATCH_CONFIG.queueSoftCapacity}`
+);
 
 export { linkVerifyQueue, delayQueue, PLATFORM_DELAY };

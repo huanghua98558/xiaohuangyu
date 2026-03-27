@@ -549,7 +549,7 @@ export default function ReviewLogsPage() {
       
       {/* 详情弹窗 */}
       <Dialog open={showDetailDialog} onOpenChange={setShowDetailDialog}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-lg max-h-[85vh] flex flex-col">
           <DialogHeader>
             <DialogTitle className="text-sm flex items-center gap-2">
               <Eye className="h-4 w-4" />
@@ -563,7 +563,7 @@ export default function ReviewLogsPage() {
               <Skeleton className="h-20 w-full" />
             </div>
           ) : claimDetail ? (
-            <div className="space-y-3 text-xs">
+            <div className="space-y-3 text-xs overflow-y-auto flex-1">
               {/* 任务信息 */}
               {claimDetail.task && (
                 <div className="bg-gray-50 p-2 rounded-lg">

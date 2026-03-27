@@ -69,7 +69,7 @@
         v-for="a in filteredAchievements"
         :key="a.id"
       >
-        <div class="achievement-icon">{{ a.icon }}</div>
+        <div class="achievement-icon">{{ getAchievementIcon(a) }}</div>
         <div class="achievement-info">
           <div class="achievement-header">
             <span class="achievement-name">{{ a.name }}</span>
@@ -147,6 +147,38 @@ const formatDate = (dateStr) => {
   if (!dateStr) return ''
   const date = new Date(dateStr)
   return `${date.getMonth() + 1}月${date.getDate()}日`
+}
+
+const getAchievementIcon = (achievement) => {
+  if (achievement?.icon) return achievement.icon
+
+  const conditionType = achievement?.condition_type || achievement?.conditionType
+  const conditionValue = Number(achievement?.condition_value || achievement?.conditionValue || 0)
+  const name = achievement?.name || ''
+
+  if (conditionType === 'continuous_sign' || name.includes('签到')) {
+    if (conditionValue >= 30) return '📆'
+    if (conditionValue >= 7) return '🗓️'
+    return '📅'
+  }
+
+  if (conditionType === 'total_points' || name.includes('积分')) {
+    if (conditionValue >= 1000) return '💎'
+    if (conditionValue >= 500) return '💠'
+    return '✨'
+  }
+
+  if (conditionType === 'total_tasks' || name.includes('任务')) {
+    if (conditionValue >= 100) return '🏆'
+    if (conditionValue >= 50) return '🔥'
+    if (conditionValue >= 10) return '⚡'
+    return '🎯'
+  }
+
+  if (name.includes('邀请') || name.includes('推广')) return '🎉'
+  if (name.includes('达人')) return '🌟'
+
+  return '🏅'
 }
 
 onMounted(() => {

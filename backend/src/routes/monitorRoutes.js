@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import monitorService from '../services/monitorService.js'
 import businessMonitorService from '../services/businessMonitorService.js'
+import capacityBaselineService from '../services/capacityBaselineService.js'
 import { success, error } from '../utils/response.js'
 import { authMiddleware, adminOnly } from '../middlewares/auth.js'
 import logger from '../utils/logger.js'
@@ -124,6 +125,20 @@ router.get('/health', authMiddleware, adminOnly, async (req, res, next) => {
     const metrics = await monitorService.getFullMetrics()
     success(res, metrics.health)
   } catch (err) {
+    next(err)
+  }
+})
+
+/**
+ * 获取容量基线快照
+ * GET /api/monitor/capacity
+ */
+router.get('/capacity', authMiddleware, adminOnly, async (req, res, next) => {
+  try {
+    const snapshot = await capacityBaselineService.getSnapshot()
+    success(res, snapshot)
+  } catch (err) {
+    logger.error('获取容量基线快照失败:', err)
     next(err)
   }
 })

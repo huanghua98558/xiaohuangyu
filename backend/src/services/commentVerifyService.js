@@ -55,7 +55,7 @@ const TEMPLATE_PATTERNS = [
  * @param {string} comment 评论内容
  * @returns {Object} 验证结果
  */
-export function verifyComment(comment) {
+export function verifyComment(comment, options = {}) {
   const result = {
     valid: true,
     score: 100,
@@ -79,11 +79,12 @@ export function verifyComment(comment) {
 
   const trimmed = comment.trim();
   result.details.length = trimmed.length;
+  const minLength = Math.max(1, Number(options.minLength || 8));
 
   // 1. 字数检查 (≥8字)
-  if (trimmed.length < 8) {
+  if (trimmed.length < minLength) {
     result.valid = false;
-    result.reasons.push(`字数不足 (当前${trimmed.length}字，需≥8字)`);
+    result.reasons.push(`字数不足 (当前${trimmed.length}字，需≥${minLength}字)`);
     result.score -= 30;
   }
 

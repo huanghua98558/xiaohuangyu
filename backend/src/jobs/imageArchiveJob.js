@@ -4,7 +4,7 @@
  * 压缩15天前的图片（150KB -> 50KB）
  */
 
-import prisma from '../prisma.js'
+import prisma from '../utils/prisma.js'
 import { archiveImage, imageExists } from '../utils/storage.js'
 import logger from '../utils/logger.js'
 import fs from 'fs/promises'

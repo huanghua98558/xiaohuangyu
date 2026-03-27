@@ -1,6 +1,7 @@
 import prisma from '../utils/prisma.js'
 import { redisClient, REDIS_ENABLED } from '../utils/redis.js'
 import logger from '../utils/logger.js'
+import db from '../config/database.js'
 
 /**
  * 曝光配额服务
@@ -84,13 +85,16 @@ class ExposureQuotaService {
       
       // 获取等级对应的曝光上限
       const limit = await this.getExposureLimitByLevel(user.level)
+      const currentExposure = Number(user.current_exposure || 0)
+      const regularUsed = Number(user.regular_used || 0)
+      const reservedUsed = Number(user.reserved_used || 0)
       
       const quota = {
         limit,
-        current: user.current_exposure || 0,
-        regularUsed: user.regular_used || 0,
-        reservedUsed: user.reserved_used || 0,
-        available: Math.max(0, limit - (user.current_exposure || 0)),
+        current: currentExposure,
+        regularUsed,
+        reservedUsed,
+        available: Math.max(0, limit - currentExposure),
         isWhitelist: user.is_whitelist || false,
         isBlacklist: user.is_blacklist || false,
         exposureLevel: user.exposure_level || 1,
@@ -152,36 +156,26 @@ class ExposureQuotaService {
     const uid = typeof userId === 'string' ? parseInt(userId) : userId
     
     try {
-      // 1. 更新 Redis 缓存
+      await db.query(
+        `
+        UPDATE users
+        SET current_exposure = GREATEST(COALESCE(current_exposure, 0) + $1, 0),
+            regular_used = CASE
+              WHEN $2 = 'regular' AND $1 > 0 THEN COALESCE(regular_used, 0) + $1
+              ELSE COALESCE(regular_used, 0)
+            END,
+            reserved_used = CASE
+              WHEN $2 = 'reserved' AND $1 > 0 THEN COALESCE(reserved_used, 0) + $1
+              ELSE COALESCE(reserved_used, 0)
+            END
+        WHERE id = $3
+        `,
+        [delta, type, uid]
+      )
+
       if (REDIS_ENABLED && redisClient) {
-        const key = `${this.CACHE_PREFIX}${uid}`
-        const multi = redisClient.multi()
-        
-        multi.hIncrBy(key, 'current_exposure', delta)
-        if (type === 'regular' && delta > 0) {
-          multi.hIncrBy(key, 'regular_used', delta)
-        } else if (type === 'reserved' && delta > 0) {
-          multi.hIncrBy(key, 'reserved_used', delta)
-        }
-        multi.expire(key, this.CACHE_TTL)
-        
-        await multi.exec()
+        await this._clearCache(uid)
       }
-      
-      // 2. 更新数据库 (Prisma)
-      const updateData = {}
-      updateData.current_exposure = { increment: delta }
-      
-      if (type === 'regular' && delta > 0) {
-        updateData.regular_used = { increment: delta }
-      } else if (type === 'reserved' && delta > 0) {
-        updateData.reserved_used = { increment: delta }
-      }
-      
-      await prisma.users.update({
-        where: { id: uid },
-        data: updateData
-      })
       
       logger.debug(`[ExposureQuota] 用户 ${uid} 曝光额度更新: ${delta > 0 ? '+' : ''}${delta}`)
       return true
@@ -339,12 +333,15 @@ class ExposureQuotaService {
         
         for (const user of users) {
           const limit = await this.getExposureLimitByLevel(user.level)
+          const currentExposure = Number(user.current_exposure || 0)
+          const regularUsed = Number(user.regular_used || 0)
+          const reservedUsed = Number(user.reserved_used || 0)
           const quota = {
             limit,
-            current: user.current_exposure || 0,
-            regularUsed: user.regular_used || 0,
-            reservedUsed: user.reserved_used || 0,
-            available: Math.max(0, limit - (user.current_exposure || 0))
+            current: currentExposure,
+            regularUsed,
+            reservedUsed,
+            available: Math.max(0, limit - currentExposure)
           }
           quotaMap.set(user.id, quota)
         }

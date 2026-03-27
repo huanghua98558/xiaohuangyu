@@ -7,6 +7,7 @@ import logger from '../utils/logger.js'
 import { PLATFORMS, PLATFORM_NAMES, getPlatformName } from '../constants/taskActions.js'
 import { verifyPassword } from "../utils/password.js"
 import { generateToken } from "../utils/jwt.js"
+import { notifyAdminPointsAdjusted } from './notificationService.js'
 
 class AdminService {
   /**
@@ -583,6 +584,16 @@ class AdminService {
     }
     
     logger.info(`管理员 ${adminId} 调整用户 ${userId}(${currentUser.username}) 积分: ${oldPoints} -> ${newPoints} (${amount >= 0 ? '+' : ''}${amount}), 原因: ${reason || '无'}`)
+
+    try {
+      await notifyAdminPointsAdjusted(userId, {
+        amount,
+        reason,
+        balance: newPoints,
+      })
+    } catch (notifyError) {
+      logger.error(`发送管理员积分调整通知失败: 用户${userId}`, notifyError)
+    }
     
     return {
       id: user.id,

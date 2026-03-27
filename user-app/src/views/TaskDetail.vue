@@ -32,7 +32,7 @@
             <span class="stat-value">{{ task.remain }}</span>
           </div>
         </div>
-        <div class="night-info" v-if="task.isNightBonusTask">
+        <div class="night-info" v-if="showNightUiWindow && task.isNightBonusTask">
           🌙 夜间奖励任务（按发布时间判定） · 系数 x{{ Number(task.nightCoefficient || 1).toFixed(2) }}
         </div>
       </div>
@@ -43,10 +43,8 @@
           <span class="link-title">📎 任务链接</span>
         </div>
         <div class="link-content">{{ pureVideoLink }}</div>
-        <div class="link-tip-wrapper">
-          <span class="link-tip-highlight">💡 复制后在{{ getPlatformName(task.platform) }}APP中打开</span>
-        </div>
-        <div class="link-footer">
+        <div class="link-action-row">
+          <span class="link-tip-highlight">复制后在{{ getPlatformName(task.platform) }}APP中打开</span>
           <button type="button" class="btn-copy" @click="copyUrl">
             <span class="copy-icon">📋</span>
             <span>一键复制</span>
@@ -169,6 +167,11 @@ const pureVideoLink = computed(() => {
   }
   
   return rawUrl
+})
+
+const showNightUiWindow = computed(() => {
+  const hour = new Date().getHours()
+  return hour >= 0 && hour < 8
 })
 
 // 任务说明按行分割
@@ -367,16 +370,17 @@ onUnmounted(() => {
 }
 
 .content {
-  padding: 16px;
+  padding: 14px;
 }
 
 /* Hero Card */
 .hero-card {
-  background: linear-gradient(135deg, #3f51b5 0%, #5c6bc0 100%);
-  border-radius: 16px;
-  padding: 20px;
-  margin-bottom: 16px;
+  background: linear-gradient(135deg, #243b8f 0%, #4057b8 55%, #5f73cf 100%);
+  border-radius: 18px;
+  padding: 18px 18px 16px;
+  margin-bottom: 14px;
   color: #fff;
+  box-shadow: 0 14px 30px rgba(37, 60, 143, 0.22);
 }
 
 .night-info {
@@ -389,31 +393,37 @@ onUnmounted(() => {
 }
 
 .hero-title {
-  font-size: 20px;
-  font-weight: 600;
-  margin: 0 0 12px;
+  font-size: 19px;
+  font-weight: 700;
+  margin: 0 0 10px;
   line-height: 1.4;
 }
 
 .hero-tags {
   display: flex;
-  gap: 10px;
-  margin-bottom: 16px;
+  gap: 8px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
 }
 
 .tag {
-  padding: 6px 14px;
+  padding: 6px 12px;
   border-radius: 20px;
-  font-size: 15px;
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
 }
 
 .tag.platform {
-  background: rgba(255,255,255,0.25);
+  background: #ffffff;
+  color: #243b8f;
+  box-shadow: 0 8px 18px rgba(255,255,255,0.2);
 }
 
 .tag.action {
-  background: rgba(255,255,255,0.15);
+  background: rgba(255, 214, 82, 0.18);
+  color: #fff5d0;
+  border: 1px solid rgba(255, 214, 82, 0.26);
 }
 
 .hero-stats {
@@ -454,9 +464,9 @@ onUnmounted(() => {
 .link-card {
   background: #fff;
   border-radius: 16px;
-  padding: 18px;
-  margin-bottom: 16px;
-  box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+  padding: 16px;
+  margin-bottom: 14px;
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.06);
 }
 
 .link-header {
@@ -473,50 +483,174 @@ onUnmounted(() => {
 }
 
 .link-content {
-  background: #f5f5f5;
-  border-radius: 10px;
-  padding: 14px;
-  font-size: 15px;
+  background: #f7f8fc;
+  border-radius: 12px;
+  padding: 13px 14px;
+  font-size: 14px;
   color: #555;
   word-break: break-all;
   line-height: 1.6;
   margin-bottom: 12px;
 }
 
-.link-tip-wrapper {
-  text-align: center;
-  margin-bottom: 14px;
+.link-action-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .link-tip-highlight {
-  display: inline-block;
-  background: linear-gradient(135deg, #ff6b6b 0%, #ff8e53 100%);
-  color: #fff;
-  padding: 10px 20px;
-  border-radius: 25px;
-  font-size: 17px;
-  font-weight: 600;
-  box-shadow: 0 4px 12px rgba(255, 107, 107, 0.3);
-}
-
-.link-footer {
-  display: flex;
-  justify-content: center;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  background: #fff3df;
+  color: #a25200;
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: inset 0 0 0 1px #ffd39b;
+  flex: 1;
 }
 
 .btn-copy {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 14px 32px;
+  padding: 12px 22px;
   background: linear-gradient(135deg, #3f51b5 0%, #5c6bc0 100%);
   color: #fff;
   border: none;
-  border-radius: 25px;
-  font-size: 17px;
-  font-weight: 500;
+  border-radius: 14px;
+  font-size: 15px;
+  font-weight: 700;
   cursor: pointer;
   transition: transform 0.2s, box-shadow 0.2s;
+  white-space: nowrap;
+  box-shadow: 0 10px 18px rgba(63, 81, 181, 0.22);
+}
+
+.section-card {
+  background: #fff;
+  border-radius: 16px;
+  padding: 14px;
+  margin-bottom: 14px;
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.05);
+}
+
+.section-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #24324a;
+  margin-bottom: 8px;
+}
+
+.section-desc {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: #8a94a6;
+}
+
+.description-content p {
+  margin: 0 0 6px;
+  line-height: 1.65;
+  font-size: 13px;
+  color: #374151;
+}
+
+.description-content p:last-child {
+  margin-bottom: 0;
+}
+
+.images-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.image-item {
+  position: relative;
+  overflow: hidden;
+  border-radius: 12px;
+  cursor: pointer;
+  box-shadow: 0 8px 16px rgba(63, 81, 181, 0.08);
+}
+
+.image-item img {
+  width: 100%;
+  height: 140px;
+  object-fit: cover;
+  display: block;
+}
+
+.image-mask {
+  position: absolute;
+  inset: auto 0 0 0;
+  padding: 8px 10px;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0) 0%, rgba(15, 23, 42, 0.72) 100%);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.steps-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.step-item {
+  border-radius: 12px;
+  background: #f8faff;
+  padding: 12px;
+  box-shadow: inset 0 0 0 1px #e3e9fb;
+}
+
+.step-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.step-num {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #3f51b5;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.step-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #24324a;
+}
+
+.step-desc,
+.step-warning,
+.step-tip,
+.step-success {
+  font-size: 13px;
+  line-height: 1.6;
+  margin-top: 4px;
+  color: #4b5563;
+}
+
+.sub-steps,
+.req-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: #4b5563;
 }
 
 .btn-copy:hover {

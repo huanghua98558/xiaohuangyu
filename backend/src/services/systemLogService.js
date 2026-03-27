@@ -1,7 +1,4 @@
-import pkg from '@prisma/client'; const { PrismaClient } = pkg
-import logger from '../utils/logger.js'
-
-const prisma = new PrismaClient()
+import prisma from '../utils/prisma.js'
 
 /**
  * 系统日志服务 - 统一管理所有日志类型
@@ -94,9 +91,9 @@ async getLoginLogs(params = {}) {
     const skip = (page - 1) * size
 
     const where = {}
-    if (loginStatus) where.loginStatus = loginStatus
+    if (loginStatus) where.login_status = loginStatus
     if (isAnomaly !== undefined && isAnomaly !== 'all') {
-      where.isAnomaly = isAnomaly === 'true' || isAnomaly === true
+      where.is_anomaly = isAnomaly === 'true' || isAnomaly === true
     }
     if (startDate || endDate) {
       where.login_time = {}
@@ -109,16 +106,26 @@ async getLoginLogs(params = {}) {
         where,
         skip,
         take: size,
-        orderBy: { loginTime: 'desc' }
+        orderBy: { login_time: 'desc' }
       }),
       prisma.login_logs.count({ where })
     ])
 
     return {
       list: list.map(item => ({
-        ...item,
         id: item.id?.toString(),
-        userId: item.userId?.toString()
+        userId: item.user_id?.toString(),
+        username: item.username,
+        loginStatus: item.login_status,
+        failureReason: item.failure_reason,
+        ipAddress: item.ip_address,
+        location: item.location,
+        device: item.device,
+        userAgent: item.user_agent,
+        loginTime: item.login_time,
+        logoutTime: item.logout_time,
+        isAnomaly: item.is_anomaly,
+        anomalyReason: item.anomaly_reason,
       })),
       total,
       page,
@@ -138,11 +145,11 @@ async getLoginLogs(params = {}) {
     if (status) {
       where.action = status === 'done' ? 'approve' : (status === 'rejected' ? 'reject' : status)
     }
-    if (reviewerId) where.reviewerId = BigInt(reviewerId)
+    if (reviewerId) where.reviewer_id = BigInt(reviewerId)
     if (startDate || endDate) {
-      where.createdAt = {}
-      if (startDate) where.createdAt.gte = new Date(startDate)
-      if (endDate) where.createdAt.lte = new Date(endDate)
+      where.created_at = {}
+      if (startDate) where.created_at.gte = new Date(startDate)
+      if (endDate) where.created_at.lte = new Date(endDate)
     }
 
     const [list, total] = await Promise.all([
@@ -150,7 +157,7 @@ async getLoginLogs(params = {}) {
         where,
         skip,
         take: size,
-        orderBy: { createdAt: 'desc' }
+        orderBy: { created_at: 'desc' }
       }),
       prisma.task_review_logs.count({ where })
     ])
@@ -158,14 +165,14 @@ async getLoginLogs(params = {}) {
     return {
       list: list.map(item => ({
         id: item.id?.toString(),
-        taskId: item.taskId?.toString(),
-        claimId: item.claimId?.toString(),
-        userId: item.userId?.toString(),
-        reviewerId: item.reviewerId?.toString(),
+        taskId: item.task_id?.toString(),
+        claimId: item.claim_id?.toString(),
+        userId: item.user_id?.toString(),
+        reviewerId: item.reviewer_id?.toString(),
         status: item.action === 'approve' ? 'done' : (item.action === 'reject' ? 'rejected' : item.action),
-        reviewedAt: item.createdAt,
+        reviewedAt: item.created_at,
         reviewNote: item.note,
-        isAiReview: item.aiReviewed
+        isAiReview: item.ai_reviewed
       })),
       total,
       page,
@@ -184,9 +191,9 @@ async getLoginLogs(params = {}) {
     const where = {}
     if (level) where.level = level
     if (startDate || endDate) {
-      where.createdAt = {}
-      if (startDate) where.createdAt.gte = new Date(startDate)
-      if (endDate) where.createdAt.lte = new Date(endDate)
+      where.created_at = {}
+      if (startDate) where.created_at.gte = new Date(startDate)
+      if (endDate) where.created_at.lte = new Date(endDate)
     }
 
     const [list, total] = await Promise.all([
@@ -194,16 +201,22 @@ async getLoginLogs(params = {}) {
         where,
         skip,
         take: size,
-        orderBy: { createdAt: 'desc' }
+        orderBy: { created_at: 'desc' }
       }),
       prisma.system_logs.count({ where })
     ])
 
     return {
       list: list.map(item => ({
-        ...item,
         id: item.id?.toString(),
-        userId: item.userId?.toString()
+        level: item.level,
+        type: item.type,
+        message: item.message,
+        context: item.context,
+        userId: item.user_id?.toString(),
+        username: item.username,
+        ipAddress: item.ip_address,
+        createdAt: item.created_at
       })),
       total,
       page,
@@ -230,9 +243,9 @@ async getLoginLogs(params = {}) {
     ] = await Promise.all([
       prisma.operation_logs.count(),
       prisma.login_logs.count(),
-      prisma.login_logs.count({ where: { loginTime: { gte: today } } }),
-      prisma.task_review_logs.count({ where: { createdAt: { gte: weekAgo } } }),
-      prisma.login_logs.count({ where: { isAnomaly: true } })
+      prisma.login_logs.count({ where: { login_time: { gte: today } } }),
+      prisma.task_review_logs.count({ where: { created_at: { gte: weekAgo } } }),
+      prisma.login_logs.count({ where: { is_anomaly: true } })
     ])
 
     return {
@@ -275,14 +288,32 @@ async getLoginLogs(params = {}) {
     
     switch (logType) {
       case 'operation_logs':
-        result.deleted = await prisma.operation_logs.deleteMany({
-          where: { createdAt: { lt: cutoffDate } }
-        })
+        result.deleted = (
+          await prisma.operation_logs.deleteMany({
+            where: { created_at: { lt: cutoffDate } }
+          })
+        ).count
         break
       case 'login_logs':
-        result.deleted = await prisma.login_logs.deleteMany({
-          where: { loginTime: { lt: cutoffDate } }
-        })
+        result.deleted = (
+          await prisma.login_logs.deleteMany({
+            where: { login_time: { lt: cutoffDate } }
+          })
+        ).count
+        break
+      case 'error_logs':
+      case 'debug_logs':
+      case 'info_logs':
+        result.deleted = (
+          await prisma.system_logs.deleteMany({
+            where: {
+              created_at: { lt: cutoffDate },
+              ...(logType === 'error_logs' ? { level: 'error' } : {}),
+              ...(logType === 'debug_logs' ? { level: 'debug' } : {}),
+              ...(logType === 'info_logs' ? { level: 'info' } : {}),
+            }
+          })
+        ).count
         break
     }
     

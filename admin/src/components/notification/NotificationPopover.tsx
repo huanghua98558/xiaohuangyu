@@ -1,12 +1,11 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
+import { useAdminWebSocket } from '@/hooks/useAdminWebSocket'
 import {
   Bell,
   Check,
   CheckCheck,
-  RefreshCw,
-  X,
   AlertCircle,
   CheckCircle,
   Info,
@@ -22,6 +21,8 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
+import { playAdminNotificationSound, registerAdminNotificationSoundUnlock } from '@/lib/notification-sound'
+import { getAdminNotificationHref } from '@/lib/notification-target'
 
 interface Notification {
   id: number
@@ -39,28 +40,49 @@ interface NotificationResponse {
   unreadCount: number
 }
 
+function getAdminAuthHeaders() {
+  return {
+    Authorization: `Bearer ${localStorage.getItem('admin_token') || ''}`,
+  }
+}
+
 // 类型配置
 const typeConfig: Record<string, { icon: React.ElementType; color: string }> = {
   system: { icon: Info, color: 'text-blue-500' },
   task: { icon: CheckCircle, color: 'text-green-500' },
   review: { icon: AlertCircle, color: 'text-purple-500' },
+  manual_review: { icon: AlertTriangle, color: 'text-orange-500' },
   withdrawal: { icon: AlertTriangle, color: 'text-amber-500' },
+  user: { icon: Info, color: 'text-pink-500' },
   alert: { icon: AlertCircle, color: 'text-red-500' },
 }
 
-// 格式化时间
+// 格式化时间（修复时区问题）
 function formatTime(dateStr: string): string {
-  const date = new Date(dateStr)
-  const now = new Date()
-  const diff = now.getTime() - date.getTime()
-  const minutes = Math.floor(diff / 1000 / 60)
-  const hours = Math.floor(diff / 1000 / 60 / 60)
-  const days = Math.floor(diff / 1000 / 60 / 60 / 24)
+  // 处理 ISO 时间字符串，确保正确解析 UTC 时间
+  let date: Date;
+  if (dateStr.endsWith('Z')) {
+    // 已经是 UTC 时间，直接解析
+    date = new Date(dateStr);
+  } else {
+    // 假设是 UTC 时间，添加 Z 后缀
+    date = new Date(dateStr + 'Z');
+  }
+  
+  const now = new Date();
+  const diff = now.getTime() - date.getTime();
+  
+  // 如果 diff 为负数，说明时间在未来，显示刚刚
+  if (diff < 0) return '刚刚';
+  
+  const minutes = Math.floor(diff / 1000 / 60);
+  const hours = Math.floor(diff / 1000 / 60 / 60);
+  const days = Math.floor(diff / 1000 / 60 / 60 / 24);
 
-  if (minutes < 1) return '刚刚'
-  if (minutes < 60) return `${minutes}分钟前`
-  if (hours < 24) return `${hours}小时前`
-  return `${days}天前`
+  if (minutes < 1) return '刚刚';
+  if (minutes < 60) return `${minutes}分钟前`;
+  if (hours < 24) return `${hours}小时前`;
+  return `${days}天前`;
 }
 
 export function NotificationPopover() {
@@ -72,56 +94,39 @@ export function NotificationPopover() {
   // 获取未读数
   const fetchUnreadCount = useCallback(async () => {
     try {
-      const res = await fetch('/api/admin/admin-notifications/unread-count', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('admin_token')}`
-        }
+      const res = await fetch('/admin/api/admin-v2/admin-notifications/unread-count', {
+        headers: getAdminAuthHeaders(),
       })
       const data = await res.json()
       if (data.code === 0) {
-        setUnreadCount(data.data.count)
+        setUnreadCount(Number(data.data?.count || 0))
       }
     } catch (e) {
-      // 静默失败，使用本地模拟
-      console.warn('获取未读数失败')
+      console.warn('获取未读数失败', e)
     }
   }, [])
+
+  useAdminWebSocket(['admin_notification'], () => {
+    playAdminNotificationSound('notification').catch(() => null)
+    fetchUnreadCount()
+    if (open) fetchNotifications()
+  })
 
   // 获取通知列表
   const fetchNotifications = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await fetch('/api/admin/admin-notifications?page=1&size=10', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('admin_token')}`
-        }
+      const res = await fetch('/admin/api/admin-v2/admin-notifications?page=1&size=10', {
+        headers: getAdminAuthHeaders(),
       })
       const data = await res.json()
       if (data.code === 0) {
-        setNotifications(data.data.list)
-        setUnreadCount(data.data.unreadCount)
+        setNotifications(data.data?.list || [])
+        setUnreadCount(Number(data.data?.unreadCount || 0))
       }
     } catch (e) {
-      // 使用模拟数据
-      setNotifications([
-        {
-          id: 1,
-          type: 'system',
-          title: '系统运行正常',
-          content: '所有服务运行稳定，无异常告警',
-          is_read: false,
-          created_at: new Date().toISOString()
-        },
-        {
-          id: 2,
-          type: 'task',
-          title: '待审核任务提醒',
-          content: '当前有 15 个任务等待审核',
-          is_read: false,
-          created_at: new Date(Date.now() - 3600000).toISOString()
-        }
-      ])
-      setUnreadCount(2)
+      console.warn('获取通知列表失败', e)
+      setNotifications([])
     } finally {
       setLoading(false)
     }
@@ -130,11 +135,9 @@ export function NotificationPopover() {
   // 标记已读
   const markAsRead = async (id: number) => {
     try {
-      await fetch(`/api/admin/admin-notifications/${id}/read`, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('admin_token')}`
-        }
+      await fetch(`/admin/api/admin-v2/admin-notifications/${id}/read`, {
+        method: 'POST',
+        headers: getAdminAuthHeaders(),
       })
       setNotifications(prev => 
         prev.map(n => n.id === id ? { ...n, is_read: true } : n)
@@ -149,14 +152,23 @@ export function NotificationPopover() {
     }
   }
 
+  const openNotification = async (notification: Notification) => {
+    if (!notification.is_read) {
+      await markAsRead(notification.id)
+    }
+
+    const target = getAdminNotificationHref(notification)
+    if (target) {
+      window.location.href = target
+    }
+  }
+
   // 全部已读
   const markAllAsRead = async () => {
     try {
-      await fetch('/api/admin/admin-notifications/read-all', {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('admin_token')}`
-        }
+      await fetch('/admin/api/admin-v2/admin-notifications/read-all', {
+        method: 'POST',
+        headers: getAdminAuthHeaders(),
       })
       setNotifications(prev => prev.map(n => ({ ...n, is_read: true })))
       setUnreadCount(0)
@@ -168,6 +180,7 @@ export function NotificationPopover() {
 
   // 初始化和定时刷新
   useEffect(() => {
+    registerAdminNotificationSoundUnlock()
     fetchUnreadCount()
     // 每30秒刷新未读数
     const interval = setInterval(fetchUnreadCount, 30000)
@@ -237,7 +250,7 @@ export function NotificationPopover() {
                       'p-3 cursor-pointer hover:bg-muted/50 transition-colors',
                       !notification.is_read && 'bg-blue-50/50 dark:bg-blue-950/20'
                     )}
-                    onClick={() => !notification.is_read && markAsRead(notification.id)}
+                    onClick={() => openNotification(notification)}
                   >
                     <div className="flex items-start gap-3">
                       <div className={cn('mt-0.5', config.color)}>
@@ -276,7 +289,7 @@ export function NotificationPopover() {
             className="w-full text-xs"
             onClick={() => {
               setOpen(false)
-              window.location.href = '/notifications'
+              window.location.href = '/admin/notifications'
             }}
           >
             查看全部通知

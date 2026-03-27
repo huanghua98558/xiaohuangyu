@@ -1657,9 +1657,9 @@ export interface UploadResponse {
 
 export async function uploadImage(file: File): Promise<UploadResponse> {
   const formData = new FormData()
-  formData.append('file', file)
+  formData.append('image', file)
   
-  const response = await fetch(`${API_BASE}/upload/single`, {
+  const response = await fetch(`${API_BASE}/upload/example-image`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${getStoredToken()}`

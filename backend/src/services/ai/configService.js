@@ -1,5 +1,9 @@
-import prisma from "../../utils/prisma.js"
 import logger from "../../utils/logger.js"
+import {
+  getConfigValue,
+  getConfigValues,
+  setConfigValue,
+} from "../systemConfigService.js"
 
 const configCache = new Map()
 const CACHE_TTL = 5 * 60 * 1000
@@ -11,8 +15,7 @@ export async function getConfig(key) {
       return cached.value
     }
     
-    const config = await prisma.configs.findFirst({ where: { key } })
-    const value = config?.value || null
+    const value = await getConfigValue(key, null)
     
     configCache.set(key, { value, time: Date.now() })
     return value
@@ -46,14 +49,7 @@ export async function getReviewerConfig() {
 
 export async function getConfigs(keys) {
   try {
-    const configs = await prisma.configs.findMany({
-      where: { key: { in: keys } }
-    })
-    const result = {}
-    for (const c of configs) {
-      result[c.key] = c.value
-    }
-    return result
+    return await getConfigValues(keys)
   } catch (err) {
     logger.error("批量获取配置失败:", err.message)
     return {}
@@ -62,15 +58,7 @@ export async function getConfigs(keys) {
 
 export async function setConfig(key, value) {
   try {
-    const existing = await prisma.configs.findFirst({ where: { key } })
-    if (existing) {
-      await prisma.configs.update({
-        where: { id: existing.id },
-        data: { value, updated_at: new Date() }
-      })
-    } else {
-      await prisma.configs.create({ data: { key, value } })
-    }
+    await setConfigValue(key, value)
     configCache.set(key, { value, time: Date.now() })
     return true
   } catch (err) {
@@ -79,17 +67,25 @@ export async function setConfig(key, value) {
   }
 }
 
-export async function getAllConfigs() {
+export async function getAllConfigs(category = null) {
   try {
     const configs = await prisma.configs.findMany()
-    const result = {}
-    for (const c of configs) {
-      result[c.key] = c.value
+    const list = configs.map((c) => ({
+      key: c.key,
+      value: c.value || "",
+      category: CONFIG_CATEGORIES[c.key] || "other",
+      type: typeof c.value === "string" && (c.value === "true" || c.value === "false") ? "boolean" : "string",
+      isEnabled: true
+    }))
+
+    if (category) {
+      return list.filter((item) => item.category === category)
     }
-    return result
+
+    return list
   } catch (err) {
     logger.error("获取所有配置失败:", err.message)
-    return {}
+    return []
   }
 }
 
@@ -150,22 +146,41 @@ const CONFIG_CATEGORIES = {
   image_review_fallback_model: "image_review",
   image_review_compression_threshold: "image_review",
   image_review_max_retry: "image_review",
-  image_review_api_timeout: "image_review"
+  image_review_api_timeout: "image_review",
+  ocr_confidence_threshold: "image_review",
+  ocr_use_gpu: "image_review",
+  ocr_language: "image_review",
+  yolo_confidence_threshold: "image_review",
+  yolo_model_path: "image_review",
+  image_ai_provider: "image_review",
+  image_ai_model: "image_review",
+  image_ai_api_key: "image_review",
+  image_ai_base_url: "image_review",
+  semantic_ai_provider: "semantic",
+  semantic_ai_model: "semantic",
+  semantic_ai_api_key: "semantic",
+  semantic_ai_base_url: "semantic",
+  semantic_ai_temperature: "semantic",
+  semantic_ai_max_tokens: "semantic",
+  user_assistant_api_provider: "assistant",
+  user_assistant_api_base_url: "assistant",
+  user_assistant_api_key: "assistant",
+  user_assistant_model: "assistant",
+  user_assistant_system_prompt: "assistant",
+  task_default_description: "assistant",
+  task_default_steps: "assistant",
+  task_xiaohongshu_description: "assistant",
+  task_xiaohongshu_steps: "assistant",
+  task_douyin_description: "assistant",
+  task_douyin_steps: "assistant",
+  task_weibo_description: "assistant",
+  task_weibo_steps: "assistant"
 }
 
 // 获取所有配置为数组格式（用于前端AI管理中心）
 export async function getAllConfigsAsArray() {
   try {
-    const allConfigs = await getAllConfigs()
-    
-    // 转换为数组格式
-    return Object.entries(allConfigs).map(([key, value]) => ({
-      key,
-      value: value || "",
-      category: CONFIG_CATEGORIES[key] || "other",
-      type: typeof value === "string" && (value === "true" || value === "false") ? "boolean" : "string",
-      isEnabled: true
-    }))
+    return await getAllConfigs()
   } catch (err) {
     logger.error("获取配置数组失败:", err.message)
     return []
@@ -189,9 +204,9 @@ const DEFAULT_CONFIGS = {
 export async function initDefaultConfigs() {
   try {
     for (const [key, value] of Object.entries(DEFAULT_CONFIGS)) {
-      const existing = await prisma.configs.findFirst({ where: { key } })
+      const existing = await getConfigValue(key, null)
       if (!existing) {
-        await prisma.configs.create({ data: { key, value } })
+        await setConfigValue(key, value)
         logger.info("初始化配置: " + key)
       }
     }

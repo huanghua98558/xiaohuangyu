@@ -1,4 +1,5 @@
 import supabase from '../utils/supabaseToPrismaAdapter.js'
+import prisma from '../utils/prisma.js'
 import { cache } from '../utils/redis.js'
 import levelService from './levelService.js'
 import logger from '../utils/logger.js'
@@ -80,27 +81,39 @@ class NightPointService {
       return cached
     }
 
-    const { data, error } = await supabase
-      .from('night_point_config')
-      .select('*')
-      .eq('is_active', true)
-      .single()
+    try {
+      // 从 CockroachDB 获取配置
+      const config = await prisma.$queryRawUnsafe(`
+        SELECT * FROM night_point_config WHERE is_active = true LIMIT 1
+      `)
 
-    if (error || !data) {
-      // 返回默认配置
-      const defaultConfig = {
-        time_start: 0,
-        time_end: 6,
-        base_coefficient: 1.4,
-        max_coefficient: 1.8,
-        no_accept_bonus: 0.1
+      if (config && config.length > 0) {
+        const configData = {
+          time_start: Number(config[0].time_start),
+          time_end: Number(config[0].time_end),
+          base_coefficient: Number(config[0].base_coefficient),
+          max_coefficient: Number(config[0].max_coefficient),
+          no_accept_bonus: Number(config[0].no_accept_bonus),
+          is_active: config[0].is_active
+        }
+        await cache.set(CACHE_KEY_CONFIG, configData, CACHE_TTL)
+        return configData
       }
-      await cache.set(CACHE_KEY_CONFIG, defaultConfig, CACHE_TTL)
-      return defaultConfig
+    } catch (error) {
+      logger.error('从 CockroachDB 获取夜间配置失败:', error.message)
     }
 
-    await cache.set(CACHE_KEY_CONFIG, data, CACHE_TTL)
-    return data
+    // 返回默认配置
+    const defaultConfig = {
+      time_start: 0,
+      time_end: 8,
+      base_coefficient: 1.4,
+      max_coefficient: 1.8,
+      no_accept_bonus: 0.1,
+      is_active: true
+    }
+    await cache.set(CACHE_KEY_CONFIG, defaultConfig, CACHE_TTL)
+    return defaultConfig
   }
 
   /**
@@ -113,26 +126,36 @@ class NightPointService {
       return cached
     }
 
-    const { data, error } = await supabase
-      .from('online_user_coefficient_map')
-      .select('*')
-      .order('sort_order', { ascending: true })
+    try {
+      // 从 CockroachDB 获取映射
+      const map = await prisma.$queryRawUnsafe(`
+        SELECT * FROM online_user_coefficient_map ORDER BY online_users_max ASC
+      `)
 
-    if (error || !data || data.length === 0) {
-      // 返回默认映射
-      const defaultMap = [
-        { online_users_max: 10, coefficient: 1.75, description: '极少人在线，高激励' },
-        { online_users_max: 30, coefficient: 1.7, description: '少量人在线，中高激励' },
-        { online_users_max: 50, coefficient: 1.6, description: '中等在线，适度激励' },
-        { online_users_max: 100, coefficient: 1.5, description: '较多在线，低激励' },
-        { online_users_max: 200, coefficient: 1.4, description: '大量在线，基础激励' }
-      ]
-      await cache.set(CACHE_KEY_COEFFICIENT_MAP, defaultMap, CACHE_TTL)
-      return defaultMap
+      if (map && map.length > 0) {
+        const result = map.map(row => ({
+          id: Number(row.id),
+          online_users_max: Number(row.online_users_max),
+          coefficient: Number(row.coefficient),
+          desc: row.desc || ''
+        }))
+        await cache.set(CACHE_KEY_COEFFICIENT_MAP, result, CACHE_TTL)
+        return result
+      }
+    } catch (error) {
+      logger.error('从 CockroachDB 获取系数映射失败:', error.message)
     }
 
-    await cache.set(CACHE_KEY_COEFFICIENT_MAP, data, CACHE_TTL)
-    return data
+    // 返回默认映射
+    const defaultMap = [
+      { online_users_max: 5, coefficient: 1.8, desc: '在线人数≤5' },
+      { online_users_max: 10, coefficient: 1.7, desc: '在线人数≤10' },
+      { online_users_max: 20, coefficient: 1.6, desc: '在线人数≤20' },
+      { online_users_max: 50, coefficient: 1.5, desc: '在线人数≤50' },
+      { online_users_max: 999, coefficient: 1.4, desc: '在线人数>50' }
+    ]
+    await cache.set(CACHE_KEY_COEFFICIENT_MAP, defaultMap, CACHE_TTL)
+    return defaultMap
   }
 
   /**

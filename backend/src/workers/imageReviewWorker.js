@@ -19,26 +19,207 @@ import db from '../config/database.js';
 import { publishImageReviewComplete } from '../utils/wsEventPublisher.js';
 import promotionService from '../services/promotionService.js';
 import pointsSettlementService from '../services/pointsSettlementService.js';
+import { notifyClaimRejected, notifyManualReviewQueued } from '../services/notificationService.js';
 import { CLAIM_STATUS } from '../constants/claimLifecycle.js';
 import { appendReviewHistory, createReviewHistoryEntry } from '../utils/claimReviewHistory.js';
+import {
+  buildSubmissionScreenshotEntries,
+  getScreenshotRoleLabel,
+  isCommentScreenshotRole,
+  normalizeScreenshotEntries,
+} from '../utils/claimScreenshots.js';
+import { getOcrServicePools } from '../utils/ocrServicePools.js';
 
 dotenv.config();
 
 // ============ 配置 ============
 
 // 服务配置
-const OCR_SERVICES_CONFIG = [
-  { url: 'http://127.0.0.1:9001', healthy: true, lastCheck: 0, failCount: 0 },
-  { url: 'http://127.0.0.1:9002', healthy: true, lastCheck: 0, failCount: 0 }
-];
+const OCR_SERVICE_POOLS = getOcrServicePools();
+const OCR_SERVICES_CONFIG = OCR_SERVICE_POOLS.all.map((url) => ({
+  url,
+  healthy: true,
+  lastCheck: 0,
+  failCount: 0,
+}));
 const YOLO_SERVICE_CONFIG = { url: 'http://127.0.0.1:8003', healthy: true, lastCheck: 0, failCount: 0 };
 
-// 超时配置 (优化后)
+// 超时与吞吐配置
+const IMAGE_WORKER_CONFIG = {
+  pollIntervalMs: readIntegerConfig(process.env.IMAGE_REVIEW_POLL_INTERVAL_MS, 3000, 500),
+  batchSize: readIntegerConfig(process.env.IMAGE_REVIEW_BATCH_SIZE, 5, 1),
+  ocrTimeoutMs: readIntegerConfig(process.env.IMAGE_REVIEW_OCR_TIMEOUT_MS, 10000, 1000),
+  yoloTimeoutMs: readIntegerConfig(process.env.IMAGE_REVIEW_YOLO_TIMEOUT_MS, 5000, 1000),
+  healthTimeoutMs: readIntegerConfig(process.env.IMAGE_REVIEW_HEALTH_TIMEOUT_MS, 3000, 500),
+  bailianTimeoutMs: readIntegerConfig(process.env.IMAGE_REVIEW_BAILIAN_TIMEOUT_MS, 30000, 5000)
+};
+
 const TIMEOUTS = {
-  OCR: 10000,      // 10秒 (原 30秒)
-  YOLO: 5000,      // 5秒 (原 15秒)
-  HEALTH_CHECK: 3000,
-  BAILIAN: 30000   // 百炼 AI 超时
+  OCR: IMAGE_WORKER_CONFIG.ocrTimeoutMs,
+  YOLO: IMAGE_WORKER_CONFIG.yoloTimeoutMs,
+  HEALTH_CHECK: IMAGE_WORKER_CONFIG.healthTimeoutMs,
+  BAILIAN: IMAGE_WORKER_CONFIG.bailianTimeoutMs
+}
+
+function normalizeDetectedValue(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'object') {
+    return normalizeDetectedValue(
+      value.text ??
+      value.content ??
+      value.value ??
+      value.name ??
+      value.nickname ??
+      value.author ??
+      null
+    );
+  }
+
+  const text = String(value).replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+
+  const lowered = text.toLowerCase();
+  if (['null', 'undefined', 'none', 'n/a', '没有', '无'].includes(lowered)) {
+    return null;
+  }
+
+  return text;
+}
+
+function extractCommentContent(value) {
+  if (!value) return null;
+  if (typeof value === 'object') {
+    return normalizeDetectedValue(
+      value.content ??
+      value.text ??
+      value.comment ??
+      value.value ??
+      null
+    );
+  }
+  return normalizeDetectedValue(value);
+}
+
+function createCombinedEvidence(source = 'ocr_yolo') {
+  return {
+    source,
+    has_comment_keyword: false,
+    commenterNickname: null,
+    comment: null,
+    authorName: null,
+    interaction: {
+      hasLike: false,
+      hasFavorite: false,
+      hasFollow: false
+    },
+    screenshots: []
+  };
+}
+
+function mergeInteractionState(target, source = {}) {
+  if (!target || !source) return;
+  target.hasLike = Boolean(target.hasLike || source.hasLike || source.has_like);
+  target.hasFavorite = Boolean(target.hasFavorite || source.hasFavorite || source.has_favorite);
+  target.hasFollow = Boolean(target.hasFollow || source.hasFollow || source.has_follow);
+}
+
+function mergeOcrEvidence(combinedEvidence, ocrResult, screenshotIndex, expectedRole = 'homepage') {
+  if (!combinedEvidence || !ocrResult) return false;
+
+  const commentText = extractCommentContent(ocrResult.comment);
+  const explicitType = ocrResult.detectedType || ocrResult.detected_type || null;
+  const authorName = normalizeDetectedValue(
+    ocrResult.authorName ||
+    ocrResult.author_name ||
+    (explicitType === 'homepage' ? ocrResult.author : null)
+  );
+  const commenterNickname = normalizeDetectedValue(
+    ocrResult.commenterNickname ||
+    ocrResult.commenter_nickname ||
+    (explicitType === 'comment' ? ocrResult.author : null)
+  );
+
+  let isCommentScreenshot = false;
+  if (explicitType === 'comment') {
+    isCommentScreenshot = true;
+  } else if (explicitType === 'homepage') {
+    isCommentScreenshot = false;
+  } else if (!isCommentScreenshotRole(expectedRole) && authorName) {
+    isCommentScreenshot = false;
+  } else {
+    isCommentScreenshot = Boolean(ocrResult.has_comment_keyword || commentText || commenterNickname);
+  }
+
+  combinedEvidence.has_comment_keyword = Boolean(
+    combinedEvidence.has_comment_keyword ||
+    (explicitType === 'comment' ? true : ocrResult.has_comment_keyword) ||
+    commentText
+  );
+
+  combinedEvidence.authorName = combinedEvidence.authorName || authorName;
+
+  if (isCommentScreenshot) {
+    combinedEvidence.comment = combinedEvidence.comment || commentText;
+    combinedEvidence.commenterNickname = combinedEvidence.commenterNickname || commenterNickname;
+  } else {
+    combinedEvidence.authorName = combinedEvidence.authorName || authorName;
+  }
+
+  mergeInteractionState(combinedEvidence.interaction, ocrResult.interaction);
+
+  combinedEvidence.screenshots.push({
+    screenshotIndex,
+    source: 'ocr',
+    screenType: isCommentScreenshot ? 'comment' : 'profile',
+    hasCommentKeyword: Boolean(ocrResult.has_comment_keyword),
+    commenterNickname: isCommentScreenshot ? (commenterNickname || '没有') : '没有',
+    comment: commentText || '没有',
+    authorName: authorName || '没有'
+  });
+
+  return isCommentScreenshot;
+}
+
+function mergeAiEvidence(combinedEvidence, aiResult, screenshotIndex) {
+  if (!combinedEvidence || !aiResult) return false;
+
+  const normalizedType = aiResult.type === 'B' ? 'profile' : 'comment';
+  const commentText = extractCommentContent(aiResult.comment);
+  const commenterNickname = normalizeDetectedValue(
+    aiResult.commenterNickname ||
+    (normalizedType === 'comment' ? aiResult.author : null)
+  );
+  const authorName = normalizeDetectedValue(
+    aiResult.authorName ||
+    (normalizedType === 'profile' ? aiResult.author : null)
+  );
+
+  combinedEvidence.has_comment_keyword = Boolean(
+    combinedEvidence.has_comment_keyword ||
+    aiResult.has_comment_keyword ||
+    commentText
+  );
+
+  if (normalizedType === 'comment') {
+    combinedEvidence.comment = combinedEvidence.comment || commentText;
+    combinedEvidence.commenterNickname = combinedEvidence.commenterNickname || commenterNickname;
+  } else {
+    combinedEvidence.authorName = combinedEvidence.authorName || authorName;
+  }
+
+  mergeInteractionState(combinedEvidence.interaction, aiResult.interaction);
+
+  combinedEvidence.screenshots.push({
+    screenshotIndex,
+    source: aiResult.source || 'bailian_ai',
+    screenType: normalizedType,
+    hasCommentKeyword: Boolean(aiResult.has_comment_keyword),
+    commenterNickname: normalizedType === 'comment' ? (commenterNickname || '没有') : '没有',
+    comment: commentText || '没有',
+    authorName: normalizedType === 'profile' ? (authorName || '没有') : '没有'
+  });
+
+  return normalizedType === 'comment';
 }
 
 function readIntegerConfig(value, fallback, minimum = null) {
@@ -107,12 +288,13 @@ const linkDelayQueue = new Queue('link-delay-queue', {
 });
 
 // 轮询配置
-const POLL_INTERVAL = 3000;
-const BATCH_SIZE = 5;
+const POLL_INTERVAL = IMAGE_WORKER_CONFIG.pollIntervalMs;
+const BATCH_SIZE = IMAGE_WORKER_CONFIG.batchSize;
 
 // Redis 轮询索引 Key
 const REDIS_KEYS = {
-  OCR_INDEX: 'image:worker:ocr:index',
+  OCR_INDEX_HOMEPAGE: 'image:worker:ocr:index:homepage',
+  OCR_INDEX_COMMENT: 'image:worker:ocr:index:comment',
   HEALTH_STATUS: 'image:worker:health:status'
 };
 
@@ -121,17 +303,29 @@ const REDIS_KEYS = {
 /**
  * 获取下一个 OCR 服务 (Redis 共享索引)
  */
-async function getNextOcrService() {
+function getOcrPoolByRole(role) {
+  return isCommentScreenshotRole(role) ? OCR_SERVICE_POOLS.comment : OCR_SERVICE_POOLS.homepage;
+}
+
+async function getNextOcrService(role = 'homepage') {
   try {
+    const key = isCommentScreenshotRole(role) ? REDIS_KEYS.OCR_INDEX_COMMENT : REDIS_KEYS.OCR_INDEX_HOMEPAGE;
+    const pool = getOcrPoolByRole(role);
+    const servicePool = pool.length > 0 ? pool : OCR_SERVICE_POOLS.all;
+    if (servicePool.length === 0) {
+      return null;
+    }
+
     // 使用 Redis INCR 实现原子递增
-    const index = await redisConnection.incr(REDIS_KEYS.OCR_INDEX);
-    const serviceIndex = (index - 1) % OCR_SERVICES_CONFIG.length;
+    const index = await redisConnection.incr(key);
+    const serviceIndex = (index - 1) % servicePool.length;
     
     // 获取健康的服务
-    const healthyServices = OCR_SERVICES_CONFIG.filter(s => s.healthy);
+    const healthyServices = OCR_SERVICES_CONFIG.filter(
+      (service) => servicePool.includes(service.url) && service.healthy
+    );
     if (healthyServices.length === 0) {
-      // 所有服务都不健康，返回配置中的第一个
-      return OCR_SERVICES_CONFIG[serviceIndex].url;
+      return servicePool[serviceIndex];
     }
     
     // 从健康服务中选择
@@ -140,9 +334,16 @@ async function getNextOcrService() {
   } catch (e) {
     // Redis 失败时使用随机选择
     console.warn('[Worker] Redis 获取索引失败，使用随机选择');
-    const healthyServices = OCR_SERVICES_CONFIG.filter(s => s.healthy);
+    const pool = getOcrPoolByRole(role);
+    const servicePool = pool.length > 0 ? pool : OCR_SERVICE_POOLS.all;
+    if (servicePool.length === 0) {
+      return null;
+    }
+    const healthyServices = OCR_SERVICES_CONFIG.filter(
+      (service) => servicePool.includes(service.url) && service.healthy
+    );
     if (healthyServices.length === 0) {
-      return OCR_SERVICES_CONFIG[Math.floor(Math.random() * OCR_SERVICES_CONFIG.length)].url;
+      return servicePool[Math.floor(Math.random() * servicePool.length)];
     }
     return healthyServices[Math.floor(Math.random() * healthyServices.length)].url;
   }
@@ -264,21 +465,50 @@ async function callBailianAI(imagePath, taskContext) {
               role: 'user',
               content: [
                 { image: `data:${mimeType};base64,${base64Image}` },
-                { text: `请分析这张图片，判断：
-1. 图片类型：是评论截图还是达人主页？
-2. 如果是评论截图：是否有"评论"二字？评论内容是什么？
-3. 如果是达人主页：达人名字是什么？有点赞、收藏、关注的图标吗？
+                { text: `请只返回 JSON，不要输出其它解释。分析这张小红书截图：
 
-请以JSON格式返回结果：
+【图片类型判断】
+- comment_screenshot：评论区截图，包含评论列表
+- author_profile：达人主页，显示头像、名字、右侧有互动按钮
+
+【达人主页互动状态识别 - 重点！】
+这是小红书达人主页，请仔细观察右侧一列互动按钮区域（从上到下依次是：点赞、收藏、关注）：
+
+1. 点赞状态（心形图标）：
+   - 未点赞：白色空心心形 ❤️‍🩹（轮廓线，内部是空的或透明的）
+   - 已点赞：红色实心心形 ❤️（整体是红色填充的）
+   - 判断要点：看心形内部是否有红色填充！
+
+2. 收藏状态（星形图标）：
+   - 未收藏：白色空心星形 ⭐（轮廓线，内部是空的）
+   - 已收藏：黄色实心星形 🌟（整体是黄色填充的）
+   - 判断要点：看星形内部是否有黄色填充！
+
+3. 关注状态：
+   - 红色"+"按钮 = 未关注
+   - 灰色"已关注"按钮 = 已关注
+
+【常见误判警告】
+- 不要把白色空心心形误判为已点赞！
+- 白色空心心形 = 未点赞
+- 红色实心心形 = 已点赞
+
+【评论截图识别】
+- commenter_nickname：评论人昵称
+- comment_content：评论内容
+- has_comment_keyword：是否出现"评论"关键词
+
+返回格式：
 {
   "type": "comment_screenshot" | "author_profile",
-  "has_comment_keyword": true/false,
-  "comment": "评论内容",
-  "author": "达人名字",
+  "has_comment_keyword": true,
+  "commenter_nickname": "评论人昵称",
+  "comment_content": "评论内容",
+  "author_name": "达人名字",
   "interaction": {
-    "has_like": true/false,
-    "has_favorite": true/false,
-    "has_follow": true/false
+    "has_like": true,
+    "has_favorite": true,
+    "has_follow": true
   }
 }` }
               ]
@@ -297,16 +527,28 @@ async function callBailianAI(imagePath, taskContext) {
     
     // 解析结果
     const content = response.data?.output?.choices?.[0]?.message?.content;
-    if (content) {
+    const contentText = Array.isArray(content)
+      ? content.map(part => (typeof part === 'string' ? part : part?.text || '')).join('\n')
+      : (typeof content === 'string' ? content : '');
+
+    if (contentText) {
       // 尝试提取 JSON
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      const jsonMatch = contentText.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         const result = JSON.parse(jsonMatch[0]);
+        console.log("[Worker] 百炼 AI 原始返回:", JSON.stringify(result));
+        const type = result.type === 'author_profile' ? 'B' : 'A';
+        const commentContent = extractCommentContent(result.comment_content || result.comment);
+        const commenterNickname = normalizeDetectedValue(result.commenter_nickname);
+        const authorName = normalizeDetectedValue(result.author_name || (type === 'B' ? result.author : null));
+
         return {
-          type: result.type === 'comment_screenshot' ? 'A' : 'B',
+          type,
           has_comment_keyword: result.has_comment_keyword || false,
-          comment: result.comment || null,
-          author: result.author || null,
+          comment: commentContent || null,
+          commenterNickname: commenterNickname || null,
+          authorName: authorName || null,
+          author: authorName || commenterNickname || null,
           interaction: {
             hasLike: result.interaction?.has_like || false,
             hasFavorite: result.interaction?.has_favorite || false,
@@ -372,20 +614,40 @@ function urlToLocalPath(imageUrl) {
 /**
  * 调用 OCR Service (带重试和故障转移)
  */
-async function callOCR(imagePath) {
+async function callOCR(imagePath, screenshotRole = 'homepage') {
   if (!fs.existsSync(imagePath)) {
     console.error(`[Worker] 文件不存在: ${imagePath}`);
     return null;
   }
 
-  // 获取健康的服务列表
-  const healthyServices = OCR_SERVICES_CONFIG.filter(s => s.healthy);
-  const servicesToTry = healthyServices.length > 0 ? healthyServices : OCR_SERVICES_CONFIG;
+  const preferredUrl = await getNextOcrService(screenshotRole);
+  const poolUrls = getOcrPoolByRole(screenshotRole);
+  const poolServices = OCR_SERVICES_CONFIG.filter((service) => poolUrls.includes(service.url));
+  const healthyServices = poolServices.filter((service) => service.healthy);
+  const fallbackServices = OCR_SERVICES_CONFIG.filter(
+    (service) => !poolUrls.includes(service.url) && service.healthy
+  );
+  const orderedServices = [];
+
+  const pushService = (service) => {
+    if (!service || orderedServices.find((item) => item.url === service.url)) {
+      return;
+    }
+    orderedServices.push(service);
+  };
+
+  pushService(OCR_SERVICES_CONFIG.find((service) => service.url === preferredUrl));
+  healthyServices.forEach(pushService);
+  fallbackServices.forEach(pushService);
+  OCR_SERVICES_CONFIG.forEach(pushService);
+
+  const servicesToTry = orderedServices;
   
   // 最多尝试所有健康服务
   for (const service of servicesToTry) {
     const form = new FormData();
     form.append('file', fs.createReadStream(imagePath));
+    form.append('image_type', screenshotRole);
 
     try {
       const res = await axios.post(`${service.url}/ocr/analyze_file`, form, {
@@ -396,7 +658,7 @@ async function callOCR(imagePath) {
       reportServiceSuccess(service.url);
       return res.data;
     } catch (e) {
-      console.warn(`[Worker] OCR ${service.url} 调用失败: ${e.message}`);
+      console.warn(`[Worker] OCR ${service.url} (${getScreenshotRoleLabel(screenshotRole)}) 调用失败: ${e.message}`);
       reportServiceFailure(service.url);
       
       // 如果还有其他服务可以尝试，继续
@@ -453,7 +715,19 @@ async function callYOLO(imagePath) {
 /**
  * 从任务标题/描述提取达人名字
  */
-function extractAuthorFromTask(title, videoUrl) {
+function extractAuthorFromTask(title, videoUrl, action = '') {
+  const normalizedAction = String(action || '').toLowerCase();
+  const isShortVideoResearch =
+    normalizedAction.includes('short_video') ||
+    normalizedAction.includes('短视频') ||
+    normalizedAction.includes('体验');
+
+  // 短视频体验类任务当前没有独立达人字段时，不能把分享文案里的标题直接当达人名
+  // 否则会把 “xxx的图文作品 / xxx的作品” 这类标题误判成达人，导致图片审核误拒。
+  if (isShortVideoResearch) {
+    return null;
+  }
+
   const titleMatch = title?.match(/@([\w\u4e00-\u9fff]+)/);
   if (titleMatch) return titleMatch[1];
   
@@ -474,17 +748,20 @@ function extractLinkFromVideoUrl(videoUrl) {
 }
 
 function parseScreenshotPayload(raw) {
-  if (!raw) return [];
-  if (Array.isArray(raw)) return raw;
-  if (typeof raw === 'string') {
-    try {
-      const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : [];
-    } catch (e) {
-      return [];
-    }
-  }
-  return [];
+  return normalizeScreenshotEntries(raw);
+}
+
+function hasEffectiveEvidence(combinedEvidence) {
+  if (!combinedEvidence) return false;
+  return Boolean(
+    combinedEvidence.comment ||
+    combinedEvidence.commenterNickname ||
+    combinedEvidence.authorName ||
+    combinedEvidence.has_comment_keyword ||
+    combinedEvidence.interaction?.hasLike ||
+    combinedEvidence.interaction?.hasFavorite ||
+    combinedEvidence.interaction?.hasFollow
+  );
 }
 
 // ============ Worker 类 ============
@@ -500,7 +777,10 @@ class ImageReviewWorker {
     console.log('  - Redis 共享轮询索引');
     console.log('  - 服务健康检查 + 自动摘除');
     console.log('  - 百炼 AI 降级机制');
+    console.log(`  - 轮询配置: poll=${POLL_INTERVAL}ms, batch=${BATCH_SIZE}`);
     console.log(`  - 超时配置: OCR ${TIMEOUTS.OCR}ms, YOLO ${TIMEOUTS.YOLO}ms`);
+    console.log(`  - OCR主页池: ${OCR_SERVICE_POOLS.homepage.join(', ')}`);
+    console.log(`  - OCR评论池: ${OCR_SERVICE_POOLS.comment.join(', ')}`);
     
     // 启动健康检查
     await startHealthCheck();
@@ -583,7 +863,10 @@ class ImageReviewWorker {
       // 获取截图
       const queueScreenshots = parseScreenshotPayload(item.queue_screenshots);
       const claimScreenshots = parseScreenshotPayload(item.claim_screenshots);
-      const screenshots = queueScreenshots.length > 0 ? queueScreenshots : claimScreenshots;
+      const screenshots =
+        queueScreenshots.length > 0
+          ? queueScreenshots
+          : (claimScreenshots.length > 0 ? claimScreenshots : buildSubmissionScreenshotEntries(item.claim_screenshots));
 
       if (!screenshots || screenshots.length === 0) {
         const result = { passed: false, reasons: ['无截图数据'] };
@@ -593,110 +876,124 @@ class ImageReviewWorker {
       }
 
       // 处理所有截图，合并结果
-      let finalOcrResult = null;
+      let combinedEvidence = createCombinedEvidence('ocr_yolo');
       let yoloResult = null;
       let usedFallback = false;
-      let foundComment = false;
-      let detectedAuthor = null;
-      let detectedComment = null;
+      const screenshotPaths = [];
       
       console.log(`[Worker] 共 ${screenshots.length} 张截图待处理`);
       
       for (let i = 0; i < screenshots.length; i++) {
         const screenshot = screenshots[i];
         const imageUrl = screenshot.url || screenshot;
+        const expectedRole = screenshot.role || (i === 0 ? 'homepage' : 'comment');
         const imagePath = urlToLocalPath(imageUrl);
 
         if (!imagePath) {
           console.log(`[Worker] 第 ${i + 1} 张图片路径解析失败，跳过`);
+          combinedEvidence.screenshots.push({
+            screenshotIndex: i + 1,
+            source: 'ocr',
+            status: 'path_failed',
+            expectedRole,
+          });
           continue;
         }
 
-        console.log(`[Worker] 处理第 ${i + 1} 张截图...`);
+        screenshotPaths.push(imagePath);
+
+        console.log(`[Worker] 处理第 ${i + 1} 张截图 (${getScreenshotRoleLabel(expectedRole)})...`);
         
-        // 调用 OCR
-        const ocrResult = await callOCR(imagePath);
-        
+        // 调用 OCR；如果 OCR 服务失败，仅做技术兜底，不再进入审核级 AI 复审
+        let ocrResult = await callOCR(imagePath, expectedRole);
+
         if (!ocrResult) {
-          console.log(`[Worker] 第 ${i + 1} 张 OCR 失败`);
-          continue;
+          console.log(`[Worker] 第 ${i + 1} 张 OCR 失败，尝试 AI 技术降级...`);
+          const fallbackResult = await callBailianAI(imagePath, {
+            taskTitle: item.task_title,
+            action: item.action,
+            stage: 'ocr_fallback',
+            expectedRole
+          });
+
+          if (fallbackResult) {
+            usedFallback = true;
+            ocrResult = {
+              ...fallbackResult,
+              source: fallbackResult.source || 'bailian_ai_fallback'
+            };
+          } else {
+            combinedEvidence.screenshots.push({
+              screenshotIndex: i + 1,
+              source: 'ocr',
+              status: 'failed',
+              expectedRole,
+            });
+            continue;
+          }
         }
         
         console.log(`[Worker] 第 ${i + 1} 张 OCR 结果: hasComment=${ocrResult.has_comment_keyword}, author=${ocrResult.author}, comment=${ocrResult.comment}`);
-        
-        // 提取评论内容（优先使用有评论的截图）
-        if (ocrResult.has_comment_keyword && ocrResult.comment && !foundComment) {
-          foundComment = true;
-          detectedComment = ocrResult.comment;
-          console.log(`[Worker] 从第 ${i + 1} 张提取到评论: ${detectedComment}`);
-        }
-        
-        // 提取达人名字
-        if (ocrResult.author && !detectedAuthor) {
-          detectedAuthor = ocrResult.author;
+
+        const isCommentScreenshot = mergeOcrEvidence(combinedEvidence, ocrResult, i + 1, expectedRole);
+        const detectedRole = isCommentScreenshot ? 'comment' : 'homepage';
+        const roleMismatch =
+          expectedRole !== 'extra' &&
+          ((isCommentScreenshot && !isCommentScreenshotRole(expectedRole)) ||
+            (!isCommentScreenshot && isCommentScreenshotRole(expectedRole)));
+
+        if (roleMismatch) {
+          combinedEvidence.screenshots.push({
+            screenshotIndex: i + 1,
+            source: 'routing',
+            status: 'role_mismatch',
+            expectedRole,
+            detectedRole,
+            note: '截图角色与默认顺序不一致，已按识别结果纠偏'
+          });
         }
         
         // 如果是类型 B（达人主页），调用 YOLO 检测互动状态
-        if (ocrResult.has_comment_keyword === false && !yoloResult) {
+        if (!isCommentScreenshot && !yoloResult) {
           console.log(`[Worker] 第 ${i + 1} 张类型 B，调用 YOLO 检测互动状态...`);
           yoloResult = await callYOLO(imagePath);
           console.log(`[Worker] YOLO 结果: ${JSON.stringify(yoloResult)}`);
         }
-        
-        // 合并结果到 finalOcrResult
-        if (!finalOcrResult) {
-          finalOcrResult = { ...ocrResult };
-        } else {
-          // 合并数据
-          if (ocrResult.has_comment_keyword) {
-            finalOcrResult.has_comment_keyword = true;
-          }
-          if (ocrResult.comment && !finalOcrResult.comment) {
-            finalOcrResult.comment = ocrResult.comment;
-          }
-          if (ocrResult.author && !finalOcrResult.author) {
-            finalOcrResult.author = ocrResult.author;
-          }
-        }
       }
       
-      // 如果所有 OCR 都失败，尝试降级到百炼 AI
-      if (!finalOcrResult) {
-        console.log(`[Worker] 所有 OCR 失败，尝试百炼 AI 降级...`);
-        const firstImagePath = urlToLocalPath(screenshots[0]?.url || screenshots[0]);
-        if (firstImagePath) {
-          finalOcrResult = await callBailianAI(firstImagePath, {
-            taskTitle: item.task_title,
-            action: item.action
-          });
-          usedFallback = true;
-        }
-        
-        if (!finalOcrResult) {
-          await this.moveToManualReview(item, '图片识别失败，已转人工复审', {
-            source: 'ocr_bailian',
-            screenshots: screenshots.length
-          });
-          return;
-        }
-      }
-      
-      // 确保评论数据被正确设置
-      if (detectedComment) {
-        finalOcrResult.comment = detectedComment;
-        finalOcrResult.has_comment_keyword = true;
+      if (!hasEffectiveEvidence(combinedEvidence)) {
+        await this.moveToManualReview(item, '图片识别失败，已转人工检查', {
+          stage: 'image_review',
+          blocking: true,
+          source: usedFallback ? 'ocr_with_ai_fallback' : 'ocr_yolo',
+          screenshotCount: screenshotPaths.length
+        });
+        return;
       }
 
-      // 综合判断
-      const result = this.evaluateResult(finalOcrResult, yoloResult, item);
-      
+      let result = this.evaluateResult(combinedEvidence, yoloResult, item);
       if (usedFallback) {
-        result.source = 'bailian_ai_fallback';
-        result.reasons.push('(百炼 AI 降级审核)');
+        result.source = 'ocr_with_ai_fallback';
       }
 
       // 保存结果
       await this.saveResult(item, result, Date.now() - startTime);
+
+      // 如果不通过，按 OCR+YOLO 结果直接拒绝，同时推送人工列表；不再进行 AI 复审
+      if (!result.passed) {
+        await this.rejectTask(item, result, {
+          pushToManualQueue: true,
+          manualReason: 'OCR+YOLO 审核未通过，已加入人工检查列表',
+          manualDetails: {
+            stage: 'image_review',
+            blocking: false,
+            reasons: result.reasons,
+            detected: result.detected,
+            source: result.source || 'ocr_yolo'
+          }
+        });
+        return;
+      }
 
       // 如果通过且需要链接验证
       if (result.passed && item.video_url) {
@@ -723,7 +1020,7 @@ class ImageReviewWorker {
               batchSize: linkConfig.batchSize,
               retryCount: linkConfig.retryCount,
               taskContext: {
-                author: extractAuthorFromTask(item.task_title, item.video_url),
+                author: extractAuthorFromTask(item.task_title, item.video_url, item.action),
                 action: item.action
               }
             }, {
@@ -780,10 +1077,6 @@ class ImageReviewWorker {
         // 图片审核通过且无需链接验证，直接完成任务
         console.log(`[Worker] ✅ 图片审核通过且无需链接验证，直接完成任务`);
         await this.completeTask(item, result);
-      } else if (!result.passed) {
-        // 图片审核拒绝，退回用户端
-        console.log(`[Worker] ❌ 图片审核拒绝，退回用户端`);
-        await this.rejectTask(item, result);
       }
 
       console.log(`[Worker] ✅ 处理完成: claim_id=${item.claim_id}, 结果=${result.passed ? '通过' : '拒绝'}, 耗时=${Date.now() - startTime}ms`);
@@ -801,21 +1094,26 @@ class ImageReviewWorker {
   }
 
   evaluateResult(ocrResult, yoloResult, item) {
-    // 提取评论内容（OCR 返回的 comment 是对象，需要提取 content）
-    const commentContent = ocrResult.comment?.content || ocrResult.comment || null;
+    const commentContent = extractCommentContent(ocrResult.comment);
+    const commenterNickname = normalizeDetectedValue(ocrResult.commenterNickname);
+    const authorName = normalizeDetectedValue(ocrResult.authorName || ocrResult.author);
     
     const result = {
       passed: true,
       reasons: [],
       type: ocrResult.type,
-      hasComment: ocrResult.has_comment_keyword || (ocrResult.comment_count > 0),
-      author: ocrResult.author,
+      source: ocrResult.source || 'ocr_yolo',
+      hasComment: Boolean(ocrResult.has_comment_keyword || commentContent),
+      author: authorName,
+      authorName,
+      commenterNickname,
       comment: commentContent,
       interaction: {
         hasLike: ocrResult.interaction?.hasLike || false,
         hasFavorite: ocrResult.interaction?.hasFavorite || false,
         hasFollow: ocrResult.interaction?.hasFollow || false
-      }
+      },
+      screenshotEvidence: Array.isArray(ocrResult.screenshots) ? ocrResult.screenshots : []
     };
 
     // 合并 YOLO 结果
@@ -827,31 +1125,52 @@ class ImageReviewWorker {
 
     // 获取审核规则 (从 action 解析)
     const action = item.action || '';
+    const requiresCommentFlow = action.includes('评论') || action.includes('留言') || action.includes('体验');
+    // "短视频体验官" 类任务默认需要全部检测（点赞、收藏）
+    const isFullCheck = action.includes('体验') || action.includes('短视频') || action.includes('short_video');
+
     const reviewSettings = {
       checks: {
-        comment: action.includes('评论'),
-        like: action.includes('点赞'),
-        favorite: action.includes('收藏'),
+        comment: requiresCommentFlow,
+        commenterNickname: requiresCommentFlow,
+        authorName: true,
+        like: isFullCheck || action.includes('点赞'),      // 体验类任务检查点赞
+        favorite: isFullCheck || action.includes('收藏'),  // 体验类任务检查收藏
         follow: action.includes('关注')
       }
     };
 
-    // 评论关键词验证
-    if (reviewSettings.checks.comment && !result.hasComment) {
+    if (reviewSettings.checks.commenterNickname && !result.commenterNickname) {
       result.passed = false;
-      result.reasons.push('未检测到"评论"关键词');
+      result.reasons.push('未识别评论人昵称');
+    }
+
+    if (reviewSettings.checks.comment && !commentContent) {
+      result.passed = false;
+      result.reasons.push('未识别评论内容');
+    }
+
+    if (requiresCommentFlow && !result.hasComment) {
+      result.passed = false;
+      result.reasons.push('未检测到评论截图');
+    }
+
+    if (reviewSettings.checks.authorName && !result.authorName) {
+      result.passed = false;
+      result.reasons.push('未识别达人名字');
     }
 
     // 达人匹配
-    const taskAuthor = extractAuthorFromTask(item.task_title, item.video_url);
-    if (taskAuthor && result.author) {
-      if (!this.matchAuthor(taskAuthor, result.author)) {
+    const taskAuthor = extractAuthorFromTask(item.task_title, item.video_url, item.action);
+    if (taskAuthor && result.authorName) {
+      if (!this.matchAuthor(taskAuthor, result.authorName)) {
         result.passed = false;
-        result.reasons.push('达人名字不匹配');
+        result.reasons.push(`达人名字不匹配（任务:${taskAuthor} / 截图:${result.authorName}）`);
       }
     }
 
     // 互动验证
+    console.log("[Worker] 互动验证: checks.like=" + reviewSettings.checks.like + ", hasLike=" + result.interaction.hasLike + ", action=" + action);
     if (reviewSettings.checks.like && !result.interaction.hasLike) {
       result.passed = false;
       result.reasons.push('未检测到点赞');
@@ -864,6 +1183,15 @@ class ImageReviewWorker {
       result.passed = false;
       result.reasons.push('未检测到关注');
     }
+
+    result.detected = {
+      commenterNickname: result.commenterNickname || '没有',
+      comment: result.comment || '没有',
+      authorName: result.authorName || '没有',
+      like: result.interaction.hasLike ? '有' : '没有',
+      favorite: result.interaction.hasFavorite ? '有' : '没有',
+      follow: result.interaction.hasFollow ? '有' : '没有'
+    };
 
     return result;
   }
@@ -889,7 +1217,12 @@ class ImageReviewWorker {
             hasComment: result.hasComment,
             interaction: result.interaction,
             source: result.source || 'ocr_yolo',
-            durationMs: duration
+            durationMs: duration,
+            recheck: result.recheck || null,
+            commenterNickname: result.commenterNickname || '没有',
+            comment: result.comment || '没有',
+            authorName: result.authorName || '没有',
+            screenshots: result.screenshotEvidence || []
           }
         })
       );
@@ -900,14 +1233,16 @@ class ImageReviewWorker {
             image_review_reason = $2,
             image_reviewed_at = NOW(),
             ocr_comment = $3,
-            ai_review_status = $4,
-            ai_reason = $5,
-            review_history = $6
-        WHERE id = $7
+            platform_nickname = COALESCE(NULLIF(platform_nickname, ''), $4),
+            ai_review_status = $5,
+            ai_reason = $6,
+            review_history = $7
+        WHERE id = $8
       `, [
         result.passed ? 'approved' : 'rejected',
         result.reasons.join('; ') || '审核通过',
         result.comment || null,
+        result.commenterNickname || null,
         result.passed ? 'approved' : 'rejected',
         JSON.stringify(result),
         JSON.stringify(reviewHistory),
@@ -985,13 +1320,13 @@ class ImageReviewWorker {
   }
   
   // 拒绝任务（退回用户端）
-  async rejectTask(item, result) {
+  async rejectTask(item, result, options = {}) {
     try {
       await db.transaction(async (client) => {
         const claimRes = await client.query(`SELECT reject_count, review_history FROM claims WHERE id = $1`, [item.claim_id]);
         const rejectCount = (claimRes.rows[0]?.reject_count || 0) + 1;
         const reviewReason = result.reasons.join('; ') || '图片审核未通过';
-        const reviewHistory = appendReviewHistory(
+        let reviewHistory = appendReviewHistory(
           claimRes.rows?.[0]?.review_history,
           createReviewHistoryEntry({
             stage: 'claim_flow',
@@ -1003,6 +1338,31 @@ class ImageReviewWorker {
             }
           })
         );
+
+        if (options.pushToManualQueue) {
+          reviewHistory = appendReviewHistory(
+            reviewHistory,
+            createReviewHistoryEntry({
+              stage: 'manual_review',
+              action: 'queued',
+              reason: options.manualReason || '已加入人工检查列表',
+              details: {
+                ...(options.manualDetails || {}),
+                previousDecision: 'rejected'
+              }
+            })
+          );
+        }
+
+        const nextAiStatus = options.pushToManualQueue ? 'manual' : 'rejected';
+        const aiReason = JSON.stringify({
+          ...result,
+          manualReview: options.pushToManualQueue ? {
+            queued: true,
+            reason: options.manualReason || '已加入人工检查列表',
+            details: options.manualDetails || {}
+          } : undefined
+        });
         
         // 如果拒绝次数达到3次，释放任务
         if (rejectCount >= 3) {
@@ -1013,29 +1373,40 @@ class ImageReviewWorker {
                 submitted_at = NULL,
                 reviewed_at = NOW(),
                 review_note = $2,
-                ai_review_status = 'rejected',
+                ai_review_status = $4,
+                ai_reason = $5,
                 image_review_status = 'rejected',
                 image_review_reason = $2,
                 review_history = $3
-            WHERE id = $4
-          `, [rejectCount, reviewReason, JSON.stringify(reviewHistory), item.claim_id]);
+            WHERE id = $6
+          `, [rejectCount, reviewReason, JSON.stringify(reviewHistory), nextAiStatus, aiReason, item.claim_id]);
           console.log(`[Worker] ⚠️ 任务已释放: 拒绝次数达到3次`);
         } else {
           // 退回用户端，状态改为 doing，允许重新提交
+          // 需要重新设置倒计时（从任务获取限时）
+          const timeLimitResult = await client.query(
+            `SELECT t.time_limit_minutes FROM claims c JOIN tasks t ON c.task_id = t.id WHERE c.id = $1`,
+            [item.claim_id]
+          );
+          const timeLimitMinutes = timeLimitResult.rows[0]?.time_limit_minutes || 15;
+          const newExpiresAt = new Date(Date.now() + timeLimitMinutes * 60 * 1000);
+          
           await client.query(`
-            UPDATE claims 
+            UPDATE claims
             SET status = $1,
                 reject_count = $2,
                 submitted_at = NULL,
                 reviewed_at = NOW(),
                 review_note = $3,
-                ai_review_status = 'rejected',
+                ai_review_status = $5,
+                ai_reason = $6,
                 image_review_status = 'rejected',
                 image_review_reason = $3,
-                review_history = $4
-            WHERE id = $5
-          `, [CLAIM_STATUS.DOING, rejectCount, reviewReason, JSON.stringify(reviewHistory), item.claim_id]);
-          console.log(`[Worker] 🔄 任务已退回用户端: 拒绝次数 ${rejectCount}/3`);
+                review_history = $4,
+                expires_at = $7
+            WHERE id = $8
+          `, [CLAIM_STATUS.DOING, rejectCount, reviewReason, JSON.stringify(reviewHistory), nextAiStatus, aiReason, newExpiresAt, item.claim_id]);
+          console.log(`[Worker] 🔄 任务已退回用户端: 拒绝次数 ${rejectCount}/3, 新倒计时 ${timeLimitMinutes}分钟`);
         }
       });
 
@@ -1045,6 +1416,16 @@ class ImageReviewWorker {
         false,
         result.reasons.join('; ') || '图片审核未通过'
       );
+
+      try {
+        await notifyClaimRejected(
+          item.user_id,
+          item.claim_id,
+          result.reasons.join('; ') || '图片审核未通过'
+        );
+      } catch (notifyErr) {
+        console.error(`[Worker] 发送图片拒绝通知失败: ${notifyErr.message}`);
+      }
 
     } catch (e) {
       console.error(`[Worker] 拒绝任务失败: ${e.message}`);
@@ -1061,7 +1442,10 @@ class ImageReviewWorker {
             stage: 'image_review',
             action: 'manual',
             reason,
-            details
+            details: {
+              ...details,
+              blocking: details.blocking !== false
+            }
           })
         );
 
@@ -1094,6 +1478,18 @@ class ImageReviewWorker {
       });
 
       await publishImageReviewComplete(item.claim_id, item.user_id, false, reason);
+
+      try {
+        await notifyManualReviewQueued({
+          claimId: item.claim_id,
+          userId: item.user_id,
+          taskId: item.task_id,
+          stage: 'image_review',
+          reason,
+        });
+      } catch (notifyErr) {
+        console.error(`[Worker] 发送人工队列通知失败: ${notifyErr.message}`);
+      }
     } catch (e) {
       console.error(`[Worker] 转人工失败: ${e.message}`);
     }

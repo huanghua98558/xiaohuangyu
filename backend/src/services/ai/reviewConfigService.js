@@ -63,7 +63,7 @@ const DEFAULT_CONFIG = {
   // 语意识别
   semantic: {
     enabled: true,
-    mode: 'rule_and_ai',
+    mode: 'default_pass',
     minRelevance: 0.5,
     minPositivity: 0.3,
     minEffectiveness: 0.5

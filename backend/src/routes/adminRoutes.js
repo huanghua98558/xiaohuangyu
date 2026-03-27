@@ -6,6 +6,8 @@ import operationLogService from '../services/operationLogService.js'
 import walletService from '../services/walletService.js'
 import exposureService from '../services/exposureService.js'
 import onlineUserService from '../services/onlineUserService.js'
+import notificationService from '../services/notificationService.js'
+import alertService from '../services/alertService.js'
 import { authMiddleware, adminOnly } from '../middlewares/auth.js'
 import { success } from '../utils/response.js'
 import supabase from '../utils/supabaseToPrismaAdapter.js'
@@ -14,6 +16,19 @@ import prisma from '../utils/prisma.js'
 import adminService from '../services/adminService.js'
 
 const router = Router()
+const ADMIN_NOTIFICATION_SETTINGS = {
+  notification_admin_enabled: true,
+  notification_admin_sound_enabled: true,
+  notification_admin_web_enabled: true,
+  notification_admin_mobile_enabled: true,
+  notification_alert_cooldown_seconds: 300,
+  notification_alert_manual_queue_threshold: 5,
+  notification_alert_stale_task_minutes: 120,
+  notification_alert_pending_payout_minutes: 30,
+  notification_alert_user_anomaly_threshold: 3,
+  notification_alert_reward_anomaly_threshold: 1,
+  notification_alert_reward_lookback_minutes: 120,
+}
 
 // 辅助函数：记录操作日志
 async function logOperation(req, action, targetType, targetId, targetName, oldValue, newValue, description) {
@@ -859,49 +874,24 @@ router.get('/exposure/list', async (req, res, next) => {
   try {
     const { page = 1, size = 20, status } = req.query
     const offset = (parseInt(page) - 1) * parseInt(size)
-    const limit = parseInt(size)
     
-    let statusCondition = ""
+    let query = supabase
+      .from('task_exposure')
+      .select('*, tasks(title, platform, action, reward, remain)', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(offset, offset + parseInt(size) - 1)
+    
     if (status) {
-      statusCondition = `AND e.status = '${status}'`
+      query = query.eq('status', status)
     }
     
-    // 请选择分数
-    const countResult = await prisma.$queryRawUnsafe(`
-      SELECT COUNT(*) as total FROM task_exposure e
-      WHERE 1=1 ${statusCondition}
-    `)
-    const total = Number(countResult[0]?.total || 0)
+    const { data, count, error } = await query
     
-    // 迷頉择到窗口
-    const list = await prisma.$queryRawUnsafe(`
-      SELECT 
-        e.id, e.task_id, e.need_count, e.initial_exposure, e.current_exposure, 
-        e.max_exposure, e.accepted_count, e.submitted_count, e.status,
-        e.queue_position, e.unlocked_at, e.last_check_at, e.created_at, e.updated_at,
-        t.title, t.platform, t.action, t.reward, t.remain
-      FROM task_exposure e
-      LEFT JOIN tasks t ON e.task_id = t.id
-      WHERE 1=1 ${statusCondition}
-      ORDER BY e.created_at DESC
-      LIMIT ${limit} OFFSET ${offset}
-    `)
-    
-    // 正确数字状态化P
-    const formattedList = list.map(item => ({
-      ...item,
-      task: item.title ? {
-        title: item.title,
-        platform: item.platform,
-        action: item.action,
-        reward: item.reward,
-        remain: item.remain
-      } : null
-    }))
+    if (error) throw error
     
     success(res, {
-      list: formattedList,
-      total,
+      list: data || [],
+      total: count || 0,
       page: parseInt(page),
       size: parseInt(size)
     })
@@ -1390,15 +1380,185 @@ router.get('/stats/publisher-quality', async (req, res, next) => {
 
 // ============ 告警管理 ============
 
+// 管理员通知列表
+router.get('/admin-notifications', async (req, res, next) => {
+  try {
+    const page = parseInt(req.query.page, 10) || 1
+    const size = parseInt(req.query.size, 10) || 20
+    const unreadOnly = req.query.unreadOnly === 'true'
+    const result = await notificationService.getAdminNotifications({
+      page,
+      pageSize: size,
+      unreadOnly,
+    })
+    success(res, result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.get('/admin-notifications/unread-count', async (req, res, next) => {
+  try {
+    const count = await notificationService.getAdminUnreadCount()
+    success(res, { count })
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.post('/admin-notifications/:id/read', async (req, res, next) => {
+  try {
+    const result = await notificationService.markAdminNotificationRead(req.params.id)
+    success(res, result, '已标记为已读')
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.put('/admin-notifications/:id/read', async (req, res, next) => {
+  try {
+    const result = await notificationService.markAdminNotificationRead(req.params.id)
+    success(res, result, '已标记为已读')
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.post('/admin-notifications/read-all', async (req, res, next) => {
+  try {
+    const result = await notificationService.markAllAdminNotificationsRead()
+    success(res, result, '已全部标记为已读')
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.put('/admin-notifications/read-all', async (req, res, next) => {
+  try {
+    const result = await notificationService.markAllAdminNotificationsRead()
+    success(res, result, '已全部标记为已读')
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.get('/notification-settings', async (req, res, next) => {
+  try {
+    const keys = Object.keys(ADMIN_NOTIFICATION_SETTINGS)
+    const configs = await prisma.system_configs.findMany({
+      where: {
+        key: { in: keys },
+      },
+    })
+
+    const configMap = {}
+    for (const item of configs) {
+      configMap[item.key] = item.value
+    }
+
+    const data = {
+      adminNotificationEnabled: configMap.notification_admin_enabled !== undefined
+        ? String(configMap.notification_admin_enabled) === 'true'
+        : ADMIN_NOTIFICATION_SETTINGS.notification_admin_enabled,
+      adminNotificationSoundEnabled: configMap.notification_admin_sound_enabled !== undefined
+        ? String(configMap.notification_admin_sound_enabled) === 'true'
+        : ADMIN_NOTIFICATION_SETTINGS.notification_admin_sound_enabled,
+      adminNotificationWebEnabled: configMap.notification_admin_web_enabled !== undefined
+        ? String(configMap.notification_admin_web_enabled) === 'true'
+        : ADMIN_NOTIFICATION_SETTINGS.notification_admin_web_enabled,
+      adminNotificationMobileEnabled: configMap.notification_admin_mobile_enabled !== undefined
+        ? String(configMap.notification_admin_mobile_enabled) === 'true'
+        : ADMIN_NOTIFICATION_SETTINGS.notification_admin_mobile_enabled,
+      alertCooldownSeconds: parseInt(configMap.notification_alert_cooldown_seconds, 10) || ADMIN_NOTIFICATION_SETTINGS.notification_alert_cooldown_seconds,
+      manualQueueThreshold: parseInt(configMap.notification_alert_manual_queue_threshold, 10) || ADMIN_NOTIFICATION_SETTINGS.notification_alert_manual_queue_threshold,
+      staleTaskMinutes: parseInt(configMap.notification_alert_stale_task_minutes, 10) || ADMIN_NOTIFICATION_SETTINGS.notification_alert_stale_task_minutes,
+      pendingPayoutMinutes: parseInt(configMap.notification_alert_pending_payout_minutes, 10) || ADMIN_NOTIFICATION_SETTINGS.notification_alert_pending_payout_minutes,
+      userAnomalyThreshold: parseInt(configMap.notification_alert_user_anomaly_threshold, 10) || ADMIN_NOTIFICATION_SETTINGS.notification_alert_user_anomaly_threshold,
+      rewardAnomalyThreshold: parseInt(configMap.notification_alert_reward_anomaly_threshold, 10) || ADMIN_NOTIFICATION_SETTINGS.notification_alert_reward_anomaly_threshold,
+      rewardAnomalyLookbackMinutes: parseInt(configMap.notification_alert_reward_lookback_minutes, 10) || ADMIN_NOTIFICATION_SETTINGS.notification_alert_reward_lookback_minutes,
+    }
+
+    success(res, data)
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.post('/notification-settings', async (req, res, next) => {
+  try {
+    const {
+      adminNotificationEnabled = ADMIN_NOTIFICATION_SETTINGS.notification_admin_enabled,
+      adminNotificationSoundEnabled = ADMIN_NOTIFICATION_SETTINGS.notification_admin_sound_enabled,
+      adminNotificationWebEnabled = ADMIN_NOTIFICATION_SETTINGS.notification_admin_web_enabled,
+      adminNotificationMobileEnabled = ADMIN_NOTIFICATION_SETTINGS.notification_admin_mobile_enabled,
+      alertCooldownSeconds = ADMIN_NOTIFICATION_SETTINGS.notification_alert_cooldown_seconds,
+      manualQueueThreshold = ADMIN_NOTIFICATION_SETTINGS.notification_alert_manual_queue_threshold,
+      staleTaskMinutes = ADMIN_NOTIFICATION_SETTINGS.notification_alert_stale_task_minutes,
+      pendingPayoutMinutes = ADMIN_NOTIFICATION_SETTINGS.notification_alert_pending_payout_minutes,
+      userAnomalyThreshold = ADMIN_NOTIFICATION_SETTINGS.notification_alert_user_anomaly_threshold,
+      rewardAnomalyThreshold = ADMIN_NOTIFICATION_SETTINGS.notification_alert_reward_anomaly_threshold,
+      rewardAnomalyLookbackMinutes = ADMIN_NOTIFICATION_SETTINGS.notification_alert_reward_lookback_minutes,
+    } = req.body || {}
+
+    const updates = [
+      ['notification_admin_enabled', String(Boolean(adminNotificationEnabled)), '管理员通知总开关'],
+      ['notification_admin_sound_enabled', String(Boolean(adminNotificationSoundEnabled)), '管理员网页声音提醒开关'],
+      ['notification_admin_web_enabled', String(Boolean(adminNotificationWebEnabled)), '管理员网页通知开关'],
+      ['notification_admin_mobile_enabled', String(Boolean(adminNotificationMobileEnabled)), '管理员手机端通知开关'],
+      ['notification_alert_cooldown_seconds', String(Math.max(30, parseInt(alertCooldownSeconds, 10) || ADMIN_NOTIFICATION_SETTINGS.notification_alert_cooldown_seconds)), '通知告警冷却秒数'],
+      ['notification_alert_manual_queue_threshold', String(Math.max(1, parseInt(manualQueueThreshold, 10) || ADMIN_NOTIFICATION_SETTINGS.notification_alert_manual_queue_threshold)), '人工检查列表告警阈值'],
+      ['notification_alert_stale_task_minutes', String(Math.max(10, parseInt(staleTaskMinutes, 10) || ADMIN_NOTIFICATION_SETTINGS.notification_alert_stale_task_minutes)), '任务超时未完成阈值（分钟）'],
+      ['notification_alert_pending_payout_minutes', String(Math.max(5, parseInt(pendingPayoutMinutes, 10) || ADMIN_NOTIFICATION_SETTINGS.notification_alert_pending_payout_minutes)), '提现待打款阈值（分钟）'],
+      ['notification_alert_user_anomaly_threshold', String(Math.max(1, parseInt(userAnomalyThreshold, 10) || ADMIN_NOTIFICATION_SETTINGS.notification_alert_user_anomaly_threshold)), '用户异常告警阈值'],
+      ['notification_alert_reward_anomaly_threshold', String(Math.max(1, parseInt(rewardAnomalyThreshold, 10) || ADMIN_NOTIFICATION_SETTINGS.notification_alert_reward_anomaly_threshold)), '任务奖励异常阈值'],
+      ['notification_alert_reward_lookback_minutes', String(Math.max(10, parseInt(rewardAnomalyLookbackMinutes, 10) || ADMIN_NOTIFICATION_SETTINGS.notification_alert_reward_lookback_minutes)), '任务奖励异常回溯时间（分钟）'],
+    ]
+
+    for (const [key, value, description] of updates) {
+      await prisma.system_configs.upsert({
+        where: { key },
+        update: { value, description, updated_at: new Date() },
+        create: { key, value, description, updated_at: new Date() },
+      })
+    }
+
+    success(res, {
+      adminNotificationEnabled: Boolean(adminNotificationEnabled),
+      adminNotificationSoundEnabled: Boolean(adminNotificationSoundEnabled),
+      adminNotificationWebEnabled: Boolean(adminNotificationWebEnabled),
+      adminNotificationMobileEnabled: Boolean(adminNotificationMobileEnabled),
+      alertCooldownSeconds: Math.max(30, parseInt(alertCooldownSeconds, 10) || ADMIN_NOTIFICATION_SETTINGS.notification_alert_cooldown_seconds),
+      manualQueueThreshold: Math.max(1, parseInt(manualQueueThreshold, 10) || ADMIN_NOTIFICATION_SETTINGS.notification_alert_manual_queue_threshold),
+      staleTaskMinutes: Math.max(10, parseInt(staleTaskMinutes, 10) || ADMIN_NOTIFICATION_SETTINGS.notification_alert_stale_task_minutes),
+      pendingPayoutMinutes: Math.max(5, parseInt(pendingPayoutMinutes, 10) || ADMIN_NOTIFICATION_SETTINGS.notification_alert_pending_payout_minutes),
+      userAnomalyThreshold: Math.max(1, parseInt(userAnomalyThreshold, 10) || ADMIN_NOTIFICATION_SETTINGS.notification_alert_user_anomaly_threshold),
+      rewardAnomalyThreshold: Math.max(1, parseInt(rewardAnomalyThreshold, 10) || ADMIN_NOTIFICATION_SETTINGS.notification_alert_reward_anomaly_threshold),
+      rewardAnomalyLookbackMinutes: Math.max(10, parseInt(rewardAnomalyLookbackMinutes, 10) || ADMIN_NOTIFICATION_SETTINGS.notification_alert_reward_lookback_minutes),
+    }, '通知告警设置保存成功')
+  } catch (err) {
+    next(err)
+  }
+})
+
 // 获取告警列表
 router.get('/alerts', async (req, res, next) => {
   try {
-    const { page = 1, size = 20, isHandled, alertLevel, alertType } = req.query
-    const result = await operationLogService.getAlerts(parseInt(page), parseInt(size), {
+    const { page = 1, size = 20, pageSize, isHandled, alertLevel, severity, alertType, status } = req.query
+    const result = await alertService.getAlerts(parseInt(page, 10), parseInt(pageSize || size, 10), {
       isHandled: isHandled !== undefined ? isHandled === 'true' : undefined,
-      alertLevel: alertLevel || null,
-      alertType: alertType || null
+      severity: severity || alertLevel || null,
+      alertType: alertType || null,
+      status: status || null,
     })
+    success(res, result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.get('/alerts/stats', async (req, res, next) => {
+  try {
+    const result = await alertService.getStats()
     success(res, result)
   } catch (err) {
     next(err)
@@ -1409,7 +1569,8 @@ router.get('/alerts', async (req, res, next) => {
 router.post('/alerts/:id/handle', async (req, res, next) => {
   try {
     const alertId = req.params.id
-    const result = await operationLogService.handleAlert(alertId, req.userId)
+    const { action = 'resolve', note = '' } = req.body || {}
+    const result = await alertService.handleAlert(alertId, req.userId, action, note)
     success(res, result)
   } catch (err) {
     next(err)

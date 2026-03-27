@@ -1,5 +1,10 @@
 import supabase from '../utils/supabaseToPrismaAdapter.js'
 import logger from '../utils/logger.js'
+import { notifySignInReward } from './notificationService.js'
+
+function readField(obj, camelKey, snakeKey = camelKey) {
+  return obj?.[camelKey] ?? obj?.[snakeKey]
+}
 
 /**
  * 获取积分配置
@@ -73,7 +78,8 @@ class SignInService {
       .eq('sign_date', yesterdayStr)
       .single()
 
-    const continuousDays = yesterdaySign ? yesterdaySign.continuous_days + 1 : 1
+    const yesterdayContinuousDays = Number(readField(yesterdaySign, 'continuousDays', 'continuous_days') || 0)
+    const continuousDays = yesterdaySign ? yesterdayContinuousDays + 1 : 1
 
     // 从配置获取签到积分（连续签到奖励递增）
     const pointsConfig = await getPointsConfig()
@@ -102,7 +108,7 @@ class SignInService {
     // 获取用户当前积分
     const { data: user, error: userError } = await supabase
       .from('users')
-      .select('points')
+      .select('points, total_points')
       .eq('id', userId)
       .single()
 
@@ -111,7 +117,7 @@ class SignInService {
       throw new Error('获取用户信息失败')
     }
 
-    const oldPoints = user.points || 0
+    const oldPoints = Number(user.points || 0)
     const newPoints = oldPoints + pointsEarned
 
     // 更新用户积分
@@ -119,7 +125,7 @@ class SignInService {
       .from('users')
       .update({ 
         points: newPoints,
-        total_points: (user.total_points || 0) + pointsEarned
+        total_points: Number(readField(user, 'totalPoints', 'total_points') || 0) + pointsEarned
       })
       .eq('id', userId)
 
@@ -155,6 +161,15 @@ class SignInService {
     }
 
     logger.info(`用户 ${userId} 签到成功，连续${continuousDays}天，获得${pointsEarned}积分`)
+
+    try {
+      await notifySignInReward(userId, {
+        points: pointsEarned,
+        continuousDays,
+      })
+    } catch (notifyError) {
+      logger.error('发送签到奖励通知失败:', notifyError)
+    }
 
     return {
       success: true,
@@ -192,14 +207,14 @@ class SignInService {
     // 计算实际连续天数（如果不是今天签到的，需要重新计算）
     let continuousDays = 0
     if (todaySign) {
-      continuousDays = todaySign.continuous_days
+      continuousDays = Number(readField(todaySign, 'continuousDays', 'continuous_days') || 0)
     } else if (latestSign) {
       const yesterday = new Date()
       yesterday.setDate(yesterday.getDate() - 1)
       const yesterdayStr = getLocalDateString(yesterday)
       
-      if (latestSign.sign_date === yesterdayStr) {
-        continuousDays = latestSign.continuous_days
+      if (readField(latestSign, 'signDate', 'sign_date') === yesterdayStr) {
+        continuousDays = Number(readField(latestSign, 'continuousDays', 'continuous_days') || 0)
       }
     }
 
@@ -217,7 +232,7 @@ class SignInService {
       hasSignedToday: !!todaySign,
       continuousDays,
       totalDays: monthSigns?.length || 0,
-      totalPoints: monthSigns?.reduce((sum, s) => sum + Number(s.points_earned), 0) || 0,
+      totalPoints: monthSigns?.reduce((sum, s) => sum + Number(readField(s, 'pointsEarned', 'points_earned') || 0), 0) || 0,
       monthSigns: monthSigns || []
     }
   }

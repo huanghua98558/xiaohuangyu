@@ -1,10 +1,12 @@
 import os from 'os'
 import { exec } from 'child_process'
 import { promisify } from 'util'
-import supabase from '../utils/supabaseToPrismaAdapter.js'
+import db from '../config/database.js'
 import { redisClient, REDIS_ENABLED } from '../utils/redis.js'
 import logger from '../utils/logger.js'
 import webSocketService from './webSocketService.js'
+import alertService from './alertService.js'
+import capacityBaselineService from './capacityBaselineService.js'
 
 const execAsync = promisify(exec)
 
@@ -185,18 +187,27 @@ class MonitorService {
   async getDatabaseStatus() {
     try {
       const start = Date.now()
-      const { error } = await supabase.from('tasks').select('id', { count: 'exact', head: true })
+      const result = await db.queryOne(
+        `
+        SELECT
+          current_database() AS database_name,
+          version() AS version
+        `
+      )
       const latency = Date.now() - start
-
-      if (error) {
-        return { status: 'error', connected: false, error: error.message }
-      }
 
       return {
         status: 'connected',
         connected: true,
         latency,
-        type: 'Supabase PostgreSQL'
+        type: 'CockroachDB',
+        database: result?.database_name || null,
+        version: result?.version || null,
+        pool: {
+          total: db.pool?.totalCount ?? 0,
+          idle: db.pool?.idleCount ?? 0,
+          waiting: db.pool?.waitingCount ?? 0,
+        },
       }
     } catch (error) {
       return { status: 'error', connected: false, error: error.message }
@@ -244,11 +255,24 @@ class MonitorService {
    * 获取告警统计
    */
   async getAlertStats() {
-    // TODO: 实现真实的告警统计
-    return {
-      total: 0,
-      pending: 0,
-      critical: 0
+    try {
+      const stats = await alertService.getStats()
+      return {
+        total: Number(stats?.total || 0),
+        pending: Number(stats?.pending || 0),
+        handling: Number(stats?.handling || 0),
+        resolved: Number(stats?.resolved || 0),
+        critical: Number(stats?.critical || 0),
+      }
+    } catch (error) {
+      logger.error('获取告警统计失败:', error.message)
+      return {
+        total: 0,
+        pending: 0,
+        handling: 0,
+        resolved: 0,
+        critical: 0,
+      }
     }
   }
 
@@ -296,6 +320,14 @@ class MonitorService {
       issues.push('数据库连接异常')
     }
 
+    if (metrics.capacity?.assessment?.status === 'warning') {
+      score -= 10
+      issues.push(...(metrics.capacity.assessment.issues || []).slice(0, 2))
+    } else if (metrics.capacity?.assessment?.status === 'critical') {
+      score -= 20
+      issues.push(...(metrics.capacity.assessment.issues || []).slice(0, 3))
+    }
+
     if (metrics.alerts.critical > 0) {
       score -= 10
       issues.push(`存在${metrics.alerts.critical}个严重告警`)
@@ -320,7 +352,8 @@ class MonitorService {
       redisStatus,
       databaseStatus,
       wsStats,
-      alertStats
+      alertStats,
+      capacityStats,
     ] = await Promise.all([
       this.getDiskUsage(),
       this.getNetworkStats(),
@@ -329,7 +362,8 @@ class MonitorService {
       this.getRedisStatus(),
       this.getDatabaseStatus(),
       this.getWebSocketStats(),
-      this.getAlertStats()
+      this.getAlertStats(),
+      capacityBaselineService.getSnapshot(),
     ])
 
     const system = this.getSystemInfo()
@@ -344,7 +378,8 @@ class MonitorService {
       redis: redisStatus,
       database: databaseStatus,
       websocket: wsStats,
-      alerts: alertStats
+      alerts: alertStats,
+      capacity: capacityStats,
     }
 
     metrics.health = this.calculateHealthScore(metrics)

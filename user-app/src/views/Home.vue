@@ -234,7 +234,7 @@
 <script setup>
 import { ref, computed, onMounted, onActivated } from 'vue'
 import { useAuth } from '../store/auth'
-import { getTasks, getTotalRank, getDailyPointsRank, getWallet, getMyLeaderboardRank, getTodayStats } from '../api/task'
+import { getTasks, getTotalRank, getDailyPointsRank, getWallet, getMyRank, getTodayStats } from '../api/task'
 import { getLocation, getSavedLocation, refreshLocation as refreshLocationAPI } from '../utils/location'
 import { usePWAInstall, isIOS } from '../utils/pwa'
 
@@ -365,7 +365,7 @@ async function fetchRank() {
 async function fetchMyRank() {
   if (!isLoggedIn.value) return
   try {
-    myRank.value = await getMyLeaderboardRank()
+    myRank.value = await getMyRank()
   } catch (e) {
     myRank.value = null
   }

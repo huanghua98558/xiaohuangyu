@@ -3,6 +3,7 @@ import nightPointService from './nightPointService.js'
 import onlineUserService from './onlineUserService.js'
 import logger from '../utils/logger.js'
 import { publishPointsAwarded } from '../utils/wsEventPublisher.js'
+import { notifyPointsAwarded } from './notificationService.js'
 
 function toSafeNumber(value, fallback = 0) {
   const num = Number(value)
@@ -314,6 +315,24 @@ class PointsSettlementService {
       publishTime: publishAt,
       onlineUsers
     })
+
+    try {
+      await notifyPointsAwarded(finalUserId, {
+        reason: awardReason,
+        source,
+        claimId: String(claimId),
+        taskId: String(finalTaskId),
+        basePoints: resolvedBasePoints,
+        nightCoefficient: coefficient,
+        bonusPoints,
+        finalPoints,
+        isNight,
+        publishTime: publishAt,
+        onlineUsers,
+      })
+    } catch (notifyErr) {
+      logger.warn('[PointsSettlement] 发送积分通知失败:', notifyErr.message)
+    }
 
     logger.info(
       `[PointsSettlement] claimId=${claimId}, userId=${finalUserId}, final=${finalPoints}, base=${resolvedBasePoints}, coef=${coefficient}, source=${source}`

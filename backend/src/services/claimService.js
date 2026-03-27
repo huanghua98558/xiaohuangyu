@@ -1,9 +1,7 @@
 /**
  * Claim 服务
  */
-import pkg from '@prisma/client'; const { PrismaClient } = pkg;
-
-const prisma = new PrismaClient();
+import prisma from '../utils/prisma.js';
 
 export async function updateClaimStatus(claimId, status) {
   try {
@@ -16,8 +14,6 @@ export async function updateClaimStatus(claimId, status) {
   } catch (error) {
     console.error(`[ClaimService] 更新 claimId=${claimId} 失败:`, error);
     return false;
-  } finally {
-    await prisma.$disconnect();
   }
 }
 

@@ -40,6 +40,13 @@
           </div>
           <div class="actions">
             <span class="reward">{{ t.estimatedReward || t.reward }} 积分</span>
+            <button
+              v-if="t.status === 'doing' || t.canResubmit"
+              class="quick-submit"
+              @click.stop="$router.push(`/submit/${t.id}`)"
+            >
+              {{ t.canResubmit ? '重提' : '去提交' }}
+            </button>
             <span class="arrow">></span>
           </div>
         </div>
@@ -229,6 +236,20 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.quick-submit {
+  border: none;
+  background: #3f51b5;
+  color: #fff;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
 }
 .task-info { flex: 1; display: flex; flex-direction: column; gap: 4px; }
 .task-title { font-size: 15px; }

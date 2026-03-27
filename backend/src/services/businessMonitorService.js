@@ -1,7 +1,8 @@
-import supabase from '../utils/supabaseToPrismaAdapter.js'
+import db from '../config/database.js'
 import prisma from '../utils/prisma.js'
 import logger from '../utils/logger.js'
 import alertService from './alertService.js'
+import capacityBaselineService from './capacityBaselineService.js'
 
 /**
  * 业务监控服务
@@ -75,17 +76,13 @@ class BusinessMonitorService {
    */
   async checkReviewQueue() {
     try {
-      // 获取队列统计
-      const { data: queueStats, error } = await supabase
-        .from('ai_review_queue')
-        .select('status')
-      
-      if (error) throw error
-      
+      const queueSnapshot = await capacityBaselineService.getQueueSnapshot()
       const stats = {
-        total: queueStats?.length || 0,
-        pending: queueStats?.filter(q => q.status === 'pending').length || 0,
-        processing: queueStats?.filter(q => q.status === 'processing').length || 0
+        total: queueSnapshot.queues.reduce((sum, item) => sum + item.waiting + item.active + item.delayed, 0),
+        pending: queueSnapshot.totals.waiting,
+        processing: queueSnapshot.totals.active,
+        delayed: queueSnapshot.totals.delayed,
+        queues: queueSnapshot.queues,
       }
       
       // 检查积压告警
@@ -98,7 +95,7 @@ class BusinessMonitorService {
           type: 'queue_backlog',
           severity: stats.pending > this.thresholds.queueBacklog * 1.5 ? 'high' : 'medium',
           title: '审核队列积压告警',
-          message: `当前待审核任务 ${stats.pending} 个，超过阈值 ${this.thresholds.queueBacklog}`,
+          message: `当前待处理任务 ${stats.pending} 个，超过阈值 ${this.thresholds.queueBacklog}`,
           metadata: { stats }
         }
         
@@ -141,17 +138,20 @@ class BusinessMonitorService {
     try {
       // 获取最近24小时的审核结果
       const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
-      
-      const { data: claims, error } = await supabase
-        .from('claims')
-        .select('ai_review_status')
-        .in('ai_review_status', ['approved', 'rejected'])
-        .gte('reviewed_at', yesterday)
-      
-      if (error) throw error
-      
-      const total = claims?.length || 0
-      const approved = claims?.filter(c => c.ai_review_status === 'approved').length || 0
+
+      const result = await db.queryOne(
+        `
+        SELECT
+          COUNT(*) FILTER (WHERE ai_review_status IN ('approved', 'rejected'))::int AS total,
+          COUNT(*) FILTER (WHERE ai_review_status = 'approved')::int AS approved
+        FROM claims
+        WHERE reviewed_at >= $1
+        `,
+        [yesterday]
+      )
+
+      const total = Number(result?.total || 0)
+      const approved = Number(result?.approved || 0)
       const currentRate = total > 0 ? Math.round((approved / total) * 100) : 100
       
       // 计算趋势
@@ -230,22 +230,24 @@ class BusinessMonitorService {
     try {
       // 获取最近1小时的积分变动
       const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString()
-      
-      const { data: logs, error } = await supabase
-        .from('points_logs')
-        .select('user_id, change, type, created_at')
-        .gte('created_at', oneHourAgo)
-        .order('created_at', { ascending: false })
-        .limit(1000)
-      
-      if (error) throw error
+
+      const logs = await db.queryMany(
+        `
+        SELECT user_id, change, type, created_at
+        FROM points_logs
+        WHERE created_at >= $1
+        ORDER BY created_at DESC
+        LIMIT 1000
+        `,
+        [oneHourAgo]
+      )
       
       // 统计分析
       const userChanges = {}
       let totalChanges = 0
       let largeChanges = []
       
-      logs?.forEach(log => {
+      ;(logs || []).forEach(log => {
         const change = Math.abs(log.change)
         totalChanges += change
         
@@ -326,7 +328,7 @@ class BusinessMonitorService {
       const abnormalLogins = await prisma.login_logs.groupBy({
         by: ['user_id'],
         where: {
-          login_time: { gte: oneHourAgo },
+          login_time: { gte: new Date(oneHourAgo) },
           is_anomaly: true
         },
         _count: { id: true }
@@ -383,41 +385,49 @@ class BusinessMonitorService {
     try {
       // 获取今日统计
       const today = new Date().toISOString().split('T')[0]
-      
-      // 并行获取多个指标
-      const [
-        queueStats,
-        todayClaims,
-        todayPointsLogs,
-        activeAlerts
-      ] = await Promise.all([
-        // 队列统计
-        supabase.from('ai_review_queue').select('status'),
-        // 今日任务
-        supabase.from('claims').select('status, ai_review_status').gte('claimed_at', today),
-        // 今日积分日志
-        supabase.from('points_logs').select('change').gte('created_at', today),
-        // 活跃告警
-        supabase.from('audit_alerts').select('*', { count: 'exact', head: true }).eq('is_handled', false)
+
+      const [queueSnapshot, claimsSummary, pointsSummary, alertSummary] = await Promise.all([
+        capacityBaselineService.getQueueSnapshot(),
+        db.queryOne(
+          `
+          SELECT
+            COUNT(*)::int AS total_claims,
+            COUNT(*) FILTER (WHERE ai_review_status = 'approved')::int AS approved_claims
+          FROM claims
+          WHERE claimed_at >= $1
+          `,
+          [today]
+        ),
+        db.queryOne(
+          `
+          SELECT
+            COALESCE(SUM(CASE WHEN change > 0 THEN change ELSE 0 END), 0)::bigint AS granted,
+            COALESCE(SUM(CASE WHEN change < 0 THEN ABS(change) ELSE 0 END), 0)::bigint AS consumed
+          FROM points_logs
+          WHERE created_at >= $1
+          `,
+          [today]
+        ),
+        alertService.getStats(),
       ])
-      
-      // 计算统计
-      const pendingQueue = queueStats.data?.filter(q => q.status === 'pending').length || 0
-      const processingQueue = queueStats.data?.filter(q => q.status === 'processing').length || 0
-      
-      const totalClaims = todayClaims.data?.length || 0
-      const approvedClaims = todayClaims.data?.filter(c => c.ai_review_status === 'approved').length || 0
+
+      const pendingQueue = Number(queueSnapshot?.totals?.waiting || 0)
+      const processingQueue = Number(queueSnapshot?.totals?.active || 0)
+
+      const totalClaims = Number(claimsSummary?.total_claims || 0)
+      const approvedClaims = Number(claimsSummary?.approved_claims || 0)
       const approvalRate = totalClaims > 0 ? Math.round((approvedClaims / totalClaims) * 100) : 0
-      
-      const pointsGranted = todayPointsLogs.data?.reduce((sum, log) => sum + (log.change > 0 ? log.change : 0), 0) || 0
-      const pointsConsumed = todayPointsLogs.data?.reduce((sum, log) => sum + Math.abs(log.change < 0 ? log.change : 0), 0) || 0
+
+      const pointsGranted = Number(pointsSummary?.granted || 0)
+      const pointsConsumed = Number(pointsSummary?.consumed || 0)
       
       return {
         timestamp: new Date().toISOString(),
         queue: {
           pending: pendingQueue,
           processing: processingQueue,
-          total: queueStats.data?.length || 0
+          delayed: Number(queueSnapshot?.totals?.delayed || 0),
+          total: Number(queueSnapshot?.totals?.waiting || 0) + Number(queueSnapshot?.totals?.active || 0) + Number(queueSnapshot?.totals?.delayed || 0),
         },
         claims: {
           total: totalClaims,
@@ -430,7 +440,8 @@ class BusinessMonitorService {
           net: pointsGranted - pointsConsumed
         },
         alerts: {
-          unhandled: activeAlerts.count || 0
+          unhandled: Number(alertSummary?.pending || 0),
+          critical: Number(alertSummary?.critical || 0),
         }
       }
     } catch (error) {

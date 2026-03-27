@@ -539,8 +539,40 @@ class OnlineUserService {
     }
 
     try {
+      let data = null
+      
+      // 首先尝试从 heartbeatEnhanced 存储位置读取
       const userKey = `${ONLINE_USER_PREFIX}${userId}`
-      const data = await redisClient.hGetAll(userKey)
+      data = await redisClient.hGetAll(userKey)
+      
+      // 如果没有数据，尝试从 heartbeat 存储的设备目录读取
+      if (!data || !data.lastActiveAt) {
+        const devicesKey = `${ONLINE_USER_PREFIX}${userId}:devices`
+        const devices = await redisClient.sMembers(devicesKey)
+        
+        if (devices && devices.length > 0) {
+          // 获取最新活跃的设备数据
+          let latestData = null
+          let latestTime = 0
+          
+          for (const deviceId of devices) {
+            const deviceKey = `${ONLINE_USER_PREFIX}${userId}:device:${deviceId}`
+            const deviceData = await redisClient.hGetAll(deviceKey)
+            
+            if (deviceData && deviceData.lastActiveAt) {
+              const activeTime = parseInt(deviceData.lastActiveAt)
+              if (activeTime > latestTime) {
+                latestTime = activeTime
+                latestData = deviceData
+              }
+            }
+          }
+          
+          if (latestData) {
+            data = latestData
+          }
+        }
+      }
 
       if (!data || !data.lastActiveAt) {
         return null

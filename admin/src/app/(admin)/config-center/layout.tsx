@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { 
   Settings, Image as ImageIcon, Bot, MessageSquare, 
-  FileText, Activity, Link2
+  FileText, Activity, Link2, Bell
 } from 'lucide-react'
 
 const navItems = [
@@ -13,6 +13,7 @@ const navItems = [
   { href: '/config-center/image-review', label: '图片审核', icon: ImageIcon },
   { href: '/config-center/link-review', label: '链接审查', icon: Link2 },
   { href: '/config-center/semantic', label: '语义检测', icon: Bot },
+  { href: '/config-center/notifications', label: '通知设置', icon: Bell },
   { href: '/config-center/assistant', label: 'AI发布助手', icon: MessageSquare },
   { href: '/config-center/logs', label: '操作日志', icon: FileText },
   { href: '/config-center/monitor', label: '运行监控', icon: Activity },

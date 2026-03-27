@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { SystemConfig, getSystemConfigs, updateSystemConfig, uploadImage } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -26,9 +26,6 @@ export default function SettingsPage() {
   const [exampleImage2, setExampleImage2] = useState('')
   const [isUploading1, setIsUploading1] = useState(false)
   const [isUploading2, setIsUploading2] = useState(false)
-  const fileInput1Ref = useRef<HTMLInputElement>(null)
-  const fileInput2Ref = useRef<HTMLInputElement>(null)
-  
   const loadData = useCallback(async () => {
     setIsLoading(true)
     try {
@@ -72,11 +69,6 @@ export default function SettingsPage() {
     } finally {
       setIsSaving(null)
     }
-  }
-
-  const triggerFileSelect = (index: number) => {
-    if (index === 1) fileInput1Ref.current?.click()
-    else fileInput2Ref.current?.click()
   }
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>, index: number) => {
@@ -154,17 +146,17 @@ export default function SettingsPage() {
 
       {/* 隐藏的文件上传input */}
       <input
-        ref={fileInput1Ref}
+        id="example-image-1-input"
         type="file"
         accept="image/*"
-        className="hidden"
+        className="sr-only"
         onChange={(e) => handleFileChange(e, 1)}
       />
       <input
-        ref={fileInput2Ref}
+        id="example-image-2-input"
         type="file"
         accept="image/*"
-        className="hidden"
+        className="sr-only"
         onChange={(e) => handleFileChange(e, 2)}
       />
       
@@ -189,10 +181,18 @@ export default function SettingsPage() {
                   <>
                     <img src={exampleImage1} alt="示范图片1" className="w-full h-full object-cover" />
                     <div className="absolute bottom-0 left-0 right-0 bg-black/60 p-2 flex items-center justify-center gap-2">
-                      <Button size="sm" variant="secondary" onClick={() => triggerFileSelect(1)} disabled={isUploading1}>
-                        {isUploading1 ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Upload className="h-4 w-4 mr-1" />}
-                        更换
-                      </Button>
+                      <div className="relative">
+                        <Button size="sm" variant="secondary" disabled={isUploading1} className="pointer-events-none">
+                          {isUploading1 ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Upload className="h-4 w-4 mr-1" />}
+                          更换
+                        </Button>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                          onChange={(e) => handleFileChange(e, 1)}
+                        />
+                      </div>
                       <Button size="sm" variant="destructive" onClick={() => handleRemoveImage(1)}>
                         <X className="h-4 w-4 mr-1" />删除
                       </Button>
@@ -200,10 +200,18 @@ export default function SettingsPage() {
                   </>
                 ) : (
                   <div className="absolute inset-0 flex items-center justify-center">
-                    <Button variant="outline" onClick={() => triggerFileSelect(1)} disabled={isUploading1}>
-                      {isUploading1 ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Upload className="h-4 w-4 mr-2" />}
-                      上传图片
-                    </Button>
+                    <div className="relative">
+                      <Button variant="outline" disabled={isUploading1} className="pointer-events-none">
+                        {isUploading1 ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Upload className="h-4 w-4 mr-2" />}
+                        上传图片
+                      </Button>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                        onChange={(e) => handleFileChange(e, 1)}
+                      />
+                    </div>
                   </div>
                 )}
               </div>
@@ -217,10 +225,18 @@ export default function SettingsPage() {
                   <>
                     <img src={exampleImage2} alt="示范图片2" className="w-full h-full object-cover" />
                     <div className="absolute bottom-0 left-0 right-0 bg-black/60 p-2 flex items-center justify-center gap-2">
-                      <Button size="sm" variant="secondary" onClick={() => triggerFileSelect(2)} disabled={isUploading2}>
-                        {isUploading2 ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Upload className="h-4 w-4 mr-1" />}
-                        更换
-                      </Button>
+                      <div className="relative">
+                        <Button size="sm" variant="secondary" disabled={isUploading2} className="pointer-events-none">
+                          {isUploading2 ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Upload className="h-4 w-4 mr-1" />}
+                          更换
+                        </Button>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                          onChange={(e) => handleFileChange(e, 2)}
+                        />
+                      </div>
                       <Button size="sm" variant="destructive" onClick={() => handleRemoveImage(2)}>
                         <X className="h-4 w-4 mr-1" />删除
                       </Button>
@@ -228,10 +244,18 @@ export default function SettingsPage() {
                   </>
                 ) : (
                   <div className="absolute inset-0 flex items-center justify-center">
-                    <Button variant="outline" onClick={() => triggerFileSelect(2)} disabled={isUploading2}>
-                      {isUploading2 ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Upload className="h-4 w-4 mr-2" />}
-                      上传图片
-                    </Button>
+                    <div className="relative">
+                      <Button variant="outline" disabled={isUploading2} className="pointer-events-none">
+                        {isUploading2 ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Upload className="h-4 w-4 mr-2" />}
+                        上传图片
+                      </Button>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                        onChange={(e) => handleFileChange(e, 2)}
+                      />
+                    </div>
                   </div>
                 )}
               </div>

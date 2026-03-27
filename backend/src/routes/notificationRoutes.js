@@ -1,52 +1,117 @@
 import { Router } from 'express'
 import { authMiddleware, adminOnly } from '../middlewares/auth.js'
-import supabase from '../utils/supabaseToPrismaAdapter.js'
+import notificationService from '../services/notificationService.js'
+import { success } from '../utils/response.js'
 
 const router = Router()
 
-router.get('/', authMiddleware, async (req, res) => {
+router.use(authMiddleware)
+
+// 兼容旧用户消息接口，底层统一走 user_notifications
+router.get('/', async (req, res, next) => {
   try {
-    if (!req.userId) return res.json({ code: 0, data: { list: [], total: 0 } })
-    const page = parseInt(req.query.page) || 1
-    const size = parseInt(req.query.size) || 20
-    const offset = (page - 1) * size
-    const { data: list, count } = await supabase
-      .from('notifications')
-      .select('*', { count: 'exact' })
-      .eq('user_id', req.userId)
-      .order('created_at', { ascending: false })
-      .range(offset, offset + size - 1)
-    res.json({ code: 0, data: { list: list || [], total: count || 0 } })
+    const page = parseInt(req.query.page, 10) || 1
+    const size = parseInt(req.query.size, 10) || 20
+    const unreadOnly = req.query.unreadOnly === 'true'
+    const type = typeof req.query.type === 'string' ? req.query.type : null
+    const result = await notificationService.getUserNotifications({
+      userId: req.userId,
+      type,
+      page,
+      pageSize: size,
+      unreadOnly,
+    })
+
+    success(res, {
+      list: result.list,
+      total: result.total,
+      page: result.page,
+      pageSize: result.pageSize,
+      unreadCount: result.unreadCount,
+    })
   } catch (err) {
-    res.json({ code: 0, data: { list: [], total: 0 } })
+    next(err)
   }
 })
 
-router.get('/unread-count', authMiddleware, async (req, res) => {
+router.get('/unread-count', async (req, res, next) => {
   try {
-    const { count } = await supabase.from('notifications').select('*', { count: 'exact', head: true }).eq('user_id', req.userId).eq('is_read', false)
-    res.json({ code: 0, data: { count: count || 0 } })
+    const count = await notificationService.getUserUnreadCount(req.userId)
+    success(res, { count })
   } catch (err) {
-    res.json({ code: 0, data: { count: 0 } })
+    next(err)
   }
 })
 
-router.post('/read-all', authMiddleware, async (req, res) => {
+router.put('/:id/read', async (req, res, next) => {
   try {
-    await supabase.from('notifications').update({ is_read: true }).eq('user_id', req.userId)
-    res.json({ code: 0, message: '已全部标记为已读' })
+    const data = await notificationService.markUserNotificationRead(req.params.id, req.userId)
+    success(res, data, '已标记为已读')
   } catch (err) {
-    res.json({ code: 0, message: '操作完成' })
+    next(err)
   }
 })
 
-router.post('/send', authMiddleware, adminOnly, async (req, res) => {
+router.post('/:id/read', async (req, res, next) => {
   try {
-    const { userId, title, content, type } = req.body
-    await supabase.from('notifications').insert({ user_id: userId, title, content, type: type || 'system', is_read: false })
-    res.json({ code: 0, message: '发送成功' })
+    const data = await notificationService.markUserNotificationRead(req.params.id, req.userId)
+    success(res, data, '已标记为已读')
   } catch (err) {
-    res.json({ code: 0, message: '通知表尚未创建' })
+    next(err)
+  }
+})
+
+router.put('/read-all', async (req, res, next) => {
+  try {
+    const result = await notificationService.markAllUserNotificationsRead(req.userId)
+    success(res, result, '已全部标记为已读')
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.post('/read-all', async (req, res, next) => {
+  try {
+    const result = await notificationService.markAllUserNotificationsRead(req.userId)
+    success(res, result, '已全部标记为已读')
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.delete('/:id', async (req, res, next) => {
+  try {
+    const result = await notificationService.deleteUserNotification(req.params.id, req.userId)
+    success(res, result, '通知已删除')
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.post('/send', adminOnly, async (req, res, next) => {
+  try {
+    const { userId, title, content, type, data, priority } = req.body
+    const result = await notificationService.sendUserNotification({
+      userId,
+      title,
+      content,
+      type,
+      data,
+      priority,
+    })
+    success(res, result, '发送成功')
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.post('/announcement', adminOnly, async (req, res, next) => {
+  try {
+    const { title, content, userIds } = req.body
+    const result = await notificationService.sendSystemAnnouncement(title, content, userIds)
+    success(res, result, '公告发送成功')
+  } catch (err) {
+    next(err)
   }
 })
 

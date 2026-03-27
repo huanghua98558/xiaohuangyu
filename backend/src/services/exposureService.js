@@ -109,6 +109,61 @@ class ExposureService {
     }
   }
 
+  async getUserPriorityMetrics(userId) {
+    const uid = typeof userId === 'string' ? userId : String(userId)
+
+    try {
+      const user = await db.queryOne(
+        `
+        SELECT
+          id,
+          level,
+          total_tasks,
+          completed_tasks,
+          canceled_tasks,
+          exposure_level,
+          exposure_priority,
+          is_whitelist,
+          is_blacklist,
+          current_exposure,
+          regular_used,
+          reserved_used,
+          last_task_date,
+          avg_submit_time
+        FROM users
+        WHERE id = $1
+        `,
+        [uid]
+      )
+
+      if (!user) {
+        return null
+      }
+
+      return {
+        id: user.id ? String(user.id) : null,
+        level: Number(user.level || 0),
+        total_tasks: Number(user.total_tasks || 0),
+        completed_tasks: Number(user.completed_tasks || 0),
+        canceled_tasks: Number(user.canceled_tasks || 0),
+        exposure_level: user.exposure_level || null,
+        exposure_priority: user.exposure_priority === null || user.exposure_priority === undefined
+          ? null
+          : Number(user.exposure_priority),
+        is_whitelist: Boolean(user.is_whitelist),
+        is_blacklist: Boolean(user.is_blacklist),
+        current_exposure: Number(user.current_exposure || 0),
+        regular_used: Number(user.regular_used || 0),
+        reserved_used: Number(user.reserved_used || 0),
+        last_task_date: user.last_task_date || null,
+        avg_submit_time: Number(user.avg_submit_time || 0)
+      }
+    } catch (err) {
+      logger.error(`获取用户优先级指标失败: ${err.message}`)
+      return null
+    }
+  }
+
   /**
    * 获取用户曝光等级
    * @param {string} userId 用户ID
@@ -302,7 +357,7 @@ class ExposureService {
         .from('task_exposure')
         .select('*')
         .eq('task_id', taskId)
-        .eq('status', 1)
+        .eq('status', 'active')
         .single()
       
       if (!exposure) return null
@@ -698,7 +753,7 @@ class ExposureService {
           status,
           tasks!inner(created_at, status)
         `)
-        .eq('status', 1)
+        .eq('status', 'active')
         .eq('tasks.status', 'active')
         .order('queue_position', { ascending: true })
       
@@ -1051,7 +1106,7 @@ class ExposureService {
       const { data: tasks, error } = await supabase
         .from('tasks')
         .select('id, remain')
-        .eq('status', 1)
+        .eq('status', 'active')
         .gt('remain', 0)
       
       if (error) throw error
@@ -1129,14 +1184,14 @@ class ExposureService {
       const { count: activeUsers } = await supabase
         .from('users')
         .select('*', { count: 'exact', head: true })
-        .in('status', [1, 'active'])  // 兼容不同的status格式
+        .eq('status', 1)
         .gte('last_task_date', oneDayAgo)
       
       // 可接任务名额
       const { data: tasks } = await supabase
         .from('tasks')
         .select('remain')
-        .eq('status', 1)
+        .eq('status', 'active')
         .gt('remain', 0)
       
       const availableSlots = (tasks || []).reduce((sum, t) => sum + t.remain, 0)
@@ -1194,47 +1249,69 @@ class ExposureService {
   async getSupplyDemandStats() {
     try {
       const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
-      
-      // 活跃用户（使用last_task_date作为活跃指标）
-      const { count: activeUsers } = await supabase
-        .from('users')
-        .select('*', { count: 'exact', head: true })
-        .eq('status', 1)
-        .gte('last_task_date', oneDayAgo)
-      
-      // 活跃任务
-      const { count: activeTasks } = await supabase
-        .from('tasks')
-        .select('*', { count: 'exact', head: true })
-        .eq('status', 1)
-      
-      // 可接名额
-      const { data: taskSlots } = await supabase
-        .from('tasks')
-        .select('remain')
-        .eq('status', 1)
-        .gt('remain', 0)
-      
-      const availableSlots = (taskSlots || []).reduce((sum, t) => sum + t.remain, 0)
-      
-      // 今日完成数
       const today = new Date().toISOString().split('T')[0]
-      const { count: todayCompleted } = await supabase
-        .from('claims')
-        .select('*', { count: 'exact', head: true })
-        .in('status', ['approved', 'done'])
-        .gte('reviewed_at', today)
-      
+      const summary = await db.queryOne(
+        `
+        SELECT
+          COUNT(*) FILTER (
+            WHERE u.status = 1
+              AND u.last_task_date IS NOT NULL
+              AND u.last_task_date >= $1
+          )::int AS active_users,
+          (
+            SELECT COUNT(*)::int
+            FROM tasks t
+            WHERE t.status = 'active'
+          ) AS active_tasks,
+          (
+            SELECT COALESCE(SUM(t.remain), 0)::bigint
+            FROM tasks t
+            WHERE t.status = 'active'
+              AND COALESCE(t.remain, 0) > 0
+          ) AS available_slots,
+          (
+            SELECT COUNT(*)::int
+            FROM claims c
+            WHERE c.status IN ('approved', 'done')
+              AND c.reviewed_at IS NOT NULL
+              AND c.reviewed_at >= $2::timestamp
+          ) AS today_completed
+        FROM users u
+        `
+        ,
+        [oneDayAgo, `${today} 00:00:00`]
+      )
+
+      const activeUsers = Number(summary?.active_users || 0)
+      const activeTasks = Number(summary?.active_tasks || 0)
+      const availableSlots = Number(summary?.available_slots || 0)
+      const todayCompleted = Number(summary?.today_completed || 0)
+
       return {
-        activeUsers: activeUsers || 0,
-        activeTasks: activeTasks || 0,
+        totalOnlineUsers: activeUsers,
+        availableUsers: activeUsers,
+        totalPendingTasks: activeTasks,
+        supplyDemandRatio: availableSlots > 0 ? Number((activeUsers / availableSlots).toFixed(2)) : 0,
+        avgSelectionScore: 50,
+        onlineByLevel: {},
+        tasksByStatus: {},
+        // 兼容旧字段
+        activeUsers,
+        activeTasks,
         availableSlots,
-        ratio: availableSlots > 0 ? ((activeUsers || 0) / availableSlots).toFixed(2) : '0',
-        todayCompleted: todayCompleted || 0
+        ratio: availableSlots > 0 ? (activeUsers / availableSlots).toFixed(2) : '0',
+        todayCompleted
       }
     } catch (err) {
       logger.error(`获取供需统计失败: ${err.message}`)
       return {
+        totalOnlineUsers: 0,
+        availableUsers: 0,
+        totalPendingTasks: 0,
+        supplyDemandRatio: 0,
+        avgSelectionScore: 50,
+        onlineByLevel: {},
+        tasksByStatus: {},
         activeUsers: 0,
         activeTasks: 0,
         availableSlots: 0,
@@ -1243,7 +1320,6 @@ class ExposureService {
       }
     }
   }
-
   /**
    * 计算任务优先级（基于用户活跃度、完成率、提交速度）
    * @param {string} userId 用户ID
@@ -1251,24 +1327,8 @@ class ExposureService {
    */
   async calculateTaskPriority(userId) {
     try {
-      // 获取用户活跃度数据
-      const { data: user, error } = await supabase
-        .from('users')
-        .select(`
-          id,
-          total_tasks,
-          completed_tasks,
-          canceled_tasks,
-          exposure_level,
-          exposure_priority,
-          is_whitelist,
-          is_blacklist,
-          avg_submit_time
-        `)
-        .eq('id', userId)
-        .single()
-
-      if (error || !user) {
+      const user = await this.getUserPriorityMetrics(userId)
+      if (!user) {
         return 50 // 默认中等优先级
       }
 
@@ -1530,35 +1590,23 @@ class ExposureService {
    */
   async calculateSelectionScore(userId) {
     try {
-      // 获取用户完整信息
-      const { data: user, error } = await supabase
-        .from('users')
-        .select(`
-          id,
-          level,
-          total_tasks,
-          completed_tasks,
-          canceled_tasks,
-          is_whitelist,
-          is_blacklist,
-          current_exposure,
-          regular_used,
-          reserved_used,
-          last_task_date,
-          avg_submit_time
-        `)
-        .eq('id', userId)
-        .single()
-
-      if (error || !user) {
+      const user = await this.getUserPriorityMetrics(userId)
+      if (!user) {
         return 0
       }
 
       const config = await this.getConfig()
+      const whitelistBonus = Number(config.priorityMode?.whitelistBonus || 50)
+      const level = Number(user.level || 0)
+      const totalTasks = Number(user.total_tasks || 0)
+      const completedTasks = Number(user.completed_tasks || 0)
+      const avgSubmitTime = Number(user.avg_submit_time || 0)
+      const currentExposure = Number(user.current_exposure || 0)
+      const canceledTasks = Number(user.canceled_tasks || 0)
 
       // 白名单用户：最高优先级
       if (user.is_whitelist) {
-        return 100 + (config.priorityMode?.whitelistBonus || 50)
+        return 100 + whitelistBonus
       }
 
       // 黑名单用户：最低优先级
@@ -1571,16 +1619,13 @@ class ExposureService {
 
       // 1. 等级贡献（权重 20%）
       const levelScores = { 1: 0, 2: 10, 3: 20, 4: 30, 5: 40, 6: 50 }
-      baseScore += levelScores[user.level] || 0
+      baseScore += levelScores[level] || 0
 
       // 2. 完成率贡献（权重 30%）
-      const totalTasks = user.total_tasks || 0
-      const completedTasks = user.completed_tasks || 0
       const completionRate = totalTasks > 0 ? completedTasks / totalTasks : 0
       baseScore += completionRate * 30
 
       // 3. 提交速度贡献（权重 20%）
-      const avgSubmitTime = user.avg_submit_time || 0
       let speedScore = 0
       if (avgSubmitTime > 0) {
         if (avgSubmitTime <= 30) speedScore = 20
@@ -1591,8 +1636,7 @@ class ExposureService {
       baseScore += speedScore
 
       // 4. 曝光额度使用率（权重 20%）- 额度用得多的用户优先级降低
-      const exposureLimit = await exposureQuotaService.getExposureLimitByLevel(user.level)
-      const currentExposure = user.current_exposure || 0
+      const exposureLimit = Number(await exposureQuotaService.getExposureLimitByLevel(level))
       const exposureUsageRate = exposureLimit > 0 ? currentExposure / exposureLimit : 0
       baseScore += (1 - exposureUsageRate) * 20
 
@@ -1608,7 +1652,6 @@ class ExposureService {
       baseScore += activityScore
 
       // 6. 取消率惩罚
-      const canceledTasks = user.canceled_tasks || 0
       const cancelRate = totalTasks > 0 ? canceledTasks / totalTasks : 0
       if (cancelRate > 0.3) {
         baseScore -= 20
@@ -1664,9 +1707,17 @@ class ExposureService {
       const config = await this.getConfig()
 
       for (const user of users) {
+        const whitelistBonus = Number(config.priorityMode?.whitelistBonus || 50)
+        const level = Number(user.level || 0)
+        const totalTasks = Number(user.total_tasks || 0)
+        const completedTasks = Number(user.completed_tasks || 0)
+        const avgSubmitTime = Number(user.avg_submit_time || 0)
+        const currentExposure = Number(user.current_exposure || 0)
+        const canceledTasks = Number(user.canceled_tasks || 0)
+
         // 白名单用户
         if (user.is_whitelist) {
-          scoreMap.set(user.id, 100 + (config.priorityMode?.whitelistBonus || 50))
+          scoreMap.set(user.id, 100 + whitelistBonus)
           continue
         }
 
@@ -1681,16 +1732,13 @@ class ExposureService {
 
         // 等级贡献
         const levelScores = { 1: 0, 2: 10, 3: 20, 4: 30, 5: 40, 6: 50 }
-        baseScore += levelScores[user.level] || 0
+        baseScore += levelScores[level] || 0
 
         // 完成率贡献
-        const totalTasks = user.total_tasks || 0
-        const completedTasks = user.completed_tasks || 0
         const completionRate = totalTasks > 0 ? completedTasks / totalTasks : 0
         baseScore += completionRate * 30
 
         // 提交速度贡献
-        const avgSubmitTime = user.avg_submit_time || 0
         let speedScore = 0
         if (avgSubmitTime > 0) {
           if (avgSubmitTime <= 30) speedScore = 20
@@ -1701,8 +1749,7 @@ class ExposureService {
         baseScore += speedScore
 
         // 曝光额度使用率贡献
-        const exposureLimit = await exposureQuotaService.getExposureLimitByLevel(user.level)
-        const currentExposure = user.current_exposure || 0
+        const exposureLimit = Number(await exposureQuotaService.getExposureLimitByLevel(level))
         const exposureUsageRate = exposureLimit > 0 ? currentExposure / exposureLimit : 0
         baseScore += (1 - exposureUsageRate) * 20
 
@@ -1718,7 +1765,6 @@ class ExposureService {
         baseScore += activityScore
 
         // 取消率惩罚
-        const canceledTasks = user.canceled_tasks || 0
         const cancelRate = totalTasks > 0 ? canceledTasks / totalTasks : 0
         if (cancelRate > 0.3) {
           baseScore -= 20
@@ -2532,7 +2578,7 @@ class ExposureService {
       const { data: tasks } = await supabase
         .from('task_exposure')
         .select('need_count, current_exposure, accepted_count')
-        .eq('status', 1)
+        .eq('status', 'active')
 
       if (!tasks) return 0
 

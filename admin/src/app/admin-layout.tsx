@@ -90,6 +90,7 @@ const navGroups = [
     items: [
       { href: '/task-claim-config', icon: Settings, label: '任务领取配置' },
       { href: '/night-points', icon: Moon, label: '夜间积分' },
+      { href: '/config-center/notifications', icon: Bell, label: '通知设置' },
       { href: '/settings', icon: Cog, label: '系统配置' },
     ]
   },

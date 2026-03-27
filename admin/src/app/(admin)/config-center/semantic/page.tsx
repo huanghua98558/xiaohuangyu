@@ -18,7 +18,7 @@ import { toast } from 'sonner'
 
 interface SemanticConfig {
   enabled: boolean
-  mode: 'rule_only' | 'ai_only' | 'rule_and_ai'
+  mode: 'default_pass' | 'rule_only' | 'ai_only' | 'rule_and_ai'
   minRelevance: number
   minPositivity: number
   minEffectiveness: number
@@ -42,7 +42,7 @@ interface FallbackConfig {
 
 const defaultSemanticConfig: SemanticConfig = {
   enabled: true,
-  mode: 'rule_and_ai',
+  mode: 'default_pass',
   minRelevance: 0.5,
   minPositivity: 0.3,
   minEffectiveness: 0.5
@@ -239,6 +239,12 @@ export default function SemanticPage() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="default_pass">
+                      <div>
+                        <div className="font-medium">默认通过</div>
+                        <div className="text-xs text-muted-foreground">仅完成连接比对，跳过最终评论判定</div>
+                      </div>
+                    </SelectItem>
                     <SelectItem value="rule_only">
                       <div>
                         <div className="font-medium">仅规则验证</div>

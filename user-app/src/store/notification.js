@@ -10,6 +10,11 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { wsService } from '../services/websocket.js'
 import { fetchUnreadCount, fetchNotifications } from '../api/notification.js'
+import {
+  playNotificationSound,
+  registerNotificationSoundUnlock,
+  shouldDisplayRealtimeNotification,
+} from '../services/notificationSound.js'
 
 // 全局状态
 const unreadCount = ref(0)
@@ -20,6 +25,12 @@ const currentToast = ref(null)
 // 新任务推送
 const showTaskPush = ref(false)
 const currentTaskPush = ref(null)
+const pointsDigest = ref({
+  count: 0,
+  totalPoints: 0,
+  bonusPoints: 0,
+})
+let pointsDigestTimer = null
 
 /**
  * 通知状态管理
@@ -33,6 +44,8 @@ export function useNotification() {
    * 初始化通知服务
    */
   const initNotification = async () => {
+    registerNotificationSoundUnlock()
+
     // 获取初始未读数
     try {
       const count = await fetchUnreadCount()
@@ -46,6 +59,8 @@ export function useNotification() {
     wsService.on('new_task', handleNewTask)
     wsService.on('task_reviewed', handleTaskReviewed)
     wsService.on('points_update', handlePointsUpdate)
+    wsService.on('admin_notification', handleAdminNotification)
+    wsService.on('system_alert', handleSystemAlert)
     
     // 监听全局通知事件（备用）
     window.addEventListener('ws-notification', handleWSNotification)
@@ -59,7 +74,39 @@ export function useNotification() {
     wsService.off('new_task', handleNewTask)
     wsService.off('task_reviewed', handleTaskReviewed)
     wsService.off('points_update', handlePointsUpdate)
+    wsService.off('admin_notification', handleAdminNotification)
+    wsService.off('system_alert', handleSystemAlert)
     window.removeEventListener('ws-notification', handleWSNotification)
+  }
+
+  const showToastWithSound = (payload, options = {}) => {
+    const {
+      sound = 'default',
+      duration = 3000,
+      skipDisplay = false,
+    } = options
+
+    if (!skipDisplay) {
+      currentToast.value = {
+        ...payload,
+        time: new Date(),
+      }
+      showNotificationToast.value = true
+      setTimeout(() => {
+        showNotificationToast.value = false
+      }, duration)
+    }
+
+    playNotificationSound(sound).catch(() => {})
+  }
+
+  const getCurrentUser = () => {
+    try {
+      const raw = localStorage.getItem('xiaohuangyu_user')
+      return raw ? JSON.parse(raw) : null
+    } catch {
+      return null
+    }
   }
   
   /**
@@ -70,20 +117,19 @@ export function useNotification() {
     
     // 增加未读数
     unreadCount.value++
-    
-    // 显示弹窗
-    currentToast.value = {
+
+    if (!shouldDisplayRealtimeNotification(data.type || 'system')) {
+      return
+    }
+
+    showToastWithSound({
       type: data.type || 'system',
       title: data.title || '新消息',
       content: data.content || '',
-      time: new Date()
-    }
-    showNotificationToast.value = true
-    
-    // 3秒后自动关闭
-    setTimeout(() => {
-      showNotificationToast.value = false
-    }, 3000)
+    }, {
+      sound: data.type === 'points_awarded' ? 'points' : 'default',
+      duration: 3000,
+    })
   }
   
   /**
@@ -102,6 +148,7 @@ export function useNotification() {
       nightBonus: data.nightBonus
     }
     showTaskPush.value = true
+    playNotificationSound('task').catch(() => {})
     
     // 10秒后自动关闭
     setTimeout(() => {
@@ -117,10 +164,12 @@ export function useNotification() {
     
     // 增加未读数
     unreadCount.value++
-    
-    // 显示弹窗
     const isApproved = data.status === 'approved'
-    currentToast.value = {
+
+    if (!shouldDisplayRealtimeNotification(isApproved ? 'claim_approved' : 'claim_rejected')) {
+      return
+    }
+    showToastWithSound({
       type: 'task',
       title: isApproved ? '任务审核通过' : '任务审核未通过',
       content: isApproved 
@@ -128,14 +177,10 @@ export function useNotification() {
         : `任务"${data.taskTitle}"审核未通过，请查看原因。`,
       taskId: data.taskId,
       isApproved,
-      time: new Date()
-    }
-    showNotificationToast.value = true
-    
-    // 5秒后自动关闭
-    setTimeout(() => {
-      showNotificationToast.value = false
-    }, 5000)
+    }, {
+      sound: isApproved ? 'task' : 'alert',
+      duration: 5000,
+    })
   }
 
   /**
@@ -145,7 +190,6 @@ export function useNotification() {
     const points = Number(data?.finalPoints || data?.points || 0)
     const coef = Number(data?.nightCoefficient || 1)
     const bonus = Number(data?.bonusPoints || 0)
-    const extra = coef > 1 ? `（夜间x${coef.toFixed(2)}，加成+${bonus}）` : ''
 
     // 同步更新本地用户积分，保证前端实时可见
     try {
@@ -159,16 +203,80 @@ export function useNotification() {
       console.warn('[Notification] 更新本地积分失败:', e)
     }
 
-    currentToast.value = {
-      type: 'task',
-      title: '积分到账',
-      content: `已到账 +${points} 积分${extra}`,
-      time: new Date()
+    if (!shouldDisplayRealtimeNotification('points_awarded')) {
+      return
     }
-    showNotificationToast.value = true
-    setTimeout(() => {
-      showNotificationToast.value = false
-    }, 5000)
+
+    pointsDigest.value.count += 1
+    pointsDigest.value.totalPoints += points
+    pointsDigest.value.bonusPoints += bonus
+    if (pointsDigestTimer) {
+      clearTimeout(pointsDigestTimer)
+    }
+    pointsDigestTimer = setTimeout(() => {
+      pointsDigest.value = {
+        count: 0,
+        totalPoints: 0,
+        bonusPoints: 0,
+      }
+      pointsDigestTimer = null
+    }, 120000)
+
+    const count = pointsDigest.value.count
+    const totalPoints = pointsDigest.value.totalPoints
+    const totalBonus = pointsDigest.value.bonusPoints
+    const extra = totalBonus > 0
+      ? `，其中加成 ${totalBonus} 积分`
+      : coef > 1
+        ? `（夜间系数 x${coef.toFixed(2)}）`
+        : ''
+
+    showToastWithSound({
+      type: 'task',
+      title: count > 1 ? '任务奖励汇总到账' : '积分到账',
+      content: count > 1
+        ? `最近连续完成 ${count} 个任务，累计到账 ${totalPoints} 积分${extra}`
+        : `已到账 +${points} 积分${extra}`,
+    }, {
+      sound: 'points',
+      duration: 5000,
+    })
+  }
+
+  const handleAdminNotification = (data) => {
+    const user = getCurrentUser()
+    if (!user || user.role !== 'admin') return
+
+    if (!shouldDisplayRealtimeNotification('system')) {
+      return
+    }
+
+    showToastWithSound({
+      type: 'system',
+      title: data?.title || '管理员通知',
+      content: data?.content || '',
+    }, {
+      sound: data?.priority === 'high' ? 'alert' : 'default',
+      duration: 5000,
+    })
+  }
+
+  const handleSystemAlert = (data) => {
+    const user = getCurrentUser()
+    if (!user || user.role !== 'admin') return
+
+    if (!shouldDisplayRealtimeNotification('system')) {
+      return
+    }
+
+    showToastWithSound({
+      type: 'system',
+      title: data?.name || '系统告警',
+      content: data?.message || '系统发生新的告警',
+    }, {
+      sound: 'alert',
+      duration: 6000,
+    })
   }
   
   /**
@@ -189,6 +297,12 @@ export function useNotification() {
         break
       case 'points_update':
         handlePointsUpdate(data)
+        break
+      case 'admin_notification':
+        handleAdminNotification(data)
+        break
+      case 'system_alert':
+        handleSystemAlert(data)
         break
     }
   }

@@ -12,6 +12,7 @@ import fs from 'fs';
 import path from 'path';
 import db from '../../config/database.js';
 import pointsSettlementService from '../pointsSettlementService.js';
+import { enqueueLinkVerificationCompat } from './queueService.js';
 import { CLAIM_STATUS } from '../../constants/claimLifecycle.js';
 import { appendReviewHistory, createReviewHistoryEntry } from '../../utils/claimReviewHistory.js';
 
@@ -71,6 +72,7 @@ async function getReviewQueue(options = {}) {
   const page = Math.max(1, Number(options.page || 1));
   const limit = pageSize;
   const offset = Number.isFinite(Number(options.offset)) ? Number(options.offset) : (page - 1) * limit;
+  const status = typeof options.status === 'string' ? options.status.trim() : '';
   
   // 构建基础查询
   let baseQuery = "SELECT c.id, c.user_id, c.task_id, c.screenshots, c.status, c.ai_review_status, c.ai_confidence, c.ai_reason, c.review_note, c.image_review_status, c.link_review_status, c.image_review_reason, c.link_review_reason, c.reject_count, c.review_history, c.claimed_at, c.submitted_at, c.reviewed_at FROM claims c WHERE c.screenshots IS NOT NULL AND c.screenshots::text != '[]'";
@@ -103,7 +105,7 @@ async function getReviewQueue(options = {}) {
       baseQuery += " AND c.status = 'submitted'";
       countQuery += " AND c.status = 'submitted'";
     } else {
-      const validAiStatuses = ['manual', 'processing', 'ai_approved', 'ai_rejected'];
+      const validAiStatuses = ['manual', 'checked', 'processing', 'ai_approved', 'ai_rejected'];
       if (validAiStatuses.includes(status)) {
         baseQuery += " AND c.ai_review_status = '" + status + "'";
         countQuery += " AND ai_review_status = '" + status + "'";
@@ -129,7 +131,7 @@ async function getReviewQueue(options = {}) {
   let users = [];
   
   if (taskIds.length > 0) {
-    tasks = await prisma.$queryRawUnsafe("SELECT id, title, platform, action FROM tasks WHERE id IN (" + taskIds.join(',') + ")");
+    tasks = await prisma.$queryRawUnsafe("SELECT id, title, platform, action, video_url FROM tasks WHERE id IN (" + taskIds.join(',') + ")");
   }
   if (userIds.length > 0) {
     users = await prisma.$queryRawUnsafe("SELECT id, username FROM users WHERE id IN (" + userIds.join(',') + ")");
@@ -192,7 +194,7 @@ async function getReviewStats() {
       COUNT(*) FILTER (WHERE status IN ('submitted', 'image_reviewing')) as image_reviewing,
       COUNT(*) FILTER (WHERE status = 'link_reviewing') as link_reviewing,
       COUNT(*) FILTER (WHERE status = 'pending_link') as pending_link,
-      COUNT(*) FILTER (WHERE status = 'released' OR (status = 'doing' AND (image_review_status = 'rejected' OR link_review_status = 'rejected'))) as rejected,
+      COUNT(*) FILTER (WHERE status IN ('released', 'image_rejected', 'link_rejected', 'rejected') OR (status = 'doing' AND (image_review_status = 'rejected' OR link_review_status = 'rejected'))) as rejected,
       COUNT(*) FILTER (WHERE status IN ('approved', 'done')) as approved
     FROM claims
     WHERE screenshots IS NOT NULL
@@ -202,7 +204,7 @@ async function getReviewStats() {
   const todayStatsResult = await prisma.$queryRawUnsafe(`
     SELECT 
       COUNT(*) FILTER (WHERE status IN ('approved', 'done') AND reviewed_at >= '${today.toISOString()}') as today_approved,
-      COUNT(*) FILTER (WHERE (status = 'released' OR (status = 'doing' AND (image_review_status = 'rejected' OR link_review_status = 'rejected'))) AND reviewed_at >= '${today.toISOString()}') as today_rejected
+      COUNT(*) FILTER (WHERE (status IN ('released', 'image_rejected', 'link_rejected', 'rejected') OR (status = 'doing' AND (image_review_status = 'rejected' OR link_review_status = 'rejected'))) AND reviewed_at >= '${today.toISOString()}') as today_rejected
     FROM claims
     WHERE screenshots IS NOT NULL
   `);
@@ -231,10 +233,25 @@ async function getReviewStats() {
     todayReviewed: todayApproved + todayRejected
   };
 }
+
+function resolveManualStage(claim) {
+  const linkStageStatuses = ['manual', 'rejected', 'reviewing', 'pending'];
+
+  if (
+    claim.link_review_status === 'manual' ||
+    (claim.image_review_status === 'approved' && linkStageStatuses.includes(claim.link_review_status))
+  ) {
+    return 'link_review';
+  }
+
+  return 'image_review';
+}
+
 async function manualApprove(claimId, reviewerId, note) {
   const claim = await db.queryOne(
     `
-    SELECT c.id, c.user_id, c.task_id, c.status, c.review_history, c.image_review_status, c.link_review_status, t.video_url
+    SELECT c.id, c.user_id, c.task_id, c.status, c.review_history, c.ai_review_status, c.image_review_status, c.link_review_status, c.submitted_at,
+           t.video_url, t.title AS task_title, t.platform, t.action
     FROM claims c
     LEFT JOIN tasks t ON t.id = c.task_id
     WHERE c.id = $1
@@ -246,16 +263,158 @@ async function manualApprove(claimId, reviewerId, note) {
     throw new Error('任务认领记录不存在')
   }
 
+  if (claim.status === CLAIM_STATUS.RELEASED) {
+    throw new Error('任务已释放，不能继续原流程，请重新领取后处理')
+  }
+
+  const stage = resolveManualStage(claim)
+  const manualReason = note || (stage === 'image_review' ? '人工纠正图片审核通过' : '人工纠正连接审核通过')
+
+  if (stage === 'image_review') {
+    const hasLinkReview = Boolean(claim.video_url)
+
+    if (hasLinkReview) {
+      const queueResult = await enqueueLinkVerificationCompat({
+        claimId,
+        userId: claim.user_id,
+        taskId: claim.task_id,
+        videoUrl: claim.video_url,
+        platform: claim.platform,
+        taskAuthorName: extractAuthorFromTitle(claim.task_title),
+        action: claim.action
+      })
+
+      if (queueResult?.queued) {
+        await db.transaction(async (client) => {
+          let nextHistory = appendReviewHistory(
+            claim.review_history,
+            createReviewHistoryEntry({
+              stage: 'manual_review',
+              action: 'approved',
+              reason: manualReason,
+              details: {
+                reviewerId: String(reviewerId),
+                previousStatus: claim.status,
+                stage
+              }
+            })
+          )
+
+          nextHistory = appendReviewHistory(
+            nextHistory,
+            createReviewHistoryEntry({
+              stage: 'link_review',
+              action: 'queued',
+              reason: `人工纠正后继续进入连接审核，基础延迟 ${queueResult.config.delayMinutes} 分钟`,
+              details: {
+                reviewerId: String(reviewerId),
+                delayMinutes: queueResult.config.delayMinutes,
+                batchThreshold: queueResult.config.batchThreshold,
+                maxWaitMinutes: queueResult.config.maxWaitMinutes,
+                batchSize: queueResult.config.batchSize
+              }
+            })
+          )
+
+          await client.query(
+            `
+            UPDATE claims
+            SET status = $1,
+                submitted_at = COALESCE(submitted_at, NOW()),
+                ai_review_status = 'manual_approved',
+                image_review_status = 'approved',
+                image_review_reason = $2,
+                image_reviewed_at = NOW(),
+                link_review_status = 'pending',
+                link_review_reason = $3,
+                reviewer_id = $4,
+                review_note = $3,
+                review_history = $5
+            WHERE id = $6
+            `,
+            [
+              CLAIM_STATUS.PENDING_LINK,
+              manualReason,
+              '图片人工纠正通过，等待连接审核',
+              reviewerId,
+              JSON.stringify(nextHistory),
+              claimId
+            ]
+          )
+        })
+
+        return { claimId, message: '已纠正为通过，继续进入连接审核' }
+      }
+
+      if (!queueResult?.skipped) {
+        throw new Error('人工纠正后加入连接审核队列失败')
+      }
+    }
+
+    await db.transaction(async (client) => {
+      const nextHistory = appendReviewHistory(
+        claim.review_history,
+        createReviewHistoryEntry({
+          stage: 'manual_review',
+          action: 'approved',
+          reason: manualReason,
+          details: {
+            reviewerId: String(reviewerId),
+            previousStatus: claim.status,
+            stage
+          }
+        })
+      )
+
+      await client.query(
+        `
+        UPDATE claims
+        SET status = $1,
+            ai_review_status = 'manual_approved',
+            image_review_status = 'approved',
+            image_review_reason = $2,
+            image_reviewed_at = NOW(),
+            link_review_status = 'skipped',
+            link_review_reason = $3,
+            reviewer_id = $4,
+            review_note = $3,
+            reviewed_at = NOW(),
+            review_history = $5
+        WHERE id = $6
+        `,
+        [
+          CLAIM_STATUS.APPROVED,
+          manualReason,
+          hasLinkReview ? '连接审核已关闭，人工直接放行' : '人工审核通过（免连接审核）',
+          reviewerId,
+          JSON.stringify(nextHistory),
+          claimId
+        ]
+      )
+    })
+
+    await pointsSettlementService.awardClaimPoints({
+      claimId,
+      taskId: claim.task_id,
+      userId: claim.user_id,
+      awardReason: manualReason,
+      source: 'image_review_manual'
+    })
+
+    return { claimId, message: '审核通过' }
+  }
+
   await db.transaction(async (client) => {
     const nextHistory = appendReviewHistory(
       claim.review_history,
       createReviewHistoryEntry({
         stage: 'manual_review',
         action: 'approved',
-        reason: note || '人工审核通过',
+        reason: manualReason,
         details: {
           reviewerId: String(reviewerId),
-          previousStatus: claim.status
+          previousStatus: claim.status,
+          stage
         }
       })
     )
@@ -264,23 +423,25 @@ async function manualApprove(claimId, reviewerId, note) {
       `
       UPDATE claims
       SET status = $1,
-          image_review_status = CASE WHEN image_review_status IS NULL OR image_review_status = 'manual' THEN 'approved' ELSE image_review_status END,
-          link_review_status = CASE
-            WHEN $2 = true AND (link_review_status IS NULL OR link_review_status = 'manual') THEN 'approved'
-            WHEN $2 = false THEN COALESCE(link_review_status, 'skipped')
-            ELSE link_review_status
-          END,
-          reviewer_id = $3,
-          review_note = $4,
+          link_review_status = 'approved',
+          link_review_reason = $2,
+          link_reviewed_at = NOW(),
+          link_verified = true,
+          link_verify_result = $4,
           reviewed_at = NOW(),
+          reviewer_id = $3,
+          review_note = $2,
           review_history = $5
       WHERE id = $6
       `,
       [
         CLAIM_STATUS.APPROVED,
-        Boolean(claim.video_url),
+        manualReason,
         reviewerId,
-        note || '人工审核通过',
+        JSON.stringify({
+          approvedBy: 'manual_review',
+          reason: manualReason
+        }),
         JSON.stringify(nextHistory),
         claimId
       ]
@@ -291,18 +452,17 @@ async function manualApprove(claimId, reviewerId, note) {
     claimId,
     taskId: claim.task_id,
     userId: claim.user_id,
-    awardReason: note || '人工审核通过',
-    source: 'image_review_manual'
+    awardReason: manualReason,
+    source: 'link_review_manual'
   })
 
   return { claimId, message: '审核通过' };
 }
 
-// 审核拒绝 - 确保同时更新status
-async function manualReject(claimId, reviewerId, note) {
+async function manualInspect(claimId, reviewerId, note) {
   const claim = await db.queryOne(
     `
-    SELECT id, status, reject_count, review_history, image_review_status, link_review_status
+    SELECT id, status, review_history, ai_review_status, image_review_status, link_review_status, review_note
     FROM claims
     WHERE id = $1
     `,
@@ -313,10 +473,104 @@ async function manualReject(claimId, reviewerId, note) {
     throw new Error('任务认领记录不存在')
   }
 
+  const stage = resolveManualStage(claim)
+  const inspectReason = note || '人工已检查，维持当前结论'
+  const nextHistory = appendReviewHistory(
+    claim.review_history,
+    createReviewHistoryEntry({
+      stage: 'manual_review',
+      action: 'inspected',
+      reason: inspectReason,
+      details: {
+        reviewerId: String(reviewerId),
+        previousStatus: claim.status,
+        stage
+      }
+    })
+  )
+
+  await db.query(
+    `
+    UPDATE claims
+    SET ai_review_status = 'checked',
+        reviewer_id = $1,
+        review_note = $2,
+        review_history = $3
+    WHERE id = $4
+    `,
+    [reviewerId, inspectReason, JSON.stringify(nextHistory), claimId]
+  )
+
+  return { claimId, message: '已标记为已检查', aiReviewStatus: 'checked' }
+}
+
+// 审核拒绝 - 确保同时更新status
+async function manualReject(claimId, reviewerId, note) {
+  const claim = await db.queryOne(
+    `
+    SELECT id, status, reject_count, review_history, ai_review_status, image_review_status, link_review_status
+    FROM claims
+    WHERE id = $1
+    `,
+    [claimId]
+  )
+
+  if (!claim) {
+    throw new Error('任务认领记录不存在')
+  }
+
+  const rejectReason = note || '人工审核拒绝'
+  const stage = resolveManualStage(claim)
+  const isOptionalManualReview =
+    (stage === 'image_review' && claim.image_review_status === 'rejected' && claim.status !== CLAIM_STATUS.PENDING_MANUAL) ||
+    (stage === 'link_review' && claim.link_review_status === 'rejected' && claim.status !== CLAIM_STATUS.PENDING_MANUAL)
+
+  if (isOptionalManualReview) {
+    const nextHistory = appendReviewHistory(
+      claim.review_history,
+      createReviewHistoryEntry({
+        stage: 'manual_review',
+        action: 'rejected',
+        reason: rejectReason,
+        details: {
+          reviewerId: String(reviewerId),
+          previousStatus: claim.status,
+          stage,
+          confirmed: true
+        }
+      })
+    )
+
+    if (stage === 'image_review') {
+      await db.query(
+        `
+        UPDATE claims
+        SET ai_review_status = 'manual_rejected',
+            reviewer_id = $1,
+            review_note = $2,
+            review_history = $3
+        WHERE id = $4
+        `,
+        [reviewerId, rejectReason, JSON.stringify(nextHistory), claimId]
+      )
+    } else {
+      await db.query(
+        `
+        UPDATE claims
+        SET reviewer_id = $1,
+            review_note = $2,
+            review_history = $3
+        WHERE id = $4
+        `,
+        [reviewerId, rejectReason, JSON.stringify(nextHistory), claimId]
+      )
+    }
+
+    return { claimId, message: '已确认拒绝' }
+  }
+
   const rejectCount = Number(claim.reject_count || 0) + 1
   const shouldRelease = rejectCount >= 3
-  const stageField = claim.image_review_status !== 'approved' ? 'image_review_status' : 'link_review_status'
-  const rejectReason = note || '人工审核拒绝'
   const nextHistory = appendReviewHistory(
     appendReviewHistory(
       claim.review_history,
@@ -327,7 +581,8 @@ async function manualReject(claimId, reviewerId, note) {
         details: {
           reviewerId: String(reviewerId),
           previousStatus: claim.status,
-          rejectCount
+          rejectCount,
+          stage
         }
       })
     ),
@@ -337,33 +592,64 @@ async function manualReject(claimId, reviewerId, note) {
       reason: rejectReason,
       details: {
         source: 'manual_review',
-        rejectCount
+        rejectCount,
+        stage
       }
     })
   )
 
-  await db.query(
-    `
-    UPDATE claims
-    SET status = $1,
-        reject_count = $2,
-        submitted_at = NULL,
-        reviewed_at = NOW(),
-        reviewer_id = $3,
-        review_note = $4,
-        ${stageField} = 'rejected',
-        review_history = $5
-    WHERE id = $6
-    `,
-    [
-      shouldRelease ? CLAIM_STATUS.RELEASED : CLAIM_STATUS.DOING,
-      rejectCount,
-      reviewerId,
-      rejectReason,
-      JSON.stringify(nextHistory),
-      claimId
-    ]
-  )
+  if (stage === 'image_review') {
+    await db.query(
+      `
+      UPDATE claims
+      SET status = $1,
+          reject_count = $2,
+          submitted_at = NULL,
+          reviewed_at = NOW(),
+          reviewer_id = $3,
+          review_note = $4,
+          ai_review_status = 'manual_rejected',
+          image_review_status = 'rejected',
+          image_review_reason = $4,
+          review_history = $5
+      WHERE id = $6
+      `,
+      [
+        shouldRelease ? CLAIM_STATUS.RELEASED : CLAIM_STATUS.DOING,
+        rejectCount,
+        reviewerId,
+        rejectReason,
+        JSON.stringify(nextHistory),
+        claimId
+      ]
+    )
+  } else {
+    await db.query(
+      `
+      UPDATE claims
+      SET status = $1,
+          reject_count = $2,
+          submitted_at = NULL,
+          reviewed_at = NOW(),
+          reviewer_id = $3,
+          review_note = $4,
+          link_review_status = 'rejected',
+          link_review_reason = $4,
+          link_reviewed_at = NOW(),
+          link_verified = false,
+          review_history = $5
+      WHERE id = $6
+      `,
+      [
+        shouldRelease ? CLAIM_STATUS.RELEASED : CLAIM_STATUS.DOING,
+        rejectCount,
+        reviewerId,
+        rejectReason,
+        JSON.stringify(nextHistory),
+        claimId
+      ]
+    )
+  }
 
   return { claimId, message: '审核拒绝' };
 }
@@ -405,7 +691,7 @@ async function getReviewLogs(options = {}) {
   let users = [];
   
   if (taskIds.length > 0) {
-    tasks = await prisma.$queryRawUnsafe("SELECT id, title, platform, action FROM tasks WHERE id IN (" + taskIds.join(',') + ")");
+    tasks = await prisma.$queryRawUnsafe("SELECT id, title, platform, action, video_url FROM tasks WHERE id IN (" + taskIds.join(',') + ")");
   }
   if (userIds.length > 0) {
     users = await prisma.$queryRawUnsafe("SELECT id, username FROM users WHERE id IN (" + userIds.join(',') + ")");
@@ -454,10 +740,10 @@ async function getReviewLogs(options = {}) {
 
 export {
   getReviewLogs, reviewImage, reviewWithPaddleOCR, reviewWithGemini, reviewWithBailian,
-  getReviewQueue, getReviewStats, manualApprove, manualReject, urlToLocalPath, extractAuthorFromTitle
+  getReviewQueue, getReviewStats, manualApprove, manualReject, manualInspect, urlToLocalPath, extractAuthorFromTitle
 };
 
 export default {
   getReviewLogs, reviewImage, reviewWithPaddleOCR, reviewWithGemini, reviewWithBailian,
-  getReviewQueue, getReviewStats, manualApprove, manualReject, urlToLocalPath, extractAuthorFromTitle
+  getReviewQueue, getReviewStats, manualApprove, manualReject, manualInspect, urlToLocalPath, extractAuthorFromTitle
 };

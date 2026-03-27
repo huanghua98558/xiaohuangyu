@@ -58,7 +58,10 @@
         <div class="notification-content">
           <div class="notification-title">{{ n.title }}</div>
           <div class="notification-text" v-if="n.content">{{ n.content }}</div>
-          <div class="notification-time">{{ formatTime(n.created_at) }}</div>
+          <div class="notification-footer">
+            <div class="notification-time">{{ formatTime(n.created_at) }}</div>
+            <div class="notification-action">{{ getActionLabel(n) }} ›</div>
+          </div>
         </div>
         <span class="unread-dot" v-if="!n.is_read"></span>
       </div>
@@ -79,10 +82,16 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { fetchNotifications, fetchUnreadCount, markAsRead, markAllRead } from '../api/notification'
+import { useAuth } from '../store/auth'
 import { useNotification } from '../store/notification'
 import { wsService } from '../services/websocket'
+import {
+  getUserNotificationActionLabel,
+  getUserNotificationTarget,
+} from '../utils/notificationTarget'
 
 const router = useRouter()
+const { user } = useAuth()
 const { unreadCount, refreshUnreadCount, clearUnreadCount } = useNotification()
 
 const loading = ref(true)
@@ -121,12 +130,12 @@ const handleClick = async (n) => {
     await markAsRead(n.id)
     n.is_read = true
     // 使用全局状态更新
-    refreshUnreadCount()
+    await refreshUnreadCount()
   }
-  
-  // 根据类型跳转
-  if (n.type === 'task' && n.data?.taskId) {
-    router.push(`/my-tasks`)
+
+  const target = getUserNotificationTarget(n, user.value)
+  if (target && target !== router.currentRoute.value.fullPath) {
+    router.push(target)
   }
 }
 
@@ -154,6 +163,8 @@ const getIcon = (type) => {
   }
   return icons[type] || '🔔'
 }
+
+const getActionLabel = (notification) => getUserNotificationActionLabel(notification, user.value)
 
 const formatTime = (time) => {
   const date = new Date(time)
@@ -369,6 +380,20 @@ onUnmounted(() => {
 .notification-time {
   font-size: 12px;
   color: #999;
+}
+
+.notification-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.notification-action {
+  font-size: 12px;
+  color: #3f51b5;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .unread-dot {

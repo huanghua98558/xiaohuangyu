@@ -24,38 +24,39 @@ async function request(url, options = {}) {
 export async function fetchNotifications(params = {}) {
   const query = new URLSearchParams()
   if (params.page) query.set('page', params.page)
-  if (params.size) query.set('size', params.size)
+  if (params.size) query.set('pageSize', params.size)
+  if (params.unreadOnly) query.set('unreadOnly', 'true')
   if (params.type) query.set('type', params.type)
   const queryString = query.toString() ? `?${query.toString()}` : ''
-  const { data } = await request(`/notifications${queryString}`)
+  const { data } = await request(`/user-notifications${queryString}`)
   return data
 }
 
 // 获取未读数量
 export async function fetchUnreadCount() {
-  const { data } = await request('/notifications/unread-count')
-  return data
+  const { data } = await request('/user-notifications/unread-count')
+  return Number(data?.count || 0)
 }
 
 // 标记已读
 export async function markAsRead(id) {
-  const { data, message } = await request(`/notifications/${id}/read`, {
-    method: 'PUT'
+  const { data, message } = await request(`/user-notifications/${id}/read`, {
+    method: 'POST'
   })
   return { data, message }
 }
 
 // 标记全部已读
 export async function markAllRead() {
-  const { data, message } = await request('/notifications/read-all', {
-    method: 'PUT'
+  const { data, message } = await request('/user-notifications/read-all', {
+    method: 'POST'
   })
   return { data, message }
 }
 
 // 删除通知
 export async function deleteNotification(id) {
-  const { data, message } = await request(`/notifications/${id}`, {
+  const { data, message } = await request(`/user-notifications/${id}`, {
     method: 'DELETE'
   })
   return { data, message }

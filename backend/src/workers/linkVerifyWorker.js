@@ -17,15 +17,40 @@ import db from '../config/database.js';
 import { publishLinkVerifyComplete } from '../utils/wsEventPublisher.js';
 import promotionService from '../services/promotionService.js';
 import { verifyComment, compareComments } from '../services/commentVerifyService.js';
+import reviewConfig from '../services/ai/reviewConfigService.js';
+import { analyzeSemantic } from '../services/ai/semanticAnalysisService.js';
+import { VERIFY_MODE, verifyNickname } from '../services/ai/ruleVerificationService.js';
 import pointsSettlementService from '../services/pointsSettlementService.js';
+import { notifyClaimRejected, notifyManualReviewQueued } from '../services/notificationService.js';
 import { CLAIM_STATUS } from '../constants/claimLifecycle.js';
 import { appendReviewHistory, createReviewHistoryEntry } from '../utils/claimReviewHistory.js';
 
 dotenv.config();
 
-const BROWSER_PORTS = [8000, 8001, 8002];
+function parsePortList(value, fallback) {
+  if (!value) {
+    return fallback;
+  }
+
+  const parsed = String(value)
+    .split(',')
+    .map((item) => Number.parseInt(item.trim(), 10))
+    .filter((item) => Number.isFinite(item) && item > 0);
+
+  return parsed.length > 0 ? parsed : fallback;
+}
+
+const LINK_VERIFY_WORKER_CONFIG = {
+  browserPorts: parsePortList(process.env.LINK_VERIFY_BROWSER_PORTS, [8000, 8001, 8002]),
+  maxIpRetries: readIntegerConfig(process.env.LINK_VERIFY_MAX_IP_RETRIES, 3, 1),
+  workerConcurrency: readIntegerConfig(process.env.LINK_VERIFY_WORKER_CONCURRENCY, 3, 1),
+  limiterMax: readIntegerConfig(process.env.LINK_VERIFY_RATE_LIMIT_MAX, 5, 1),
+  limiterDurationMs: readIntegerConfig(process.env.LINK_VERIFY_RATE_LIMIT_DURATION_MS, 1000, 100),
+};
+
+const BROWSER_PORTS = LINK_VERIFY_WORKER_CONFIG.browserPorts;
 const BACKEND_URL = process.env.BACKEND_URL || 'http://127.0.0.1:5000';
-const MAX_IP_RETRIES = 3; // 最多尝试 3 个不同 IP
+const MAX_IP_RETRIES = LINK_VERIFY_WORKER_CONFIG.maxIpRetries;
 
 let currentIndex = 0;
 const linkVerifyQueue = new Queue('link-verify-queue', { connection: redisConnection });
@@ -77,6 +102,357 @@ function normalizeSubmittedComment(evaluation) {
   }
 
   return null;
+}
+
+function normalizeTextValue(value) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  const normalized = String(value).trim();
+  return normalized || null;
+}
+
+function normalizeNicknameValue(value) {
+  const normalized = normalizeTextValue(value);
+  if (!normalized) {
+    return null;
+  }
+
+  return normalized.replace(/^@+/, '').trim() || null;
+}
+
+function extractCommentContent(comment) {
+  if (!comment) {
+    return null;
+  }
+
+  if (typeof comment === 'string') {
+    return normalizeTextValue(comment);
+  }
+
+  return normalizeTextValue(
+    comment.content ??
+    comment.text ??
+    comment.comment ??
+    comment.value ??
+    null
+  );
+}
+
+function extractCommentNickname(comment) {
+  if (!comment || typeof comment !== 'object') {
+    return null;
+  }
+
+  return normalizeNicknameValue(
+    comment.nickname ??
+    comment.name ??
+    comment.user?.nickname ??
+    null
+  );
+}
+
+function safeParseJson(value) {
+  if (!value) {
+    return null;
+  }
+
+  if (typeof value === 'object') {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function extractNicknameFromReviewHistory(reviewHistory) {
+  const entries = Array.isArray(reviewHistory) ? reviewHistory : safeParseJson(reviewHistory);
+  if (!Array.isArray(entries)) {
+    return null;
+  }
+
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i];
+    const details = entry?.details || entry?.data || {};
+    const nickname = normalizeNicknameValue(
+      details.commenterNickname ??
+      details.detected?.commenterNickname ??
+      details.result?.commenterNickname ??
+      null
+    );
+
+    if (nickname) {
+      return nickname;
+    }
+  }
+
+  return null;
+}
+
+function extractNicknameFromAiReason(aiReason) {
+  const parsed = safeParseJson(aiReason);
+  if (!parsed || typeof parsed !== 'object') {
+    return null;
+  }
+
+  return normalizeNicknameValue(
+    parsed.commenterNickname ??
+    parsed.detected?.commenterNickname ??
+    parsed.manualReview?.details?.detected?.commenterNickname ??
+    null
+  );
+}
+
+function buildExtractedCommentCandidates(extractedComments = []) {
+  if (!Array.isArray(extractedComments)) {
+    return [];
+  }
+
+  return extractedComments
+    .map((item, index) => ({
+      index,
+      raw: item,
+      content: extractCommentContent(item),
+      nickname: extractCommentNickname(item)
+    }))
+    .filter((item) => item.content || item.nickname);
+}
+
+function verifyLinkedCommentMatch({ userComment, ocrComment, extractedComments, minLength }) {
+  const result = {
+    passed: false,
+    reasons: [],
+    errorType: null,
+    matchedComment: null,
+    details: {
+      targets: [],
+      targetValidation: [],
+      candidates: [],
+      matches: [],
+      bestMatch: null
+    }
+  };
+
+  const targets = [];
+  const normalizedUserComment = normalizeTextValue(userComment);
+  const normalizedOcrComment = normalizeTextValue(ocrComment);
+
+  if (normalizedUserComment) {
+    targets.push({ source: 'user', text: normalizedUserComment });
+  }
+  if (normalizedOcrComment && normalizedOcrComment !== normalizedUserComment) {
+    targets.push({ source: 'ocr', text: normalizedOcrComment });
+  }
+
+  result.details.targets = targets.map((target) => ({
+    source: target.source,
+    text: target.text
+  }));
+  result.details.targetValidation = targets.map((target) => ({
+    source: target.source,
+    ...verifyComment(target.text, { minLength })
+  }));
+
+  if (targets.length === 0) {
+    result.errorType = 'missing_submitted_comment';
+    result.reasons.push('用户未提交可比对的评论内容');
+    return result;
+  }
+
+  const candidates = buildExtractedCommentCandidates(extractedComments);
+  result.details.candidates = candidates.map((candidate) => ({
+    index: candidate.index,
+    content: candidate.content,
+    nickname: candidate.nickname
+  }));
+
+  if (candidates.length === 0) {
+    result.errorType = 'missing_page_comments';
+    result.reasons.push('页面未提取到评论，请检查评论账号是否存在');
+    result.userHint = '请换号检查评论账号评论是否存在';
+    return result;
+  }
+
+  let bestMatch = null;
+  let bestScore = -1;
+
+  for (const candidate of candidates) {
+    if (!candidate.content) {
+      continue;
+    }
+
+    for (const target of targets) {
+      const compare = compareComments(target.text, candidate.content);
+      const similarity = Number(compare.similarity || 0);
+
+      if (compare.match) {
+        const matchRecord = {
+          source: target.source,
+          extracted: candidate.content,
+          nickname: candidate.nickname,
+          similarity,
+          compareReason: compare.reason || null
+        };
+        result.details.matches.push(matchRecord);
+
+        if (similarity > bestScore) {
+          bestScore = similarity;
+          bestMatch = {
+            ...matchRecord,
+            candidate
+          };
+        }
+      }
+    }
+  }
+
+  if (!bestMatch) {
+    result.reasons.push('评论内容比对失败');
+    return result;
+  }
+
+  result.passed = true;
+  result.matchedComment = bestMatch.candidate;
+  result.details.bestMatch = {
+    source: bestMatch.source,
+    extracted: bestMatch.extracted,
+    nickname: bestMatch.nickname,
+    similarity: bestMatch.similarity
+  };
+
+  return result;
+}
+
+function buildNicknameMatchResult({ submittedNickname, matchedNickname, enabled }) {
+  if (!enabled) {
+    return {
+      passed: true,
+      skipped: true,
+      reason: '评论人昵称校验已关闭',
+      submittedNickname: normalizeNicknameValue(submittedNickname),
+      matchedNickname: normalizeNicknameValue(matchedNickname)
+    };
+  }
+
+  const normalizedSubmitted = normalizeNicknameValue(submittedNickname);
+  const normalizedMatched = normalizeNicknameValue(matchedNickname);
+
+  if (!normalizedSubmitted) {
+    return {
+      passed: false,
+      reason: '用户未提交评论人昵称',
+      errorType: 'missing_submitted_nickname',
+      submittedNickname: null,
+      matchedNickname: normalizedMatched
+    };
+  }
+
+  if (!normalizedMatched) {
+    return {
+      passed: false,
+      reason: '页面未提取到评论人昵称',
+      errorType: 'missing_page_nickname',
+      requiresManual: true,
+      submittedNickname: normalizedSubmitted,
+      matchedNickname: null
+    };
+  }
+
+  return {
+    ...verifyNickname(normalizedMatched, normalizedSubmitted, {
+      enabled: true,
+      matchMode: 'contains',
+      minSimilarity: 0.7,
+      ignoreCase: true
+    }),
+    submittedNickname: normalizedSubmitted,
+    matchedNickname: normalizedMatched
+  };
+}
+
+async function runFinalCommentJudgement({ mode, matchedComment, taskInfo = {}, minLength, aiEnabled }) {
+  const finalMode = Object.values(VERIFY_MODE).includes(mode) ? mode : VERIFY_MODE.RULE_AND_AI;
+  const comment = normalizeTextValue(matchedComment);
+
+  const result = {
+    passed: false,
+    mode: finalMode,
+    reason: '缺少待判定评论内容',
+    ruleResult: null,
+    aiResult: null,
+    requiresManual: false
+  };
+
+  if (!comment) {
+    return result;
+  }
+
+  if (finalMode === VERIFY_MODE.DEFAULT_PASS) {
+    result.passed = true;
+    result.reason = '默认通过模式，跳过最终评论判定';
+    return result;
+  }
+
+  result.ruleResult = verifyComment(comment, { minLength });
+
+  if (finalMode !== VERIFY_MODE.RULE_ONLY) {
+    if (aiEnabled === false) {
+      result.aiResult = { valid: true, skipped: true, reason: 'AI语义判定已关闭，默认通过' };
+    } else {
+      result.aiResult = await analyzeSemantic({
+        comment,
+        taskTitle: taskInfo.title || taskInfo.action || '',
+        taskDescription: taskInfo.description || '',
+        platform: taskInfo.platform || ''
+      });
+    }
+
+    if (result.aiResult?.error) {
+      result.requiresManual = true;
+      result.reason = '最终评论 AI 判定失败，已转人工检查';
+      return result;
+    }
+  } else {
+    result.aiResult = { valid: true, skipped: true, reason: '规则模式无需 AI 判定' };
+  }
+
+  switch (finalMode) {
+    case VERIFY_MODE.RULE_ONLY:
+      result.passed = result.ruleResult.valid;
+      result.reason = result.passed
+        ? '最终评论规则判定通过'
+        : `最终评论规则判定未通过: ${result.ruleResult.reasons.join('、') || '规则未通过'}`;
+      break;
+    case VERIFY_MODE.AI_ONLY:
+      result.passed = Boolean(result.aiResult?.valid);
+      result.reason = result.passed
+        ? '最终评论 AI 判定通过'
+        : `最终评论 AI 判定未通过: ${result.aiResult?.reason || 'AI 未通过'}`;
+      break;
+    case VERIFY_MODE.RULE_AND_AI:
+    default:
+      result.passed = Boolean(result.ruleResult.valid) && Boolean(result.aiResult?.valid);
+      if (result.passed) {
+        result.reason = '最终评论规则和 AI 判定都通过';
+      } else if (!result.ruleResult.valid && !result.aiResult?.valid) {
+        result.reason = `最终评论规则与 AI 均未通过: ${(result.ruleResult.reasons || []).join('、') || result.aiResult?.reason || '未通过'}`;
+      } else if (!result.ruleResult.valid) {
+        result.reason = `最终评论规则判定未通过: ${result.ruleResult.reasons.join('、') || '规则未通过'}`;
+      } else {
+        result.reason = `最终评论 AI 判定未通过: ${result.aiResult?.reason || 'AI 未通过'}`;
+      }
+      break;
+  }
+
+  return result;
 }
 
 async function getLinkVerifyRuntimeConfig(jobData = {}) {
@@ -579,12 +955,15 @@ const linkVerifyWorker = new Worker('link-verify-queue', async (job) => {
   const linkUrl = links?.[0];
   const taskAuthor = taskContext?.author;
   let userComment = normalizeSubmittedComment(job.data?.comment || job.data?.evaluation);
+  let submittedNickname = normalizeNicknameValue(job.data?.platformNickname);
 
   if (!linkUrl) {
     throw new Error('缺少待验证链接');
   }
 
   const runtimeConfig = await getLinkVerifyRuntimeConfig(job.data);
+  const reviewSettings = await reviewConfig.getConfig();
+  const commentMinLength = Math.max(1, Number(reviewSettings?.comment?.minLength || 8));
   const pendingSince = Number(readyAt || Date.now());
   const maxWaitMs = runtimeConfig.maxWaitMinutes * 60 * 1000;
   const [waitingCount, activeCount] = await Promise.all([
@@ -620,9 +999,14 @@ const linkVerifyWorker = new Worker('link-verify-queue', async (job) => {
 
   let ocrComment = null;
   try {
-    const claimData = await db.queryOne('SELECT ocr_comment, evaluation, review_history FROM claims WHERE id = $1', [claimId]);
+    const claimData = await db.queryOne('SELECT ocr_comment, evaluation, review_history, platform_nickname, ai_reason FROM claims WHERE id = $1', [claimId]);
     ocrComment = claimData?.ocr_comment || null;
     userComment = userComment || normalizeSubmittedComment(claimData?.evaluation);
+    submittedNickname = submittedNickname || normalizeNicknameValue(claimData?.platform_nickname);
+    submittedNickname =
+      submittedNickname ||
+      extractNicknameFromAiReason(claimData?.ai_reason) ||
+      extractNicknameFromReviewHistory(claimData?.review_history);
   } catch (e) {
     console.error(`[LinkWorker] 读取 OCR 评论失败: ${e.message}`);
   }
@@ -670,42 +1054,122 @@ const linkVerifyWorker = new Worker('link-verify-queue', async (job) => {
     }
 
     const extractedComments = linkResult.comments || [];
-    const commentResult = threeWayCommentVerification(userComment, ocrComment, extractedComments);
+    console.log('[LinkWorker] 📊 提取的评论数量:', extractedComments.length);
+    if (extractedComments.length > 0) {
+      console.log('[LinkWorker] 📝 提取的评论内容:', extractedComments.slice(0, 3).map(c => c?.content?.substring(0, 50) || c?.substring?.(0, 50) || 'N/A'));
+    }
+    const commentResult = verifyLinkedCommentMatch({
+      userComment,
+      ocrComment,
+      extractedComments,
+      minLength: commentMinLength
+    });
+    const nicknameResult = buildNicknameMatchResult({
+      submittedNickname,
+      matchedNickname: commentResult.matchedComment?.nickname,
+      enabled: reviewSettings?.checks?.commentNickname !== false
+    });
     const authorResult = verifyAuthor(taskAuthor, linkResult.author_name);
-    const passed = linkResult.success && commentResult.passed && authorResult.match;
+    const finalCommentJudgement = await runFinalCommentJudgement({
+      mode: reviewSettings?.semantic?.mode,
+      matchedComment: commentResult.matchedComment?.content,
+      taskInfo: {
+        title: taskContext?.title || taskContext?.action || '',
+        description: taskContext?.description || '',
+        action: taskContext?.action || '',
+        platform
+      },
+      minLength: commentMinLength,
+      aiEnabled: reviewSettings?.semantic?.enabled !== false
+    });
+    const passed =
+      linkResult.success &&
+      commentResult.passed &&
+      nicknameResult.passed &&
+      authorResult.match &&
+      finalCommentJudgement.passed;
 
-    const isSystemError = !linkResult.success && (
+    // ============ 链接审查三种情况 ============
+    console.log('[LinkWorker] 🔍 linkResult.success:', linkResult.success, ', commentResult.passed:', commentResult.passed, ', commentResult.errorType:', commentResult.errorType);
+    
+    // 情况1: 提取失败（系统错误）- 转人工
+    const isExtractError = !linkResult.success && (
       linkResult.error?.includes('IP 均失败') ||
       linkResult.error?.includes('Browser Service') ||
       linkResult.error?.includes('timeout') ||
       linkResult.error?.includes('ECONNREFUSED') ||
       linkResult.error?.includes('unavailable') ||
-      linkResult.attemptLog?.every(log => !log.success)
+      linkResult.error?.includes('提取失败') ||
+      (Array.isArray(linkResult.attemptLog) &&
+        linkResult.attemptLog.length > 0 &&
+        linkResult.attemptLog.every(log => !log.success))
     );
 
-    const isCommentMismatch = linkResult.success && !commentResult.passed;
+    // 情况2: 一条评论都没有提取到（页面无评论）- 转人工检查
+    const isNoCommentsOnPage = linkResult.success && 
+      commentResult.errorType === 'missing_page_comments' &&
+      extractedComments.length === 0;
+
+    // 情况3: 提取到评论了，但用户评论不在其中（评论不匹配）- 直接拒绝
+    const isCommentMismatch = linkResult.success && 
+      !commentResult.passed && 
+      extractedComments.length > 0 &&
+      !isNoCommentsOnPage;
+
+    const isNicknameMismatch = linkResult.success && 
+      commentResult.passed && 
+      !nicknameResult.passed && 
+      !nicknameResult.requiresManual;
+
+    console.log('[LinkWorker] 🔍 三种情况判断:');
+    console.log('  - isExtractError:', isExtractError);
+    console.log('  - isNoCommentsOnPage:', isNoCommentsOnPage, '(extractedComments.length:', extractedComments.length, ')');
+    console.log('  - isCommentMismatch:', isCommentMismatch);
+
+    // 需要转人工的情况
+    const requiresManual =
+      isExtractError ||
+      isNoCommentsOnPage ||
+      nicknameResult.requiresManual ||
+      finalCommentJudgement.requiresManual;
+
+    // 高亮推送的原因
     const blockReasons = [];
     if (linkResult.blocked_account) blockReasons.push('账号被封禁');
     if (linkResult.suspicious_behavior) blockReasons.push('检测到可疑行为');
-    if (isCommentMismatch && extractedComments.length > 0) blockReasons.push('评论不匹配');
+    if (isNoCommentsOnPage) blockReasons.push('链接审查：页面无评论');
+    if (isCommentMismatch) blockReasons.push('链接审查：评论不匹配');
+    if (isNicknameMismatch) blockReasons.push('评论人昵称不匹配');
+    if (!authorResult.match) blockReasons.push('达人不匹配');
 
     const reviewDetails = {
       passed,
+      submitted: {
+        userComment: userComment || null,
+        ocrComment: ocrComment || null,
+        commenterNickname: submittedNickname || null
+      },
       linkUrl,
       linkResult: {
         valid: linkResult.success,
         error: linkResult.error || null,
         pageTitle: linkResult.page_title || null,
         authorName: linkResult.author_name || null,
+        extractedCommentCount: extractedComments.length,
         blockedAccount: Boolean(linkResult.blocked_account),
         suspiciousBehavior: Boolean(linkResult.suspicious_behavior)
       },
       commentResult: {
         passed: commentResult.passed,
         reasons: commentResult.reasons,
-        matches: commentResult.details?.matches || []
+        errorType: commentResult.errorType || null,
+        matches: commentResult.details?.matches || [],
+        matchedComment: commentResult.matchedComment?.content || null,
+        matchedNickname: commentResult.matchedComment?.nickname || null
       },
+      nicknameResult,
       authorResult,
+      finalCommentJudgement,
       attemptLog: linkResult.attemptLog || []
     };
 
@@ -785,8 +1249,20 @@ const linkVerifyWorker = new Worker('link-verify-queue', async (job) => {
       };
     }
 
-    if (isSystemError) {
-      const manualReason = '连接审核异常，已转人工复审';
+    if (requiresManual) {
+      // 区分不同的人工原因
+      let manualReason;
+      if (isExtractError) {
+        manualReason = '链接审查提取失败，已转人工检查';
+      } else if (isNoCommentsOnPage) {
+        manualReason = '链接审查：页面无评论，已转人工检查';
+      } else if (nicknameResult.requiresManual) {
+        manualReason = `${nicknameResult.reason}，已转人工检查`;
+      } else if (finalCommentJudgement.requiresManual) {
+        manualReason = finalCommentJudgement.reason;
+      } else {
+        manualReason = '链接审查异常，已转人工复审';
+      }
       await db.transaction(async (client) => {
         const historyRes = await client.query('SELECT review_history FROM claims WHERE id = $1', [claimId]);
         const nextHistory = appendReviewHistory(
@@ -829,12 +1305,36 @@ const linkVerifyWorker = new Worker('link-verify-queue', async (job) => {
         });
       } catch (e) {}
 
+      try {
+        await notifyManualReviewQueued({
+          claimId,
+          userId,
+          taskId,
+          stage: 'link_review',
+          reason: manualReason,
+        });
+      } catch (notifyErr) {
+        console.error(`[LinkWorker] 发送人工队列通知失败: ${notifyErr.message}`);
+      }
+
       return { claimId, manual: true, reason: manualReason };
     }
 
+    // 构造拒绝原因，针对不同情况给出用户友好提示
+    // 评论不匹配：直接拒绝，提示用户换号检查
+    // 页面无评论：不在这里处理，已转人工
+    let userHint = null;
+    if (isCommentMismatch) {
+      userHint = '请换号检查评论账号，确认评论是否存在';
+    } else if (isNicknameMismatch) {
+      userHint = '评论账号不匹配，请使用正确的评论账号';
+    }
+    
     const rejectReason = [
       ...commentResult.reasons,
+      !nicknameResult.passed && !nicknameResult.requiresManual ? nicknameResult.reason : null,
       !authorResult.match ? authorResult.reason : null,
+      !finalCommentJudgement.passed && !finalCommentJudgement.requiresManual ? finalCommentJudgement.reason : null,
       linkResult.error || null
     ].filter(Boolean).join('; ') || '连接审核未通过';
 
@@ -907,6 +1407,12 @@ const linkVerifyWorker = new Worker('link-verify-queue', async (job) => {
       });
     } catch (e) {}
 
+    try {
+      await notifyClaimRejected(userId, claimId, rejectReason);
+    } catch (notifyErr) {
+      console.error(`[LinkWorker] 发送连接拒绝通知失败: ${notifyErr.message}`);
+    }
+
     return {
       claimId,
       passed: false,
@@ -951,12 +1457,27 @@ const linkVerifyWorker = new Worker('link-verify-queue', async (job) => {
       });
     } catch (e) {}
 
+    try {
+      await notifyManualReviewQueued({
+        claimId,
+        userId,
+        taskId,
+        stage: 'link_review',
+        reason: manualReason,
+      });
+    } catch (notifyErr) {
+      console.error(`[LinkWorker] 发送异常转人工通知失败: ${notifyErr.message}`);
+    }
+
     return { claimId, manual: true, reason: manualReason };
   }
 }, {
   connection: redisConnection,
-  concurrency: 3,
-  limiter: { max: 5, duration: 1000 }
+  concurrency: LINK_VERIFY_WORKER_CONFIG.workerConcurrency,
+  limiter: {
+    max: LINK_VERIFY_WORKER_CONFIG.limiterMax,
+    duration: LINK_VERIFY_WORKER_CONFIG.limiterDurationMs
+  }
 });
 
 linkVerifyWorker.on('completed', (job) => console.log(`[LinkWorker] ✅ Job 完成: ${job.id}`));
@@ -967,6 +1488,9 @@ checkAllServicesHealth().then(results => {
   const healthyCount = results.filter(r => r.healthy).length;
   if (healthyCount > 0) {
     console.log(`[LinkWorker] ✅ 已启动，可用服务: ${healthyCount}/${BROWSER_PORTS.length}`);
+    console.log(
+      `[LinkWorker] 并发配置: concurrency=${LINK_VERIFY_WORKER_CONFIG.workerConcurrency}, limiter=${LINK_VERIFY_WORKER_CONFIG.limiterMax}/${LINK_VERIFY_WORKER_CONFIG.limiterDurationMs}ms`
+    );
     console.log(`[LinkWorker] 多 IP 重试机制: 最多尝试 ${MAX_IP_RETRIES} 个不同 IP`);
     results.forEach(r => console.log(`  - 端口 ${r.port}: ${r.healthy ? '✅' : '❌'} ${r.version || r.error || ''}`));
   } else {

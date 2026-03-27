@@ -1,6 +1,7 @@
 import supabase from '../utils/supabaseToPrismaAdapter.js'
 import levelService from './levelService.js'
 import logger from '../utils/logger.js'
+import { notifyPromotionReward } from './notificationService.js'
 
 class PromotionService {
   /**
@@ -120,14 +121,17 @@ class PromotionService {
         // 获取上级当前积分
         const { data: parent } = await supabase
           .from('users')
-          .select('points')
+          .select('points, total_points')
           .eq('id', user.c_parent_id)
           .single()
 
         // 更新上级积分
         await supabase
           .from('users')
-          .update({ points: (parent?.points || 0) + parentPoints })
+          .update({
+            points: (parent?.points || 0) + parentPoints,
+            total_points: (parent?.total_points || parent?.points || 0) + parentPoints,
+          })
           .eq('id', user.c_parent_id)
 
         // 记录积分变动
@@ -140,6 +144,16 @@ class PromotionService {
             points: parentPoints,
             extra_data: JSON.stringify({ fromUserId: userId, level: 1 })
           })
+
+        try {
+          await notifyPromotionReward(user.c_parent_id, {
+            level: 1,
+            points: parentPoints,
+            sourceUserId: userId,
+          })
+        } catch (notifyError) {
+          logger.error('发送一级推广奖励通知失败:', notifyError)
+        }
       }
     }
 
@@ -152,14 +166,17 @@ class PromotionService {
         // 获取二级上级当前积分
         const { data: grand } = await supabase
           .from('users')
-          .select('points')
+          .select('points, total_points')
           .eq('id', user.c_grand_id)
           .single()
 
         // 更新二级上级积分
         await supabase
           .from('users')
-          .update({ points: (grand?.points || 0) + grandPoints })
+          .update({
+            points: (grand?.points || 0) + grandPoints,
+            total_points: (grand?.total_points || grand?.points || 0) + grandPoints,
+          })
           .eq('id', user.c_grand_id)
 
         // 记录积分变动
@@ -172,6 +189,16 @@ class PromotionService {
             points: grandPoints,
             extra_data: JSON.stringify({ fromUserId: userId, level: 2 })
           })
+
+        try {
+          await notifyPromotionReward(user.c_grand_id, {
+            level: 2,
+            points: grandPoints,
+            sourceUserId: userId,
+          })
+        } catch (notifyError) {
+          logger.error('发送二级推广奖励通知失败:', notifyError)
+        }
       }
     }
     } catch (e) {

@@ -10,9 +10,26 @@ import alertEngine from './alertEngine.js'
 import redisConnection from '../config/queue.js'
 import db from '../config/database.js'
 import { CLAIM_STATUS } from '../constants/claimLifecycle.js'
+import { getOcrHealthEndpoints } from '../utils/ocrServicePools.js'
 
 const linkDelayQueue = new Queue('link-delay-queue', { connection: redisConnection })
 const linkVerifyQueue = new Queue('link-verify-queue', { connection: redisConnection })
+const OCR_HEALTH_ENDPOINTS = getOcrHealthEndpoints()
+
+async function checkOcrHealth(axios, timeout) {
+  const checks = await Promise.allSettled(
+    OCR_HEALTH_ENDPOINTS.map((endpoint) =>
+      axios.get(`${endpoint.url}/health`, { timeout }).then(() => true).catch(() => false)
+    )
+  )
+
+  const toValue = (result) => (result.status === 'fulfilled' ? result.value : false)
+  return OCR_HEALTH_ENDPOINTS.map((endpoint, index) => ({
+    port: endpoint.port,
+    url: endpoint.url,
+    healthy: toValue(checks[index]),
+  }))
+}
 
 async function getLinkPipelineSnapshot() {
   const [
@@ -341,9 +358,8 @@ class CronService {
     try {
       logger.info("[HEALTH] 执行启动时健康检查...")
       const axios = (await import("axios")).default
+      const ocrChecks = await checkOcrHealth(axios, 5000)
       const checks = await Promise.allSettled([
-        axios.get("http://127.0.0.1:9001/health", { timeout: 5000 }).then(() => true).catch(() => false),
-        axios.get("http://127.0.0.1:9002/health", { timeout: 5000 }).then(() => true).catch(() => false),
         axios.get("http://127.0.0.1:8003/health", { timeout: 5000 }).then(() => true).catch(() => false),
         axios.get("http://127.0.0.1:8000/", { timeout: 5000 }).then(r => r.data && r.data.status === "ok").catch(() => false),
         axios.get("http://127.0.0.1:8001/", { timeout: 5000 }).then(r => r.data && r.data.status === "ok").catch(() => false),
@@ -351,9 +367,9 @@ class CronService {
       ])
       const gv = (r) => r.status === "fulfilled" ? r.value : false
       const health = {
-        ocr: [{ port: 9001, healthy: gv(checks[0]) }, { port: 9002, healthy: gv(checks[1]) }],
-        yolo: { port: 8003, healthy: gv(checks[2]) },
-        browser: [{ port: 8000, healthy: gv(checks[3]) }, { port: 8001, healthy: gv(checks[4]) }, { port: 8002, healthy: gv(checks[5]) }],
+        ocr: ocrChecks,
+        yolo: { port: 8003, healthy: gv(checks[0]) },
+        browser: [{ port: 8000, healthy: gv(checks[1]) }, { port: 8001, healthy: gv(checks[2]) }, { port: 8002, healthy: gv(checks[3]) }],
         timestamp: Date.now()
       }
       webSocketService.broadcastServiceHealth(health)
@@ -425,9 +441,8 @@ class CronService {
     const healthJob = cron.schedule("*/30 * * * * *", async () => {
       try {
         const axios = (await import("axios")).default
+        const ocrChecks = await checkOcrHealth(axios, 3000)
         const checks = await Promise.allSettled([
-          axios.get("http://127.0.0.1:9001/health", { timeout: 3000 }).then(() => true).catch(() => false),
-          axios.get("http://127.0.0.1:9002/health", { timeout: 3000 }).then(() => true).catch(() => false),
           axios.get("http://127.0.0.1:8003/health", { timeout: 3000 }).then(() => true).catch(() => false),
           axios.get("http://127.0.0.1:8000/", { timeout: 3000 }).then(r => r.data && r.data.status === "ok").catch(() => false),
           axios.get("http://127.0.0.1:8001/", { timeout: 3000 }).then(r => r.data && r.data.status === "ok").catch(() => false),
@@ -435,9 +450,9 @@ class CronService {
         ])
         const gv = (r) => r.status === "fulfilled" ? r.value : false
         const health = {
-          ocr: [{ port: 9001, healthy: gv(checks[0]) }, { port: 9002, healthy: gv(checks[1]) }],
-          yolo: { port: 8003, healthy: gv(checks[2]) },
-          browser: [{ port: 8000, healthy: gv(checks[3]) }, { port: 8001, healthy: gv(checks[4]) }, { port: 8002, healthy: gv(checks[5]) }],
+          ocr: ocrChecks,
+          yolo: { port: 8003, healthy: gv(checks[0]) },
+          browser: [{ port: 8000, healthy: gv(checks[1]) }, { port: 8001, healthy: gv(checks[2]) }, { port: 8002, healthy: gv(checks[3]) }],
           timestamp: Date.now()
         }
         webSocketService.broadcastServiceHealth(health)
@@ -452,8 +467,16 @@ class CronService {
       } catch (err) { logger.error("[STATS_JOB] 错误:", err) }
     }, { scheduled: true, timezone: "Asia/Shanghai" })
 
-    this.jobs.push(statsJob, metricsJob, healthJob)
-    logger.info("实时监控推送已启动: 统计(10s) + 系统指标(15s) + 服务健康(30s)")
+    const businessAlertJob = cron.schedule("0 * * * * *", async () => {
+      try {
+        await alertEngine.evaluateBusinessAlerts()
+      } catch (err) {
+        logger.error("[BUSINESS_ALERT_JOB] 错误:", err)
+      }
+    }, { scheduled: true, timezone: "Asia/Shanghai" })
+
+    this.jobs.push(statsJob, metricsJob, healthJob, businessAlertJob)
+    logger.info("实时监控推送已启动: 统计(10s) + 系统指标(15s) + 服务健康(30s) + 业务告警(60s)")
   }
 }
 

@@ -44,6 +44,25 @@
         <h3>任务说明</h3>
         <p>{{ task.description }}</p>
       </div>
+
+      <div class="example-images-card" v-if="exampleImages.length">
+        <div class="example-images-head">
+          <h3>示范图片</h3>
+          <span>点击图片可放大查看</span>
+        </div>
+        <div class="example-images-grid">
+          <button
+            v-for="(img, index) in exampleImages"
+            :key="index"
+            type="button"
+            class="example-image-item"
+            @click="previewImage(img)"
+          >
+            <img :src="img" :alt="`示范图片${index + 1}`" />
+            <span class="example-image-label">示范图 {{ index + 1 }}</span>
+          </button>
+        </div>
+      </div>
       
       <div class="require">
         <h3>完成要求</h3>
@@ -68,6 +87,7 @@
         </div>
         <div class="info-item" v-if="displayScreenshots.length">
           <label>完成任务截图</label>
+          <p class="screenshots-tip">点击图片可放大查看，再次点击背景即可关闭。</p>
           <div class="screenshots">
             <img 
               v-for="(img, i) in displayScreenshots" 
@@ -136,8 +156,10 @@
     
     <!-- 图片预览 -->
     <div class="image-preview" v-if="previewUrl" @click="previewUrl = ''">
-      <img :src="previewUrl" alt="" @click.stop />
-      <span class="close" @click="previewUrl = ''">×</span>
+      <button type="button" class="close" @click.stop="previewUrl = ''">关闭</button>
+      <div class="image-preview-stage" @click.stop>
+        <img :src="previewUrl" alt="" />
+      </div>
     </div>
     
     <!-- Toast 提示 -->
@@ -159,6 +181,7 @@ const claim = ref(null)
 const loading = ref(true)
 const error = ref('')
 const previewUrl = ref('')
+const exampleImages = ref([])
 const withdrawing = ref(false)
 const abandoning = ref(false)
 const toast = reactive({ show: false, message: '' })
@@ -283,7 +306,12 @@ const showCountdown = computed(() => {
 })
 
 const canSubmit = computed(() => {
-  return (isDoing.value || claim.value?.canResubmit) && !isExpired.value && !isReleased.value
+  return (
+    isDoing.value ||
+    claim.value?.canResubmit ||
+    claim.value?.status === 'doing' ||
+    task.value?.canSubmit
+  ) && !isExpired.value && !isReleased.value
 })
 
 const canAbandon = computed(() => {
@@ -336,6 +364,8 @@ async function load() {
 
     const taskData = await getTaskDetail(claimData.taskId || claimData.task?.id)
     task.value = taskData
+    const rawExamples = taskData?.exampleImages
+    exampleImages.value = Array.isArray(rawExamples) ? rawExamples.filter(Boolean).slice(0, 2) : []
     
     // 解析 requirements
     if (typeof task.value.requirements === 'string') {
@@ -558,22 +588,67 @@ onUnmounted(() => {
   border-radius: 4px;
 }
 .reward { color: #f44336; font-weight: 600; font-size: 18px; }
-.desc, .require, .submitted-info {
+.desc, .require, .submitted-info, .example-images-card {
   background: #fff;
-  padding: 16px;
+  padding: 14px;
   border-radius: 12px;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
-.desc h3, .require h3, .submitted-info h3 {
+.desc h3, .require h3, .submitted-info h3, .example-images-card h3 {
   font-size: 14px;
   margin-bottom: 8px;
   color: #666;
 }
 .desc p, .require ul {
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.6;
 }
 .require ul { padding-left: 18px; }
+
+.example-images-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.example-images-head span {
+  font-size: 12px;
+  color: #8a94a6;
+}
+
+.example-images-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.example-image-item {
+  border: 1px solid #e0e7ff;
+  border-radius: 12px;
+  background: #fff;
+  padding: 8px;
+  cursor: pointer;
+  text-align: left;
+  box-shadow: 0 6px 14px rgba(63, 81, 181, 0.08);
+}
+
+.example-image-item img {
+  width: 100%;
+  height: 136px;
+  object-fit: cover;
+  border-radius: 10px;
+  display: block;
+}
+
+.example-image-label {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #4b5563;
+}
 
 .submitted-info .info-item {
   margin-bottom: 12px;
@@ -591,16 +666,21 @@ onUnmounted(() => {
   font-size: 14px;
   color: #333;
 }
+.screenshots-tip {
+  font-size: 12px;
+  color: #8a94a6;
+  margin-bottom: 8px;
+}
 .screenshots {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
 .screenshots img {
-  width: 80px;
-  height: 80px;
+  width: 88px;
+  height: 88px;
   object-fit: cover;
-  border-radius: 8px;
+  border-radius: 10px;
   cursor: pointer;
   border: 1px solid #eee;
 }
@@ -687,31 +767,49 @@ onUnmounted(() => {
 .image-preview {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.9);
+  background: rgba(15, 23, 42, 0.72);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 1000;
+  padding: 24px 16px;
 }
-.image-preview img {
-  max-width: 90%;
-  max-height: 90%;
-  object-fit: contain;
-}
-.image-preview .close {
-  position: absolute;
-  top: 20px;
-  right: 20px;
-  width: 36px;
-  height: 36px;
-  background: rgba(255, 255, 255, 0.2);
-  color: #fff;
-  border-radius: 50%;
+.image-preview-stage {
+  width: min(78vw, 520px);
+  max-width: 520px;
+  max-height: min(60vh, 560px);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 24px;
+  background: #fff;
+  border-radius: 16px;
+  padding: 14px;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.28);
+}
+.image-preview img {
+  width: 100%;
+  max-height: min(52vh, 500px);
+  object-fit: contain;
+  border-radius: 12px;
+}
+.image-preview .close {
+  position: absolute;
+  top: calc(50% - min(30vh, 280px) - 52px);
+  right: calc(50% - min(39vw, 260px));
+  min-width: 64px;
+  height: 36px;
+  padding: 0 14px;
+  background: rgba(17, 24, 39, 0.78);
+  color: #fff;
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 600;
   cursor: pointer;
+  z-index: 1002;
 }
 
 .step-num { font-weight: bold; color: #3f51b5; margin-right: 4px; }

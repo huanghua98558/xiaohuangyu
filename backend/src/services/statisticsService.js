@@ -1,4 +1,5 @@
 import supabase from '../utils/supabaseToPrismaAdapter.js'
+import db from '../config/database.js'
 import logger from '../utils/logger.js'
 import { CLAIM_STATUS, FINAL_APPROVED_STATUSES, PENDING_REVIEW_STATUSES } from '../constants/claimLifecycle.js'
 
@@ -13,7 +14,7 @@ class StatisticsService {
     try {
       const today = new Date()
       today.setHours(0, 0, 0, 0)
-      const todayStr = today.toISOString().split('T')[0]
+      const todayStart = today.toISOString()
 
       // 本周开始（周一）
       const weekStart = new Date(today)
@@ -31,89 +32,63 @@ class StatisticsService {
       
       // 上月开始
       const lastMonthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1)
-      const lastMonthEnd = new Date(today.getFullYear(), today.getMonth(), 0)
-
-      // 并行查询所有数据
-      const [
-        // 操作日志统计
-        { count: totalOperations },
-        { count: todayOperations },
-        // 告警统计
-        { count: totalAlerts },
-        { count: unhandledAlerts },
-        // 登录日志统计
-        { count: totalLogins },
-        { count: todayLogins },
-        // 用户统计
-        { count: totalUsers },
-        { count: todayNewUsers },
-        // 任务统计
-        { count: totalTasks },
-        { count: todayTasks },
-        { count: activeTasks },
-        // 领取统计
-        { count: totalClaims },
-        { count: todayClaims },
-        // 完成统计（approved状态）
-        { count: totalCompleted },
-        { count: todayCompleted },
-        { count: weekCompleted },
-        { count: lastWeekCompleted },
-        { count: monthCompleted },
-        { count: lastMonthCompleted },
-        { count: pendingClaims },
-      ] = await Promise.all([
-        // 总操作数
-        supabase.from('operation_logs').select('*', { count: 'exact', head: true }),
-        supabase.from('operation_logs').select('*', { count: 'exact', head: true }).gte('created_at', todayStr),
-        // 告警
-        supabase.from('alerts').select('*', { count: 'exact', head: true }),
-        supabase.from('alerts').select('*', { count: 'exact', head: true }).eq('status', 'submitted'),
-        // 登录
-        supabase.from('login_logs').select('*', { count: 'exact', head: true }),
-        supabase.from('login_logs').select('*', { count: 'exact', head: true }).gte('created_at', todayStr),
-        // 用户
-        supabase.from('users').select('*', { count: 'exact', head: true }),
-        supabase.from('users').select('*', { count: 'exact', head: true }).gte('created_at', todayStr),
-        // 任务
-        supabase.from('tasks').select('*', { count: 'exact', head: true }),
-        supabase.from('tasks').select('*', { count: 'exact', head: true }).gte('created_at', todayStr),
-        supabase.from('tasks').select('*', { count: 'exact', head: true }).eq('status', 'active'),
-        // 领取
-        supabase.from('claims').select('*', { count: 'exact', head: true }),
-        supabase.from('claims').select('*', { count: 'exact', head: true }).gte('claimed_at', todayStr),
-        // 完成统计
-        supabase.from('claims').select('*', { count: 'exact', head: true }).in('status', FINAL_APPROVED_STATUSES),
-        supabase.from('claims').select('*', { count: 'exact', head: true }).in('status', FINAL_APPROVED_STATUSES).gte('reviewed_at', todayStr),
-        supabase.from('claims').select('*', { count: 'exact', head: true }).in('status', FINAL_APPROVED_STATUSES).gte('reviewed_at', weekStart.toISOString()),
-        supabase.from('claims').select('*', { count: 'exact', head: true }).in('status', FINAL_APPROVED_STATUSES).gte('reviewed_at', lastWeekStart.toISOString()).lt('reviewed_at', lastWeekEnd.toISOString()),
-        supabase.from('claims').select('*', { count: 'exact', head: true }).in('status', FINAL_APPROVED_STATUSES).gte('reviewed_at', monthStart.toISOString()),
-        supabase.from('claims').select('*', { count: 'exact', head: true }).in('status', FINAL_APPROVED_STATUSES).gte('reviewed_at', lastMonthStart.toISOString()).lt('reviewed_at', lastMonthEnd.toISOString()),
-        supabase.from('claims').select('*', { count: 'exact', head: true }).in('status', PENDING_REVIEW_STATUSES),
-      ])
+      const overview = await db.queryOne(
+        `
+        SELECT
+          (SELECT COUNT(*)::int FROM operation_logs) AS total_operations,
+          (SELECT COUNT(*)::int FROM operation_logs WHERE created_at >= $1::timestamp) AS today_operations,
+          (SELECT COUNT(*)::int FROM audit_alerts) AS total_alerts,
+          (SELECT COUNT(*)::int FROM audit_alerts WHERE COALESCE(is_resolved, false) = false) AS unhandled_alerts,
+          (SELECT COUNT(*)::int FROM login_logs) AS total_logins,
+          (SELECT COUNT(*)::int FROM login_logs WHERE login_time >= $1::timestamp) AS today_logins,
+          (SELECT COUNT(*)::int FROM users) AS total_users,
+          (SELECT COUNT(*)::int FROM users WHERE created_at >= $1::timestamp) AS today_new_users,
+          (SELECT COUNT(*)::int FROM tasks) AS total_tasks,
+          (SELECT COUNT(*)::int FROM tasks WHERE created_at >= $1::timestamp) AS today_tasks,
+          (SELECT COUNT(*)::int FROM tasks WHERE status = 'active') AS active_tasks,
+          (SELECT COUNT(*)::int FROM claims) AS total_claims,
+          (SELECT COUNT(*)::int FROM claims WHERE claimed_at >= $1::timestamp) AS today_claims,
+          (SELECT COUNT(*)::int FROM claims WHERE status = ANY($6::text[])) AS total_completed,
+          (SELECT COUNT(*)::int FROM claims WHERE status = ANY($6::text[]) AND reviewed_at >= $1::timestamp) AS today_completed,
+          (SELECT COUNT(*)::int FROM claims WHERE status = ANY($6::text[]) AND reviewed_at >= $2::timestamp) AS week_completed,
+          (SELECT COUNT(*)::int FROM claims WHERE status = ANY($6::text[]) AND reviewed_at >= $3::timestamp AND reviewed_at < $2::timestamp) AS last_week_completed,
+          (SELECT COUNT(*)::int FROM claims WHERE status = ANY($6::text[]) AND reviewed_at >= $4::timestamp) AS month_completed,
+          (SELECT COUNT(*)::int FROM claims WHERE status = ANY($6::text[]) AND reviewed_at >= $5::timestamp AND reviewed_at < $4::timestamp) AS last_month_completed,
+          (SELECT COUNT(*)::int FROM claims WHERE status = ANY($7::text[])) AS pending_claims
+        `,
+        [
+          todayStart,
+          weekStart.toISOString(),
+          lastWeekStart.toISOString(),
+          monthStart.toISOString(),
+          lastMonthStart.toISOString(),
+          FINAL_APPROVED_STATUSES,
+          PENDING_REVIEW_STATUSES,
+        ]
+      )
 
       return {
-        totalOperations: totalOperations || 0,
-        todayOperations: todayOperations || 0,
-        totalAlerts: totalAlerts || 0,
-        unhandledAlerts: unhandledAlerts || 0,
-        totalLogins: totalLogins || 0,
-        todayLogins: todayLogins || 0,
-        totalUsers: totalUsers || 0,
-        todayNewUsers: todayNewUsers || 0,
-        totalTasks: totalTasks || 0,
-        todayTasks: todayTasks || 0,
-        activeTasks: activeTasks || 0,
-        totalClaims: totalClaims || 0,
-        todayClaims: todayClaims || 0,
-        pendingClaims: pendingClaims || 0,
+        totalOperations: Number(overview?.total_operations || 0),
+        todayOperations: Number(overview?.today_operations || 0),
+        totalAlerts: Number(overview?.total_alerts || 0),
+        unhandledAlerts: Number(overview?.unhandled_alerts || 0),
+        totalLogins: Number(overview?.total_logins || 0),
+        todayLogins: Number(overview?.today_logins || 0),
+        totalUsers: Number(overview?.total_users || 0),
+        todayNewUsers: Number(overview?.today_new_users || 0),
+        totalTasks: Number(overview?.total_tasks || 0),
+        todayTasks: Number(overview?.today_tasks || 0),
+        activeTasks: Number(overview?.active_tasks || 0),
+        totalClaims: Number(overview?.total_claims || 0),
+        todayClaims: Number(overview?.today_claims || 0),
+        pendingClaims: Number(overview?.pending_claims || 0),
         // 完成统计
-        totalCompleted: totalCompleted || 0,
-        todayCompleted: todayCompleted || 0,
-        weekCompleted: weekCompleted || 0,
-        lastWeekCompleted: lastWeekCompleted || 0,
-        monthCompleted: monthCompleted || 0,
-        lastMonthCompleted: lastMonthCompleted || 0,
+        totalCompleted: Number(overview?.total_completed || 0),
+        todayCompleted: Number(overview?.today_completed || 0),
+        weekCompleted: Number(overview?.week_completed || 0),
+        lastWeekCompleted: Number(overview?.last_week_completed || 0),
+        monthCompleted: Number(overview?.month_completed || 0),
+        lastMonthCompleted: Number(overview?.last_month_completed || 0),
       }
     } catch (error) {
       logger.error('获取概览统计失败:', error)

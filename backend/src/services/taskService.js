@@ -14,6 +14,7 @@ import logger from "../utils/logger.js"
 import { AppError } from "../middlewares/errorHandler.js"
 import nightPointService from "./nightPointService.js"
 import onlineUserService from "./onlineUserService.js"
+import { getConfigValues } from "./systemConfigService.js"
 import {
   CLAIM_STATUS,
   PENDING_REVIEW_STATUSES,
@@ -29,9 +30,29 @@ import {
   getLatestMeaningfulReason,
   safeParseReviewHistory
 } from "../utils/claimReviewHistory.js"
+import {
+  buildSubmissionScreenshotEntries,
+  normalizeScreenshotEntries,
+  normalizeScreenshotUrls,
+} from "../utils/claimScreenshots.js"
 
 const CONFIG_CACHE_KEY = "sys:config"
 const CONFIG_CACHE_TTL = 300
+
+async function getDefaultExampleImages() {
+  const configMap = await getConfigValues(['example_image_1', 'example_image_2'])
+  return [configMap.example_image_1, configMap.example_image_2].filter(Boolean)
+}
+
+async function resolveExampleImages(rawImages) {
+  const parsed = typeof rawImages === 'string'
+    ? parseJsonField(rawImages, [])
+    : (rawImages || [])
+
+  const normalized = Array.isArray(parsed) ? parsed.filter(Boolean) : []
+  if (normalized.length) return normalized
+  return getDefaultExampleImages()
+}
 
 // 辅助函数：判断是否为完成状态
 function isCompletedStatus(status) {
@@ -76,11 +97,7 @@ function normalizeEvaluation(evaluation) {
 }
 
 function normalizeScreenshots(screenshots) {
-  const parsed = parseJsonField(screenshots, [])
-  if (!Array.isArray(parsed)) {
-    return []
-  }
-  return parsed.map(item => (typeof item === 'string' ? item : item?.url)).filter(Boolean)
+  return normalizeScreenshotUrls(screenshots)
 }
 
 class TaskService {
@@ -90,18 +107,23 @@ class TaskService {
       if (cached) return cached
     }
 
-    const configs = await prisma.$queryRaw`SELECT * FROM configs`
-    const configMap = {}
-    for (const c of (configs || [])) {
-      configMap[c.key] = c.value
-    }
+    const configMap = await getConfigValues([
+      'defaultTimeLimitMinutes',
+      'maxActiveTasksPerUser',
+      'platformRewardRatio',
+      'levelRewardRatio',
+      'basePointsPerTask',
+      'example_image_1',
+      'example_image_2',
+    ])
 
     const config = {
       defaultTimeLimitMinutes: parseInt(configMap.defaultTimeLimitMinutes) || 15,
       maxActiveTasksPerUser: parseInt(configMap.maxActiveTasksPerUser) || 3,
       platformRewardRatio: parseFloat(configMap.platformRewardRatio) || 0.5,
       levelRewardRatio: parseFloat(configMap.levelRewardRatio) || 0.3,
-      basePointsPerTask: parseInt(configMap.basePointsPerTask) || 10
+      basePointsPerTask: parseInt(configMap.basePointsPerTask) || 10,
+      exampleImages: [configMap.example_image_1, configMap.example_image_2].filter(Boolean),
     }
 
     if (cache.isReady()) {
@@ -244,6 +266,7 @@ class TaskService {
         isClaimed = isCompleted || isPending || (normalizedClaimStatus === CLAIM_STATUS.DOING && claim.expires_at && new Date(claim.expires_at) > new Date())
         myClaimId = claim.id.toString()
         
+        const exampleImages = await resolveExampleImages(t.example_images)
         return {
           id: t.id.toString(),
           title: t.title,
@@ -252,7 +275,7 @@ class TaskService {
           videoUrl: t.video_url,
           description: t.description,
           templateImages: typeof t.template_images === 'string' ? JSON.parse(t.template_images || '[]') : (t.template_images || []),
-          exampleImages: typeof t.example_images === 'string' ? JSON.parse(t.example_images || '[]') : (t.example_images || []),
+          exampleImages,
           requirements: typeof t.requirements === 'string' ? JSON.parse(t.requirements || '[]') : (t.requirements || []),
           reward: Number(t.reward || 0),
           baseReward: Number(t.base_reward || 0),
@@ -279,6 +302,7 @@ class TaskService {
       }
     }
     
+    const exampleImages = await resolveExampleImages(t.example_images)
     return {
       id: t.id.toString(),
       title: t.title,
@@ -287,7 +311,7 @@ class TaskService {
       videoUrl: t.video_url,
       description: t.description,
       templateImages: typeof t.template_images === 'string' ? JSON.parse(t.template_images || '[]') : (t.template_images || []),
-      exampleImages: typeof t.example_images === 'string' ? JSON.parse(t.example_images || '[]') : (t.example_images || []),
+      exampleImages,
       requirements: typeof t.requirements === 'string' ? JSON.parse(t.requirements || '[]') : (t.requirements || []),
       reward: Number(t.reward || 0),
       baseReward: Number(t.base_reward || 0),
@@ -626,6 +650,13 @@ class TaskService {
 	      `;
 	    }
 
+      const screenshotEntries = buildSubmissionScreenshotEntries(screenshots)
+      const screenshotUrls = normalizeScreenshotUrls(screenshotEntries)
+
+      if (screenshotUrls.length < 2) {
+        throw new AppError("请至少上传2张截图", 400, "BAD_REQUEST")
+      }
+
 	    const nextReviewHistory = appendReviewHistory(
 	      claim.review_history,
 	      createReviewHistoryEntry({
@@ -633,7 +664,12 @@ class TaskService {
 	        action: isRetryableStatus ? 'resubmitted' : 'submitted',
 	        reason: isRetryableStatus ? '用户重新提交任务' : '用户提交任务',
 	        details: {
-	          screenshotsCount: Array.isArray(screenshots) ? screenshots.length : 0,
+	          screenshotsCount: screenshotUrls.length,
+            screenshotRoles: screenshotEntries.map((item) => ({
+              url: item.url,
+              role: item.role,
+              sortOrder: item.sortOrder,
+            })),
 	          hasEvaluation: Boolean(evaluation),
 	          previousStatus: claim.status
 	        }
@@ -645,7 +681,7 @@ class TaskService {
 	      UPDATE claims SET
 	        status = ${CLAIM_STATUS.SUBMITTED},
 	        platform_nickname = ${platformNickname || null},
-	        screenshots = ${JSON.stringify(screenshots)}::jsonb,
+	        screenshots = ${JSON.stringify(screenshotUrls)}::jsonb,
 	        evaluation = ${JSON.stringify({ text: evaluation || '' })}::jsonb,
 	        submitted_at = NOW(),
 	        reviewed_at = NULL,
@@ -680,11 +716,11 @@ class TaskService {
     }
     
     // 5. 入队到审核队列 (使用 Supabase 队列)
-    try {
-      const { enqueueReview } = await import('./ai/queueService.js')
-      await enqueueReview(claimId.toString())
-      logger.info(`审核任务已入队, claimId: ${claimId}`)
-    } catch (err) {
+	    try {
+	      const { enqueueReview } = await import('./ai/queueService.js')
+	      await enqueueReview(claimId.toString(), { screenshots: screenshotEntries })
+	      logger.info(`审核任务已入队, claimId: ${claimId}`)
+	    } catch (err) {
       logger.error(`审核任务入队失败: ${err.message}`)
       // 不抛出错误，允许用户提交成功，后续可手动处理
     }
@@ -1272,6 +1308,7 @@ class TaskService {
     const c = claims[0]
     const normalizedStatus = normalizeClaimStatus(c.status)
     const screenshotUrls = normalizeScreenshots(c.screenshots)
+    const screenshotEntries = normalizeScreenshotEntries(c.screenshots)
     const reviewHistory = safeParseReviewHistory(c.review_history)
     const evaluation = normalizeEvaluation(c.evaluation)
     const isRejected = isClaimRejectedForUserDisplay({
@@ -1295,6 +1332,7 @@ class TaskService {
       province: c.province,
       screenshots: c.screenshots,
       screenshotUrls: screenshotUrls,
+      screenshotEntries,
       evaluation,
       platformNickname: c.platform_nickname,
       claimedAt: c.claimed_at,

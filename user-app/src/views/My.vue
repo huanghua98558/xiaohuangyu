@@ -96,6 +96,13 @@
             </div>
             <span class="menu-arrow">›</span>
           </router-link>
+          <router-link to="/notification-settings" class="menu-item">
+            <div class="menu-left">
+              <span class="menu-icon">🔔</span>
+              <span class="menu-text">通知设置</span>
+            </div>
+            <span class="menu-arrow">›</span>
+          </router-link>
           <router-link to="/withdraw" class="menu-item">
             <div class="menu-left">
               <span class="menu-icon">💵</span>
@@ -136,6 +143,20 @@
             <div class="menu-left">
               <span class="menu-icon">🔐</span>
               <span class="menu-text">审核入口</span>
+            </div>
+            <span class="menu-arrow">›</span>
+          </router-link>
+          <router-link to="/admin/notifications" class="menu-item highlight" v-if="user && user.role === 'admin'">
+            <div class="menu-left">
+              <span class="menu-icon">🔔</span>
+              <span class="menu-text">管理员通知</span>
+            </div>
+            <span class="menu-arrow">›</span>
+          </router-link>
+          <router-link to="/admin/alerts" class="menu-item highlight" v-if="user && user.role === 'admin'">
+            <div class="menu-left">
+              <span class="menu-icon">🚨</span>
+              <span class="menu-text">管理员告警</span>
             </div>
             <span class="menu-arrow">›</span>
           </router-link>
@@ -425,8 +446,7 @@ async function load() {
     
     // 加载未读消息数
     try {
-      const data = await fetchUnreadCount()
-      unreadCount.value = data.count
+      unreadCount.value = await fetchUnreadCount()
     } catch (e) {
       // 忽略
     }

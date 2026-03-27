@@ -3,7 +3,14 @@ import prisma from '../utils/prisma.js'
 import taskService from './taskService.js'
 import logger from '../utils/logger.js'
 import { cache, DistributedLock } from '../utils/redis.js'
-import BusinessError from '../utils/BusinessError.js'
+import {
+  notifyPointsConverted,
+  notifyWithdrawSubmitted,
+  notifyWithdrawApproved,
+  notifyWithdrawRejected,
+  notifyWithdrawPaid,
+  sendAdminNotification,
+} from './notificationService.js'
 
 // 排行榜缓存键模式
 const RANK_CACHE_PATTERNS = [
@@ -24,23 +31,14 @@ class WalletService {
     const lock = await DistributedLock.acquire(lockKey, 30000)
     
     if (!lock.success) {
-      throw new BusinessError('操作过于频繁，请稍后再试', 429)
+      throw new Error('操作过于频繁，请稍后再试')
     }
     
     try {
-      // 获取积分兑换配置
-      const { data: pointsToYuanConfig } = await supabase
-        .from('system_configs')
-        .select('value')
-        .eq('key', 'points_to_yuan')
-        .single()
-      
-      const config = {
-        pointsToYuan: parseInt(pointsToYuanConfig?.value) || 10
-      }
+      const config = await taskService.getConfig()
 
       if (points <= 0) {
-        throw new BusinessError('兑换积分必须大于0', 400)
+        throw new Error('兑换积分必须大于0')
       }
 
       // 获取用户信息
@@ -51,83 +49,63 @@ class WalletService {
         .single()
 
       if (!user) {
-        throw new BusinessError('用户不存在', 404)
+        throw new Error('用户不存在')
       }
-      logger.info(`用户数据: points=${user.points}, balance=${user.balance}, exchanged_points=${user.exchanged_points}, typeof balance=${typeof user.balance}`)
 
       if (user.points < points) {
-        throw new BusinessError('积分不足', 400)
+        throw new Error('积分不足')
       }
 
-      // ========== 提现条件检查（可通过配置开关控制）==========
-      // 获取兑换限制开关
-      const { data: restrictionConfig } = await supabase
+      // ========== 提现条件检查 ==========
+      const { data: ratioConfig } = await supabase
         .from('system_configs')
         .select('value')
-        .eq('key', 'points_exchange_restriction_enabled')
+        .eq('key', 'withdraw_task_points_ratio')
         .single()
       
-      const restrictionEnabled = restrictionConfig?.value !== 'false' // 默认开启限制
+      const requiredRatio = parseInt(ratioConfig?.value || 50)
 
-      if (restrictionEnabled) {
-        // 获取任务积分占比要求
-        const { data: ratioConfig } = await supabase
-          .from('system_configs')
-          .select('value')
-          .eq('key', 'withdraw_task_points_ratio')
-          .single()
-        
-        const requiredRatio = parseInt(ratioConfig?.value || 50)
+      const { data: bonusRecords } = await supabase
+        .from('records')
+        .select('points, type')
+        .eq('user_id', userId)
+        .in('type', ['reward', 'week_reward', 'month_reward'])
+        .gte('created_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString())
 
-        // 检查用户是否有周榜/月榜奖励（这些奖励积分可随时兑换，不受限制）
-        const { data: bonusRecords } = await supabase
-          .from('records')
-          .select('points, type')
-          .eq('user_id', userId)
-          .in('type', ['week_reward', 'month_reward'])
-          .gte('created_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString())
+      const hasLargeBonus = (bonusRecords || []).some(r => 
+        r.points >= 100 && (r.type === 'week_reward' || r.type === 'month_reward')
+      )
 
-        // 如果用户有周榜/月榜奖励积分，允许直接兑换（不受任务积分占比限制）
-        const hasRankingBonus = (bonusRecords || []).some(r => r.points >= 100)
+      if (!hasLargeBonus) {
+        const taskPoints = user.task_points || 0
+        const totalPoints = user.total_points || 0
+        const effectiveTotal = totalPoints - (user.exchanged_points || 0)
+        const taskRatio = effectiveTotal > 0 ? (taskPoints / effectiveTotal) * 100 : 0
 
-        if (!hasRankingBonus) {
-          // 计算任务积分占比
-          const taskPoints = user.task_points || 0
-          const totalPoints = user.total_points || 0
-          const effectiveTotal = totalPoints - (user.exchanged_points || 0)
-          const taskRatio = effectiveTotal > 0 ? (taskPoints / effectiveTotal) * 100 : 0
-
-          if (taskRatio < requiredRatio) {
-            throw new BusinessError(`兑换失败: 任务积分占比需 >= ${requiredRatio}%, 当前 ${taskRatio.toFixed(1)}%。请多完成任务后再兑换。`, 400)
-          }
+        if (taskRatio < requiredRatio) {
+          throw new Error(`兑换失败: 任务积分占比需 >= ${requiredRatio}%, 当前 ${taskRatio.toFixed(1)}%。请多完成任务后再兑换。`)
         }
       }
-      // 如果 restrictionEnabled 为 false，则不做任何限制检查
 
       // 计算兑换金额
       const yuan = (points / config.pointsToYuan).toFixed(2)
-      logger.info(`兑换计算: points=${points}, yuan=${yuan}, user.balance=${user.balance}, newBalance=${Number(user.balance) + parseFloat(yuan)}`)
 
-      // ============ 原子性更新 ============
-      // 1. 扣减积分（使用 SQL 原子更新，确保积分足够）
-      const currentBalance = Number(user.balance) || 0
-      const newBalance = currentBalance + parseFloat(yuan)
-      
-      logger.info(`更新用户: userId=${userId}, points=${user.points} - ${points}, balance=${currentBalance} + ${yuan} = ${newBalance}`)
-      
+      // ============ P0 修复：使用乐观锁确保原子性 ============
+      // 1. 扣减积分（带条件检查，防止并发扣减）
       const { data: updateResult, error: updateError } = await supabase
         .from('users')
         .update({
-          points: Number(user.points) - points,
-          exchanged_points: Number(user.exchanged_points || 0) + points,
-          balance: newBalance
+          points: user.points - points,
+          exchanged_points: (user.exchanged_points || 0) + points,
+          balance: Number(user.balance) + parseFloat(yuan)
         })
         .eq('id', userId)
+        .eq('points', user.points)  // 乐观锁：确保积分未被其他操作修改
         .select()
 
       if (updateError || !updateResult || updateResult.length === 0) {
         logger.error('兑换失败 (可能存在并发操作):', updateError)
-        throw new BusinessError('兑换失败，请重试', 500)
+        throw new Error('兑换失败，请重试')
       }
 
       // 2. 记录积分兑换
@@ -152,7 +130,7 @@ class WalletService {
             balance: Number(user.balance)
           })
           .eq('id', userId)
-        throw new BusinessError('兑换记录保存失败，已回滚', 500)
+        throw new Error('兑换记录保存失败，已回滚')
       }
 
       // 清除排行榜缓存
@@ -161,6 +139,16 @@ class WalletService {
       }
 
       logger.info(`✅ 用户 ${userId} 兑换积分 ${points} -> ${yuan}元`)
+
+      try {
+        await notifyPointsConverted(userId, {
+          points,
+          amount: parseFloat(yuan),
+          balance: updateResult[0]?.balance,
+        })
+      } catch (notifyErr) {
+        logger.warn('发送积分兑换通知失败:', notifyErr.message)
+      }
 
       return {
         message: `兑换成功，到账 ¥${yuan}`,
@@ -180,14 +168,14 @@ class WalletService {
     const lock = await DistributedLock.acquire(lockKey, 30000)
     
     if (!lock.success) {
-      throw new BusinessError('操作过于频繁，请稍后再试', 429)
+      throw new Error('操作过于频繁，请稍后再试')
     }
     
     try {
       const config = await taskService.getConfig()
 
       if (amount < config.minWithdrawAmount) {
-        throw new BusinessError(`最低提现 ${config.minWithdrawAmount} 元`, 400)
+        throw new Error(`最低提现 ${config.minWithdrawAmount} 元`)
       }
 
       // 获取用户信息
@@ -198,11 +186,11 @@ class WalletService {
         .single()
 
       if (!user) {
-        throw new BusinessError('用户不存在', 404)
+        throw new Error('用户不存在')
       }
 
       if (Number(user.balance) < amount) {
-        throw new BusinessError('余额不足', 400)
+        throw new Error('余额不足')
       }
 
       // ============ P0 修复：使用乐观锁确保原子性 ============
@@ -218,7 +206,7 @@ class WalletService {
 
       if (updateError || !updateResult || updateResult.length === 0) {
         logger.error('提现失败 (可能存在并发操作):', updateError)
-        throw new BusinessError('提现失败，请重试', 500)
+        throw new Error('提现失败，请重试')
       }
 
       // 2. 创建提现记录
@@ -240,7 +228,7 @@ class WalletService {
           .from('users')
           .update({ balance: Number(user.balance) })
           .eq('id', userId)
-        throw new BusinessError('提现申请创建失败，已回滚', 500)
+        throw new Error('提现申请创建失败，已回滚')
       }
 
       // 3. 记录
@@ -259,6 +247,28 @@ class WalletService {
       }
 
       logger.info(`✅ 用户 ${userId} 申请提现 ${amount}元`)
+
+      try {
+        await Promise.all([
+          notifyWithdrawSubmitted(userId, {
+            amount,
+            balance: updateResult[0]?.balance,
+          }),
+          sendAdminNotification({
+            type: 'withdraw_pending_created',
+            title: '有新的提现申请',
+            content: `用户 ${userId} 提交了 ${Number(amount).toFixed(2)} 元提现申请。`,
+            data: {
+              userId: String(userId),
+              amount: Number(amount),
+              withdrawalId: withdrawal.id != null ? String(withdrawal.id) : undefined,
+            },
+            priority: 'high',
+          }),
+        ])
+      } catch (notifyErr) {
+        logger.warn('发送提现提交通知失败:', notifyErr.message)
+      }
 
       return { message: '提现申请已提交，请等待审核' }
     } finally {
@@ -351,7 +361,7 @@ class WalletService {
     const lock = await DistributedLock.acquire(lockKey, 30000)
     
     if (!lock.success) {
-      throw new BusinessError('该提现申请正在处理中', 400)
+      throw new Error('该提现申请正在处理中')
     }
     
     try {
@@ -362,11 +372,11 @@ class WalletService {
         .single()
 
       if (!withdrawal) {
-        throw new BusinessError('提现申请不存在', 404)
+        throw new Error('提现申请不存在')
       }
 
       if (withdrawal.status !== 'pending') {
-        throw new BusinessError('该提现申请已处理', 400)
+        throw new Error('该提现申请已处理')
       }
 
       const now = new Date().toISOString()
@@ -395,7 +405,7 @@ class WalletService {
             .eq('id', withdrawal.user_id)
         }
       } else {
-        throw new BusinessError('无效的操作', 400)
+        throw new Error('无效的操作')
       }
 
       const { error: updateError } = await supabase
@@ -405,10 +415,36 @@ class WalletService {
 
       if (updateError) {
         logger.error('处理提现失败:', updateError)
-        throw new BusinessError('处理提现失败', 500)
+        throw new Error('处理提现失败')
       }
 
       logger.info(`✅ 提现申请 ${withdrawalId} 已${action === 'approve' ? '通过' : '拒绝'}`)
+
+      try {
+        if (action === 'approve') {
+          await Promise.all([
+            notifyWithdrawApproved(withdrawal.user_id, { amount: withdrawal.amount }),
+            sendAdminNotification({
+              type: 'withdraw_approved_waiting_payout',
+              title: '提现待打款',
+              content: `提现申请 ${withdrawalId} 已审核通过，等待打款。`,
+              data: {
+                withdrawalId: String(withdrawalId),
+                userId: String(withdrawal.user_id),
+                amount: Number(withdrawal.amount),
+              },
+              priority: 'high',
+            }),
+          ])
+        } else {
+          await notifyWithdrawRejected(withdrawal.user_id, {
+            amount: withdrawal.amount,
+            note,
+          })
+        }
+      } catch (notifyErr) {
+        logger.warn('发送提现审核通知失败:', notifyErr.message)
+      }
 
       return { message: '处理成功' }
     } finally {
@@ -424,7 +460,7 @@ class WalletService {
     const lock = await DistributedLock.acquire(lockKey, 30000)
     
     if (!lock.success) {
-      throw new BusinessError('该提现申请正在处理中', 400)
+      throw new Error('该提现申请正在处理中')
     }
     
     try {
@@ -435,11 +471,11 @@ class WalletService {
         .single()
 
       if (!withdrawal) {
-        throw new BusinessError('提现申请不存在', 404)
+        throw new Error('提现申请不存在')
       }
 
       if (withdrawal.status !== 'approved') {
-        throw new BusinessError('只有已通过的申请才能确认打款', 400)
+        throw new Error('只有已通过的申请才能确认打款')
       }
 
       const { error: updateError } = await supabase
@@ -452,10 +488,16 @@ class WalletService {
 
       if (updateError) {
         logger.error('确认打款失败:', updateError)
-        throw new BusinessError('确认打款失败', 500)
+        throw new Error('确认打款失败')
       }
 
       logger.info(`✅ 提现申请 ${withdrawalId} 已确认打款`)
+
+      try {
+        await notifyWithdrawPaid(withdrawal.user_id, { amount: withdrawal.amount })
+      } catch (notifyErr) {
+        logger.warn('发送提现打款通知失败:', notifyErr.message)
+      }
 
       return { message: '已确认打款' }
     } finally {
@@ -513,7 +555,7 @@ class WalletService {
 
     if (error) {
       logger.error('获取提现记录失败:', error)
-      throw new BusinessError('获取提现记录失败', 500)
+      throw new Error('获取提现记录失败')
     }
 
     return {
@@ -561,7 +603,7 @@ class WalletService {
 
     if (error) {
       logger.error('导出提现记录失败:', error)
-      throw new BusinessError('导出提现记录失败', 500)
+      throw new Error('导出提现记录失败')
     }
 
     const headers = ['ID', '用户ID', '金额', '状态', '微信信息', '审核备注', '创建时间', '审核时间', '打款时间']
@@ -601,7 +643,7 @@ class WalletService {
 
     if (error) {
       logger.error('获取兑换记录失败:', error)
-      throw new BusinessError('获取兑换记录失败', 500)
+      throw new Error('获取兑换记录失败')
     }
 
     return {
@@ -609,7 +651,7 @@ class WalletService {
         id: r.id,
         points: Math.abs(r.points),
         amount: Number(r.balance),
-        desc: r.desc,
+        desc: r.description,
         createdAt: r.created_at
       })),
       total: count || 0,
@@ -653,131 +695,6 @@ class WalletService {
       todayAmount
     }
   }
-
-  /**
-   * 获取单个提现的审核记录
-   */
-  async getWithdrawalReviewLogs(withdrawalId) {
-    try {
-            const withdrawal = await prisma.$queryRawUnsafe(`
-        SELECT w.id, w.user_id, w.status, w.reviewed_at, w.reviewer_id, w.review_note, w.paid_at,
-               u.username as reviewer_name,
-               w.created_at
-        FROM withdrawals w
-        LEFT JOIN users u ON w.reviewer_id = u.id
-        WHERE w.id = ${parseInt(withdrawalId)}
-      `);
-      
-      if (!withdrawal || withdrawal.length === 0) {
-        return [];
-      }
-      
-      const w = withdrawal[0];
-      const logs = [];
-      
-      // 构建审核记录
-      if (w.reviewed_at) {
-        logs.push({
-          id: `${w.id}-review`,
-          withdrawalId: w.id,
-          action: w.status === 'approved' ? 'approve' : w.status === 'rejected' ? 'reject' : w.status,
-          note: w.review_note || '' ,
-          reviewerId: w.reviewer_id,
-          reviewerName: w.reviewer_name,
-          createdAt: w.reviewed_at
-        });
-      }
-      
-      if (w.paid_at) {
-        logs.push({
-          id: `${w.id}-paid`,
-          withdrawalId: w.id,
-          action: 'paid' ,
-          note: '已打款' ,
-          reviewerId: w.reviewer_id,
-          reviewerName: w.reviewer_name,
-          createdAt: w.paid_at
-        });
-      }
-      
-      // 添加创建记录
-      logs.unshift({
-        id: `${w.id}-create`,
-        withdrawalId: w.id,
-        action: 'create' ,
-        note: '提交提现申请' ,
-        reviewerId: null,
-        reviewerName: null,
-        createdAt: w.created_at
-      });
-      
-      return logs;
-    } catch (error) {
-      console.error('获取提现审核记录失败:', error);
-      return [];
-    }
-  }
-
-  /**
-   * 获取提现历史记录
-   */
-  async getWithdrawalHistory(page = 1, size = 20, filters = {}) {
-    const offset = (page - 1) * size;
-    let whereConditions = '1=1';
-    
-    if (filters.status) {
-      whereConditions += ` AND status = '${filters.status}'`;
-    }
-    if (filters.startDate) {
-      whereConditions += ` AND created_at >= '${filters.startDate}'`;
-    }
-    if (filters.endDate) {
-      whereConditions += ` AND created_at <= '${filters.endDate}'`;
-    }
-    
-    const countQuery = `SELECT COUNT(*) as total FROM withdrawals WHERE ${whereConditions}`;
-    const dataQuery = `
-      SELECT w.*, u.username as user_name, r.username as reviewer_name
-      FROM withdrawals w
-      LEFT JOIN users u ON w.user_id = u.id
-      LEFT JOIN users r ON w.reviewer_id = r.id
-      WHERE ${whereConditions}
-      ORDER BY w.created_at DESC
-      LIMIT ${parseInt(size)} OFFSET ${offset}
-    `;
-    
-    try {
-      const [countResult, data] = await Promise.all([
-        prisma.$queryRawUnsafe(countQuery),
-        prisma.$queryRawUnsafe(dataQuery)
-      ]);
-      
-      return {
-        list: data.map(w => ({
-          id: w.id?.toString(),
-          userId: w.user_id?.toString(),
-          userName: w.user_name,
-          amount: Number(w.amount),
-          points: w.points,
-          status: w.status,
-          wechatInfo: w.wechat_info,
-          reviewerId: w.reviewer_id?.toString(),
-          reviewerName: w.reviewer_name,
-          reviewNote: w.review_note,
-          createdAt: w.created_at,
-          reviewedAt: w.reviewed_at,
-          paidAt: w.paid_at
-        })),
-        total: parseInt(countResult[0]?.total || 0),
-        page,
-        size
-      };
-    } catch (error) {
-      console.error('获取提现历史失败:', error);
-      return { list: [], total: 0, page, size };
-    }
-  }
-
 }
 
 export default new WalletService()

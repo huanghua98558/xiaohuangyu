@@ -30,7 +30,8 @@ import {
   getReviewStats,
   getReviewLogs,
   manualApprove,
-  manualReject
+  manualReject,
+  manualInspect
 } from '../services/ai/imageReviewService.js'
 import {
   getFingerprintStats,
@@ -40,13 +41,15 @@ import { getQueueStats } from '../services/ai/queueService.js'
 import { getOperationLogs, getOperationStats } from '../services/ai/operationLogService.js'
 import { getConfig, getConfigs, setConfig, getAllConfigs } from '../services/ai/configService.js'
 import reviewConfig from '../services/ai/reviewConfigService.js'
+import { getAIUsageStats } from '../services/ai/aiUsageStatsService.js'
 import logger from '../utils/logger.js'
 import db from '../config/database.js'
-import pointsSettlementService from '../services/pointsSettlementService.js'
 import { CLAIM_STATUS } from '../constants/claimLifecycle.js'
-import { appendReviewHistory, createReviewHistoryEntry } from '../utils/claimReviewHistory.js'
+import { getOcrHealthEndpoints, getOcrServicePools } from '../utils/ocrServicePools.js'
 
 const router = express.Router()
+const OCR_HEALTH_ENDPOINTS = getOcrHealthEndpoints()
+const OCR_SERVICE_POOLS = getOcrServicePools()
 
 // ============ 公开接口（无需认证）============
 
@@ -473,24 +476,43 @@ router.get('/reviewer/logs', adminOrReviewerAuth, async (req, res) => {
 // 获取服务状态 - 审核员/管理员
 router.get('/reviewer/services', adminOrReviewerAuth, async (req, res) => {
   try {
+    const ocrEndpoints = OCR_HEALTH_ENDPOINTS.length > 0
+      ? OCR_HEALTH_ENDPOINTS
+      : [{ url: 'http://127.0.0.1:9001', port: 9001 }]
     const services = {
-      ocr: { healthy: false, url: 'http://localhost:9001' },
+      ocr: {
+        healthy: false,
+        url: ocrEndpoints[0]?.url || null,
+        endpoints: ocrEndpoints.map((endpoint) => ({
+          url: endpoint.url,
+          port: endpoint.port,
+          healthy: false
+        })),
+        pools: OCR_SERVICE_POOLS
+      },
       yolo: { healthy: false, url: 'http://localhost:8003' },
       browser: { healthy: false, url: 'http://localhost:8000' }
     }
     
     // 检查 OCR 服务
-    try {
-      const ocrRes = await fetch('http://localhost:9001/health', { 
-        method: 'GET',
-        signal: AbortSignal.timeout(3000)
-      })
-      if (ocrRes.ok) {
-        const data = await ocrRes.json()
-        services.ocr.healthy = data.status === 'ok'
+    for (let i = 0; i < ocrEndpoints.length; i++) {
+      const endpoint = ocrEndpoints[i]
+      try {
+        const ocrRes = await fetch(`${endpoint.url}/health`, {
+          method: 'GET',
+          signal: AbortSignal.timeout(3000)
+        })
+        if (ocrRes.ok) {
+          const data = await ocrRes.json()
+          services.ocr.endpoints[i].healthy = data.status === 'ok'
+        }
+      } catch (e) {
+        services.ocr.endpoints[i].error = e.message
       }
-    } catch (e) {
-      services.ocr.error = e.message
+    }
+    services.ocr.healthy = services.ocr.endpoints.some((endpoint) => endpoint.healthy)
+    if (!services.ocr.healthy) {
+      services.ocr.error = services.ocr.endpoints.find((endpoint) => endpoint.error)?.error || '所有 OCR 服务不可用'
     }
     
     // 检查 YOLO 服务
@@ -571,8 +593,12 @@ router.post('/reviewer/manual', adminOrReviewerAuth, async (req, res) => {
     let result
     if (action === 'approve') {
       result = await manualApprove(claimId, req.userId, note || '')
-    } else {
+    } else if (action === 'reject') {
       result = await manualReject(claimId, req.userId, note || '')
+    } else if (action === 'inspect') {
+      result = await manualInspect(claimId, req.userId, note || '')
+    } else {
+      return res.status(400).json({ code: 400, message: '无效的人工审核操作', data: null })
     }
     
     res.json({ code: 0, message: result.message, data: result })
@@ -639,7 +665,7 @@ router.get("/admin/configs", adminAuth, async (req, res) => {
   try {
     const { category } = req.query
     const configs = await getAllConfigs(category)
-    res.json({ code: 0, message: '获取成功', data: configs })
+    res.json({ code: 200, message: '获取成功', data: configs })
   } catch (error) {
     logger.error('获取配置失败:', error)
     res.status(500).json({ code: 500, message: error.message, data: null })
@@ -651,7 +677,7 @@ router.post('/admin/configs', adminAuth, async (req, res) => {
   try {
     const { key, value } = req.body
     await setConfig(key, value)
-    res.json({ code: 0, message: '更新成功', data: null })
+    res.json({ code: 200, message: '更新成功', data: null })
   } catch (error) {
     logger.error('更新配置失败:', error)
     res.status(500).json({ code: 500, message: error.message, data: null })
@@ -668,9 +694,22 @@ router.post('/admin/configs/batch', adminAuth, async (req, res) => {
       await setConfig(key, value)
     }
     
-    res.json({ code: 0, message: '批量更新成功', data: null })
+    res.json({ code: 200, message: '批量更新成功', data: null })
   } catch (error) {
     logger.error('批量更新配置失败:', error)
+    res.status(500).json({ code: 500, message: error.message, data: null })
+  }
+})
+
+router.get('/admin/usage-stats', adminAuth, async (req, res) => {
+  try {
+    const { day } = req.query
+    const stats = await getAIUsageStats({
+      day: typeof day === 'string' && day.trim() ? day.trim() : undefined
+    })
+    res.json({ code: 200, message: '获取成功', data: stats })
+  } catch (error) {
+    logger.error('获取 AI 消耗统计失败:', error)
     res.status(500).json({ code: 500, message: error.message, data: null })
   }
 })
@@ -1084,7 +1123,7 @@ router.get('/reviewer/reports', adminOrReviewerAuth, async (req, res) => {
     // 直接从claims查询待人工审核的数据（ai_review_status = 'manual'）
     const { data: claims, error } = await supabase
       .from('claims')
-      .select('id, user_id, task_id, screenshots, status, image_review_status, link_review_status, ai_review_status, ai_confidence, ai_reason, claimed_at, tasks(id, title, platform, action), users(id, username)')
+      .select('id, user_id, task_id, screenshots, status, image_review_status, link_review_status, ai_review_status, ai_confidence, ai_reason, claimed_at, tasks(id, title, platform, action, video_url), users(id, username)')
       .eq('ai_review_status', 'manual')
       .order('claimed_at', { ascending: false })
       .range((page - 1) * pageSize, page * pageSize - 1)
@@ -1412,28 +1451,8 @@ router.post('/admin/review-rules/:id', adminAuth, async (req, res) => {
  */
 router.get('/admin/review-settings', adminAuth, async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from('ai_configs')
-      .select('key, value')
-      .eq('key', 'image_review_settings')
-      .single()
-    
-    if (error && error.code !== 'PGRST116') {
-      throw error
-    }
-    
-    const settings = data?.value ? JSON.parse(data.value) : {
-      checks: {
-        follow: true,
-        like: true,
-        favorite: true,
-        comment: true,
-        authorName: true,
-        commentNickname: true
-      }
-    }
-    
-    res.json({ code: 0, message: '获取成功', data: settings })
+    const settings = await reviewConfig.getConfig()
+    res.json({ code: 200, message: '获取成功', data: settings })
   } catch (error) {
     logger.error('获取图片审核设置失败:', error)
     res.status(500).json({ code: 500, message: error.message, data: null })
@@ -1445,24 +1464,23 @@ router.get('/admin/review-settings', adminAuth, async (req, res) => {
  */
 router.post('/admin/review-settings', adminAuth, async (req, res) => {
   try {
-    const { checks } = req.body
-    
-    const settings = { checks }
-    const now = new Date().toISOString()
-    
-    const { error } = await supabase
-      .from('ai_configs')
-      .upsert({
-        key: 'image_review_settings',
-        value: JSON.stringify(settings),
-        category: 'image_review',
-        is_enabled: true,
-        updated_at: now
-      }, { onConflict: 'key' })
-    
-    if (error) throw error
-    
-    res.json({ code: 0, message: '保存成功', data: null })
+    const { checks, semantic, aiFallback, passMode, comment, flow } = req.body || {}
+
+    const updateResult = await reviewConfig.updateConfig(
+      { checks, semantic, aiFallback, passMode, comment, flow },
+      {
+        id: req.user?.id || req.userId,
+        name: req.user?.username || req.user?.name || 'admin',
+        ip: req.ip
+      }
+    )
+
+    if (!updateResult.success) {
+      throw new Error(updateResult.error || '保存失败')
+    }
+
+    const latestConfig = await reviewConfig.getConfig()
+    res.json({ code: 200, message: '保存成功', data: latestConfig })
   } catch (error) {
     logger.error('保存图片审核设置失败:', error)
     res.status(500).json({ code: 500, message: error.message, data: null })
@@ -2062,14 +2080,22 @@ router.get('/config', adminOrReviewerAuth, async (req, res) => {
     res.json({ code: 0, data: data?.value ? JSON.parse(data.value) : {
       imageReview: { enabled: true, autoApprove: false, batchSize: 10 },
       linkVerify: { enabled: true, timeout: 30, maxRetries: 3 },
-      ocrService: { host: 'http://127.0.0.1:9001' },
+      ocrService: {
+        host: OCR_HEALTH_ENDPOINTS[0]?.url || 'http://127.0.0.1:9001',
+        homepageHosts: OCR_SERVICE_POOLS.homepage,
+        commentHosts: OCR_SERVICE_POOLS.comment
+      },
       yoloService: { host: 'http://127.0.0.1:8003' }
     } })
   } catch (err) {
     res.json({ code: 0, data: {
       imageReview: { enabled: true, autoApprove: false, batchSize: 10 },
       linkVerify: { enabled: true, timeout: 30, maxRetries: 3 },
-      ocrService: { host: 'http://127.0.0.1:9001' },
+      ocrService: {
+        host: OCR_HEALTH_ENDPOINTS[0]?.url || 'http://127.0.0.1:9001',
+        homepageHosts: OCR_SERVICE_POOLS.homepage,
+        commentHosts: OCR_SERVICE_POOLS.comment
+      },
       yoloService: { host: 'http://127.0.0.1:8003' }
     } })
   }
@@ -2078,13 +2104,20 @@ router.get('/config', adminOrReviewerAuth, async (req, res) => {
 router.get('/model/test-status', adminOrReviewerAuth, async (req, res) => {
   try {
     const axios = (await import('axios')).default
-    const [ocrRes, yoloRes] = await Promise.allSettled([
-      axios.get('http://127.0.0.1:9001/health', { timeout: 3000 }),
+    const ocrChecks = await Promise.allSettled(
+      OCR_HEALTH_ENDPOINTS.map((endpoint) => axios.get(`${endpoint.url}/health`, { timeout: 3000 }))
+    )
+    const yoloRes = await Promise.allSettled([
       axios.get('http://127.0.0.1:8003/health', { timeout: 3000 })
     ])
+    const healthyOcr = ocrChecks.filter((item) => item.status === 'fulfilled').length
     res.json({ code: 0, data: {
-      ocr: { status: ocrRes.status === 'fulfilled' ? 'online' : 'offline' },
-      yolo: { status: yoloRes.status === 'fulfilled' ? 'online' : 'offline' }
+      ocr: {
+        status: healthyOcr > 0 ? 'online' : 'offline',
+        total: OCR_HEALTH_ENDPOINTS.length,
+        healthy: healthyOcr
+      },
+      yolo: { status: yoloRes[0].status === 'fulfilled' ? 'online' : 'offline' }
     } })
   } catch (err) {
     res.json({ code: 0, data: { ocr: { status: 'unknown' }, yolo: { status: 'unknown' } } })
@@ -2115,7 +2148,7 @@ router.get('/proxy/status', adminOrReviewerAuth, async (req, res) => {
 
 // ============ AI 审核中心前端所需路由 ============
 
-// 人工审核操作 - 通过/拒绝
+// 人工审核操作 - 已检查/通过/拒绝
 router.post('/reviewer/claim/:claimId/action', adminOrReviewerAuth, async (req, res) => {
   try {
     const { claimId } = req.params
@@ -2125,140 +2158,28 @@ router.post('/reviewer/claim/:claimId/action', adminOrReviewerAuth, async (req, 
       return res.status(400).json({ code: 400, message: '缺少必要参数' })
     }
     
-    if (!['approve', 'reject'].includes(action)) {
+    if (!['inspect', 'approve', 'reject'].includes(action)) {
       return res.status(400).json({ code: 400, message: '无效的操作类型' })
     }
-    
-    const claim = await db.queryOne(
-      `
-      SELECT c.id, c.user_id, c.task_id, c.status, c.reject_count, c.review_history,
-             c.image_review_status, c.link_review_status, t.video_url
-      FROM claims c
-      LEFT JOIN tasks t ON t.id = c.task_id
-      WHERE c.id = $1
-      `,
-      [claimId]
-    )
 
-    if (!claim) {
-      return res.status(404).json({ code: 404, message: '任务认领记录不存在' })
-    }
-
+    let result
     if (action === 'approve') {
-      await db.transaction(async (client) => {
-        const nextHistory = appendReviewHistory(
-          claim.review_history,
-          createReviewHistoryEntry({
-            stage: 'manual_review',
-            action: 'approved',
-            reason: reason || '人工审核通过',
-            details: {
-              reviewerId: String(req.userId),
-              previousStatus: claim.status
-            }
-          })
-        )
-
-        await client.query(
-          `
-          UPDATE claims
-          SET status = $1,
-              image_review_status = CASE WHEN image_review_status IS NULL OR image_review_status = 'manual' THEN 'approved' ELSE image_review_status END,
-              link_review_status = CASE
-                WHEN $2 = true AND (link_review_status IS NULL OR link_review_status = 'manual') THEN 'approved'
-                WHEN $2 = false THEN COALESCE(link_review_status, 'skipped')
-                ELSE link_review_status
-              END,
-              review_note = $3,
-              reviewed_at = NOW(),
-              reviewer_id = $4,
-              review_history = $5
-          WHERE id = $6
-          `,
-          [
-            CLAIM_STATUS.APPROVED,
-            Boolean(claim.video_url),
-            reason || '人工审核通过',
-            req.userId,
-            JSON.stringify(nextHistory),
-            claimId
-          ]
-        )
-      })
-
-      await pointsSettlementService.awardClaimPoints({
-        claimId,
-        taskId: claim.task_id,
-        userId: claim.user_id,
-        awardReason: reason || '人工审核通过',
-        source: 'ai_reviewer_manual'
-      })
-
-      logger.info('[人工审核] 用户', req.userId, '通过认领', claimId)
-      return res.json({
-        code: 0,
-        message: '审核通过',
-        data: { claimId, action, newStatus: CLAIM_STATUS.APPROVED }
-      })
+      result = await manualApprove(claimId, req.userId, reason || '')
+    } else if (action === 'reject') {
+      result = await manualReject(claimId, req.userId, reason || '')
+    } else {
+      result = await manualInspect(claimId, req.userId, reason || '')
     }
 
-    const rejectCount = Number(claim.reject_count || 0) + 1
-    const shouldRelease = rejectCount >= 3
-    const rejectReason = reason || '人工审核拒绝'
-    const stageField = claim.image_review_status !== 'approved' ? 'image_review_status' : 'link_review_status'
-    const nextHistory = appendReviewHistory(
-      appendReviewHistory(
-        claim.review_history,
-        createReviewHistoryEntry({
-          stage: 'manual_review',
-          action: 'rejected',
-          reason: rejectReason,
-          details: {
-            reviewerId: String(req.userId),
-            previousStatus: claim.status,
-            rejectCount
-          }
-        })
-      ),
-      createReviewHistoryEntry({
-        stage: 'claim_flow',
-        action: shouldRelease ? 'released' : 'returned',
-        reason: rejectReason,
-        details: {
-          source: 'manual_review',
-          rejectCount
-        }
-      })
-    )
-
-    await db.query(
-      `
-      UPDATE claims
-      SET status = $1,
-          reject_count = $2,
-          submitted_at = NULL,
-          reviewed_at = NOW(),
-          reviewer_id = $3,
-          review_note = $4,
-          ${stageField} = 'rejected',
-          review_history = $5
-      WHERE id = $6
-      `,
-      [
-        shouldRelease ? CLAIM_STATUS.RELEASED : CLAIM_STATUS.DOING,
-        rejectCount,
-        req.userId,
-        rejectReason,
-        JSON.stringify(nextHistory),
-        claimId
-      ]
-    )
-
-    logger.info('[人工审核] 用户', req.userId, '拒绝认领', claimId)
+    logger.info('[人工审核] 用户', req.userId, '处理认领', claimId, '动作', action)
     res.json({
       code: 0,
-      message: '已拒绝',
-      data: { claimId, action, newStatus: shouldRelease ? CLAIM_STATUS.RELEASED : CLAIM_STATUS.DOING }
+      message: result.message,
+      data: {
+        claimId,
+        action,
+        ...result
+      }
     })
   } catch (error) {
     logger.error('人工审核失败:', error)

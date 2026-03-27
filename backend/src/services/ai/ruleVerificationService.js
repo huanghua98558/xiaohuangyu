@@ -14,6 +14,7 @@ import { analyzeSemantic } from './semanticAnalysisService.js';
  * 验证模式枚举
  */
 export const VERIFY_MODE = {
+  DEFAULT_PASS: 'default_pass',  // 默认通过
   RULE_AND_AI: 'rule_and_ai',    // 规则+AI（两者都通过才算通过）
   AI_ONLY: 'ai_only',            // 仅AI
   RULE_ONLY: 'rule_only'         // 仅规则
@@ -40,7 +41,7 @@ const DEFAULT_RULES = {
   // 语意识别规则
   semantic: {
     enabled: true,               // 是否启用语意识别
-    mode: VERIFY_MODE.RULE_AND_AI,
+    mode: VERIFY_MODE.DEFAULT_PASS,
     minRelevance: 0.5,           // 最低相关性
     minPositivity: 0.3,          // 最低正面性
     minEffectiveness: 0.5        // 最低有效性
@@ -254,6 +255,14 @@ export async function comprehensiveVerify(params, externalConfig = null) {
     rulePassed: false,
     aiPassed: false
   };
+
+  if (mode === VERIFY_MODE.DEFAULT_PASS) {
+    result.passed = true;
+    result.rulePassed = true;
+    result.aiPassed = true;
+    result.reason = '默认通过模式';
+    return result;
+  }
   
   // 1. 规则验证
   result.nicknameVerify = verifyNickname(screenshotNickname, claimNickname, config.nickname);

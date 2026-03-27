@@ -67,7 +67,7 @@ function readIntegerConfig(value, fallback, minimum = null) {
   return parsed
 }
 
-async function getLinkVerifyConfig() {
+export async function getLinkVerifyConfig() {
   const config = {
     enabled: true,
     delayMinutes: 0,
@@ -109,7 +109,7 @@ async function getLinkVerifyConfig() {
   return config
 }
 
-async function enqueueLinkVerificationCompat(params) {
+export async function enqueueLinkVerificationCompat(params) {
   const {
     claimId,
     userId,
@@ -829,5 +829,7 @@ export default {
   processQueueItem,
   batchProcessQueue,
   getQueueStats,
-  getQueueSize
+  getQueueSize,
+  getLinkVerifyConfig,
+  enqueueLinkVerificationCompat
 }

@@ -10,7 +10,7 @@ const routes = [
   { path: '/my', component: () => import('../views/My.vue'), meta: { title: '我的', requiresAuth: true } },
   { path: '/tutorial', component: () => import('../views/Tutorial.vue'), meta: { title: '任务教学' } },
   { path: '/points', component: () => import('../views/Points.vue'), meta: { title: '积分中心', showTabbar: false, requiresAuth: true } },
-  { path: '/invite', component: () => import('../views/Invite.vue'), meta: { title: '推广中心', showTabbar: false, requiresAuth: true } },
+  { path: '/invite', component: () => import('../views/Invite.vue'), meta: { title: '推广中心', requiresAuth: true } },
   // 体验官的"我的任务"页面（领取的任务）- 管理员也可以访问
   { path: '/my/tasks', component: () => import('../views/MyTasks.vue'), meta: { title: '我的任务', requiresAuth: true, requiresRole: ['part_timer', 'admin'] } },
   // 发布者/审核员的"任务管理"页面 - 管理员也可以访问（显示底部导航栏）
@@ -20,8 +20,11 @@ const routes = [
   { path: '/withdraw', component: () => import('../views/Withdraw.vue'), meta: { title: '提现中心', showTabbar: false, requiresAuth: true } },
   { path: '/rank', component: () => import('../views/Rank.vue'), meta: { title: '排行榜', showTabbar: false, requiresAuth: true } },
   { path: '/notifications', component: () => import('../views/Notifications.vue'), meta: { title: '消息中心', showTabbar: false, requiresAuth: true } },
-  { path: '/sign-in', component: () => import('../views/SignIn.vue'), meta: { title: '每日签到', showTabbar: false, requiresAuth: true } },
-  { path: '/achievements', component: () => import('../views/Achievements.vue'), meta: { title: '我的成就', showTabbar: false, requiresAuth: true } },
+  { path: '/admin/notifications', component: () => import('../views/AdminNotifications.vue'), meta: { title: '管理员通知', showTabbar: false, requiresAuth: true, requiresRole: ['admin'] } },
+  { path: '/admin/alerts', component: () => import('../views/AdminAlerts.vue'), meta: { title: '管理员告警', showTabbar: false, requiresAuth: true, requiresRole: ['admin'] } },
+  { path: '/notification-settings', component: () => import('../views/NotificationSettings.vue'), meta: { title: '通知设置', requiresAuth: true } },
+  { path: '/sign-in', component: () => import('../views/SignIn.vue'), meta: { title: '每日签到', requiresAuth: true } },
+  { path: '/achievements', component: () => import('../views/Achievements.vue'), meta: { title: '我的成就', requiresAuth: true } },
   { path: '/admin/review', component: () => import('../views/AdminReview.vue'), meta: { title: '任务审核', showTabbar: false, requiresAuth: true, requiresRole: ['admin', 'reviewer'] } },
   // 发布任务（发布者、审核员、管理员可访问）
   { path: '/publish', component: () => import('../views/PublishTask.vue'), meta: { title: '发布任务', showTabbar: false, requiresAuth: true, requiresRole: ['admin', 'client', 'reviewer'] } },

@@ -47,9 +47,9 @@ import nightPointService from './services/nightPointService.js'
 import { errorHandler, notFoundHandler } from './middlewares/errorHandler.js'
 import { connectRedis } from './utils/redis.js'
 import logger from './utils/logger.js'
-import supabase from './utils/supabaseToPrismaAdapter.js'
 import { runSeedIfNeeded } from './utils/seed.js'
 import { initDefaultConfigs } from './services/ai/index.js'
+import db from './config/database.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -134,52 +134,83 @@ const authLimiter = rateLimit({
 
 // ============ 路由配置 ============
 
+async function buildHealthSnapshot() {
+  const timestamp = new Date().toISOString()
+  let dbConnected = false
+  let redisConnected = false
+  let taskCount = 0
+  const details = {}
+
+  try {
+    await db.query('SELECT 1')
+    dbConnected = true
+    const countResult = await db.query('SELECT COUNT(*)::int AS count FROM tasks')
+    taskCount = Number(countResult.rows?.[0]?.count || 0)
+  } catch (error) {
+    details.databaseError = error.message
+  }
+
+  try {
+    redisConnected = await connectRedis()
+  } catch (error) {
+    details.redisError = error.message
+  }
+
+  return {
+    status: dbConnected ? 'ok' : 'error',
+    timestamp,
+    db: dbConnected ? 'connected' : 'error',
+    tasks: taskCount,
+    services: {
+      database: dbConnected,
+      redis: redisConnected,
+    },
+    database: {
+      type: 'cockroachdb',
+      connected: dbConnected,
+      taskCount,
+      hasDatabaseUrl: Boolean(process.env.DATABASE_URL),
+    },
+    redis: {
+      connected: redisConnected,
+    },
+    details,
+  }
+}
+
 // 健康检查
 app.get('/health', async (req, res) => {
   try {
-    // 测试数据库连接
-    const { count, error } = await supabase.from('tasks').select('*', { count: 'exact', head: true })
-    if (error) {
-      logger.error('健康检查数据库错误:', error)
-      return res.json({ 
-        status: 'error', 
-        timestamp: new Date().toISOString(),
-        db: 'disconnected',
-        error: error.message,
-        env: {
-          hasSupabaseUrl: !!(process.env.COZE_SUPABASE_URL || process.env.SUPABASE_URL),
-          hasSupabaseKey: !!(process.env.COZE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY)
-        }
-      })
-    }
-    res.json({ 
-      status: 'ok', 
-      timestamp: new Date().toISOString(),
-      db: 'connected',
-      tasks: count || 0,
-      env: {
-        hasSupabaseUrl: !!(process.env.COZE_SUPABASE_URL || process.env.SUPABASE_URL),
-        hasSupabaseKey: !!(process.env.COZE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY)
-      }
-    })
+    const snapshot = await buildHealthSnapshot()
+    res.status(snapshot.status === 'ok' ? 200 : 503).json(snapshot)
   } catch (e) {
     logger.error('健康检查异常:', e)
-    res.json({ 
-      status: 'error', 
+    res.status(503).json({
+      status: 'error',
       timestamp: new Date().toISOString(),
       db: 'error',
+      services: {
+        database: false,
+        redis: false,
+      },
+      database: {
+        type: 'cockroachdb',
+        connected: false,
+        taskCount: 0,
+        hasDatabaseUrl: Boolean(process.env.DATABASE_URL),
+      },
+      redis: {
+        connected: false,
+      },
       error: e.message,
-      env: {
-        hasSupabaseUrl: !!(process.env.COZE_SUPABASE_URL || process.env.SUPABASE_URL),
-        hasSupabaseKey: !!(process.env.COZE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY)
-      }
     })
   }
 })
 
 // API健康检查
 app.get('/api/health', async (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() })
+  const snapshot = await buildHealthSnapshot()
+  res.status(snapshot.status === 'ok' ? 200 : 503).json(snapshot)
 })
 
 // API路由
@@ -370,7 +401,6 @@ app.listen(PORT, () => {
 startServer()
 
 export default app
-
 
 
 

@@ -13,7 +13,7 @@ class LoginLogService {
   /**
    * 记录登录日志
    */
-  async log({ userId, username, login_status = 'success', failure_reason = null, req = null }) {
+  async log({ userId, username, loginStatus = 'success', failureReason = null, req = null }) {
     try {
       let ip = 'unknown'
       let location = '未知位置'
@@ -32,8 +32,8 @@ class LoginLogService {
         data: {
           user_id: userId ? Number(userId) : null,
           username,
-          login_status: login_status || 'success',
-          failure_reason,
+          login_status: loginStatus || 'success',
+          failure_reason: failureReason,
           ip_address: ip,
           location,
           device,
@@ -42,7 +42,7 @@ class LoginLogService {
       })
 
       // 检测异地登录
-      if (login_status === 'success') {
+      if (loginStatus === 'success') {
         await this.checkAbnormalLogin(userId, ip, location)
       }
 
@@ -142,7 +142,7 @@ class LoginLogService {
           },
           data: { 
             is_anomaly: true, 
-            anomalyReason 
+            anomaly_reason: anomalyReason 
           }
         })
       }
@@ -150,7 +150,7 @@ class LoginLogService {
       return { isAnomaly, anomalyReason }
     } catch (err) {
       logger.error('检测异常登录失败:', err)
-      return { is_anomaly: false, anomaly_reason: null }
+      return { isAnomaly: false, anomalyReason: null }
     }
   }
 
@@ -224,7 +224,7 @@ class LoginLogService {
 
     return {
       totalLogins: data.length,
-      uniqueIPs: [...new Set(data.map(l => l.ipAddress))].length,
+      uniqueIPs: [...new Set(data.map(l => l.ip_address))].length,
       uniqueLocations: [...new Set(data.map(l => l.location))],
       devices: [...new Set(data.map(l => l.device))],
       lastLogin: data[0] || null

@@ -58,6 +58,19 @@ interface LinkReviewConfig {
   }
 }
 
+interface FinalCommentConfig {
+  semanticEnabled: boolean
+  mode: 'default_pass' | 'rule_only' | 'ai_only' | 'rule_and_ai'
+  minLength: number
+}
+
+interface SemanticAIConfig {
+  provider: string
+  model: string
+  apiKey: string
+  baseUrl: string
+}
+
 const defaultConfig: LinkReviewConfig = {
   basic: {
     batchSize: 10,
@@ -93,6 +106,27 @@ const defaultConfig: LinkReviewConfig = {
   }
 }
 
+const defaultFinalCommentConfig: FinalCommentConfig = {
+  semanticEnabled: true,
+  mode: 'default_pass',
+  minLength: 8
+}
+
+const defaultSemanticAIConfig: SemanticAIConfig = {
+  provider: 'bailian',
+  model: 'qwen-plus',
+  apiKey: '',
+  baseUrl: ''
+}
+
+const AI_PROVIDERS = [
+  { id: 'bailian', name: '百炼AI', baseUrl: 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation' },
+  { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1' },
+  { id: 'siliconflow', name: '硅基流动', baseUrl: 'https://api.siliconflow.cn/v1' },
+  { id: 'deepseek', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1' },
+  { id: 'custom', name: '自定义', baseUrl: '' }
+]
+
 function parseNumberInput(value: string, fallback: number) {
   const parsed = Number.parseInt(value, 10)
   return Number.isFinite(parsed) ? parsed : fallback
@@ -115,6 +149,8 @@ export default function LinkReviewPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [config, setConfig] = useState<LinkReviewConfig>(defaultConfig)
+  const [finalCommentConfig, setFinalCommentConfig] = useState<FinalCommentConfig>(defaultFinalCommentConfig)
+  const [semanticAIConfig, setSemanticAIConfig] = useState<SemanticAIConfig>(defaultSemanticAIConfig)
   const [stats, setStats] = useState<ProxyStats | null>(null)
   const [hasChanges, setHasChanges] = useState(false)
 
@@ -142,6 +178,35 @@ export default function LinkReviewPage() {
           ...configData.data
         }))
         setHasChanges(false)
+      }
+
+      const [reviewSettingsRes, semanticAIRes] = await Promise.all([
+        fetch('/admin/api/ai/admin/review-settings', { headers: getAuthHeaders() }),
+        fetch('/admin/api/ai/admin/configs?category=semantic', { headers: getAuthHeaders() })
+      ])
+      const reviewSettingsData = await reviewSettingsRes.json()
+      const semanticAIData = await semanticAIRes.json()
+
+      if ((reviewSettingsData.code === 200 || reviewSettingsData.code === 0) && reviewSettingsData.data) {
+        setFinalCommentConfig({
+          semanticEnabled: reviewSettingsData.data.semantic?.enabled ?? true,
+          mode: reviewSettingsData.data.semantic?.mode || 'default_pass',
+          minLength: reviewSettingsData.data.comment?.minLength ?? 8
+        })
+      }
+
+      if ((semanticAIData.code === 200 || semanticAIData.code === 0) && Array.isArray(semanticAIData.data)) {
+        const getValue = (key: string) => {
+          const item = semanticAIData.data.find((configItem: any) => configItem.key === key)
+          return item?.value || ''
+        }
+
+        setSemanticAIConfig({
+          provider: getValue('semantic_ai_provider') || 'bailian',
+          model: getValue('semantic_ai_model') || 'qwen-plus',
+          apiKey: getValue('semantic_ai_api_key') || '',
+          baseUrl: getValue('semantic_ai_base_url') || ''
+        })
       }
       
       // 加载统计
@@ -175,6 +240,43 @@ export default function LinkReviewPage() {
       const data = await res.json()
       
       if (data.code === 200) {
+        const reviewSettingsRes = await fetch('/admin/api/ai/admin/review-settings', {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify({
+            semantic: {
+              enabled: finalCommentConfig.semanticEnabled,
+              mode: finalCommentConfig.mode
+            },
+            comment: {
+              minLength: finalCommentConfig.minLength
+            }
+          })
+        })
+
+        const semanticConfigRes = await fetch('/admin/api/ai/admin/configs/batch', {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify({
+            updates: [
+              { key: 'semantic_ai_provider', value: semanticAIConfig.provider, category: 'semantic' },
+              { key: 'semantic_ai_model', value: semanticAIConfig.model, category: 'semantic' },
+              { key: 'semantic_ai_api_key', value: semanticAIConfig.apiKey, category: 'semantic' },
+              { key: 'semantic_ai_base_url', value: semanticAIConfig.baseUrl, category: 'semantic' }
+            ]
+          })
+        })
+
+        const [reviewSettingsData, semanticConfigData] = await Promise.all([
+          reviewSettingsRes.json(),
+          semanticConfigRes.json()
+        ])
+
+        if ((reviewSettingsData.code !== 200 && reviewSettingsData.code !== 0) ||
+            (semanticConfigData.code !== 200 && semanticConfigData.code !== 0)) {
+          throw new Error(reviewSettingsData.message || semanticConfigData.message || '扩展配置保存失败')
+        }
+
         toast.success('配置保存成功')
         setHasChanges(false)
       } else {
@@ -217,6 +319,16 @@ export default function LinkReviewPage() {
         [key]: value
       }
     }))
+    setHasChanges(true)
+  }
+
+  const updateFinalCommentConfig = (updates: Partial<FinalCommentConfig>) => {
+    setFinalCommentConfig(prev => ({ ...prev, ...updates }))
+    setHasChanges(true)
+  }
+
+  const updateSemanticAIConfig = (updates: Partial<SemanticAIConfig>) => {
+    setSemanticAIConfig(prev => ({ ...prev, ...updates }))
     setHasChanges(true)
   }
 
@@ -589,6 +701,117 @@ export default function LinkReviewPage() {
                   />
                   <p className="text-xs text-muted-foreground">未满批量时，超过此时间也会强制进入审核</p>
                 </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Shield className="w-5 h-5" />
+                最终评论判定
+              </CardTitle>
+              <CardDescription>
+                连接比对成功后，最后一步对评论内容做默认通过、规则判定或 AI 判定
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              <div className="flex items-center justify-between rounded-lg border p-4">
+                <div>
+                  <Label>启用 AI 语义判定</Label>
+                  <p className="text-sm text-muted-foreground">关闭后，AI 模式会自动降为默认通过</p>
+                </div>
+                <Switch
+                  checked={finalCommentConfig.semanticEnabled}
+                  onCheckedChange={(checked) => updateFinalCommentConfig({ semanticEnabled: checked })}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>判定模式</Label>
+                  <Select
+                    value={finalCommentConfig.mode}
+                    onValueChange={(value) => updateFinalCommentConfig({ mode: value as FinalCommentConfig['mode'] })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="default_pass">默认通过</SelectItem>
+                      <SelectItem value="rule_only">仅规则判断</SelectItem>
+                      <SelectItem value="ai_only">仅 AI 判断</SelectItem>
+                      <SelectItem value="rule_and_ai">规则 + AI</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">默认通过时，连接审核通过即为最后环节</p>
+                </div>
+                <div className="space-y-2">
+                  <Label>评论最小字数</Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    value={finalCommentConfig.minLength}
+                    onChange={(e) => updateFinalCommentConfig({ minLength: parseNumberInput(e.target.value, defaultFinalCommentConfig.minLength) })}
+                  />
+                  <p className="text-xs text-muted-foreground">规则判断时用于校验评论字数，建议 8 字以上</p>
+                </div>
+              </div>
+
+              <Separator />
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>AI 提供商</Label>
+                  <Select
+                    value={semanticAIConfig.provider}
+                    onValueChange={(value) => {
+                      const provider = AI_PROVIDERS.find((item) => item.id === value)
+                      updateSemanticAIConfig({
+                        provider: value,
+                        baseUrl: provider?.baseUrl || semanticAIConfig.baseUrl
+                      })
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {AI_PROVIDERS.map((provider) => (
+                        <SelectItem key={provider.id} value={provider.id}>
+                          {provider.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>模型名称</Label>
+                  <Input
+                    value={semanticAIConfig.model}
+                    onChange={(e) => updateSemanticAIConfig({ model: e.target.value })}
+                    placeholder="qwen-plus / gpt-4o-mini"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>API Base URL</Label>
+                <Input
+                  value={semanticAIConfig.baseUrl}
+                  onChange={(e) => updateSemanticAIConfig({ baseUrl: e.target.value })}
+                  placeholder="https://api.example.com/v1"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label>API Key</Label>
+                <Input
+                  type="password"
+                  value={semanticAIConfig.apiKey}
+                  onChange={(e) => updateSemanticAIConfig({ apiKey: e.target.value })}
+                  placeholder="sk-xxx"
+                />
               </div>
             </CardContent>
           </Card>

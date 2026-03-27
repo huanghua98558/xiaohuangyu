@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { buildSubmissionScreenshotEntries } from './claimScreenshots.js'
 
 // 用户名验证
 const usernameSchema = z.string()
@@ -49,10 +50,21 @@ export const claimTaskSchema = z.object({
 })
 
 // 任务提交验证
-// screenshots 存储的是对象存储的 key（如 "images/2024/03/13/xxx.jpg"）
+const screenshotItemSchema = z.union([
+  z.string().min(1, '截图不能为空'),
+  z.object({
+    url: z.string().min(1, '截图不能为空'),
+    role: z.string().optional(),
+    sortOrder: z.number().optional()
+  }).passthrough()
+])
+
 export const submitTaskSchema = z.object({
   platformNickname: z.string().max(50, '昵称最多50个字符').optional(), // 改为可选
-  screenshots: z.array(z.string().min(1, '截图不能为空')).min(2, '请至少上传2张截图').max(5, '最多上传5张截图'),
+  screenshots: z.array(screenshotItemSchema)
+    .min(2, '请至少上传2张截图')
+    .max(5, '最多上传5张截图')
+    .transform((items) => buildSubmissionScreenshotEntries(items)),
   evaluation: z.string().max(500, '评价最多500个字符').optional() // 短视频评价
 })
 

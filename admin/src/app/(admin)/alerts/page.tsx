@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { AlertTriangle, CheckCircle, Clock, Filter, Eye } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAdminWebSocket } from '@/hooks/useAdminWebSocket'
+import { playAdminNotificationSound, registerAdminNotificationSoundUnlock } from '@/lib/notification-sound'
 
 interface Alert {
   id: number
@@ -63,6 +64,7 @@ export default function AlertsPage() {
     ['system_alert'],
     (data: any) => {
       if (data) {
+        playAdminNotificationSound('alert').catch(() => null)
         toast.warning(data.name || data.message || 'New alert', {
           description: data.message
         })
@@ -88,7 +90,7 @@ export default function AlertsPage() {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       const data = await response.json()
-      if (data.code === 200) {
+      if (data.code === 0) {
         setAlerts(data.data?.list || [])
         setTotal(data.data?.total || 0)
       } else {
@@ -109,7 +111,7 @@ export default function AlertsPage() {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       const data = await response.json()
-      if (data.code === 200) {
+      if (data.code === 0) {
         setStats(data.data || stats)
       }
     } catch (error) {
@@ -119,6 +121,7 @@ export default function AlertsPage() {
 
   // 初始加载
   useEffect(() => {
+    registerAdminNotificationSoundUnlock()
     loadAlerts()
     loadStats()
   }, [page, filterType, filterStatus, filterSeverity])
@@ -153,7 +156,7 @@ export default function AlertsPage() {
         })
       })
       const data = await response.json()
-      if (data.code === 200) {
+      if (data.code === 0) {
         toast.success(handleAction === 'resolve' ? '告警已解决' : '告警已忽略')
         setHandleDialogOpen(false)
         loadAlerts()
