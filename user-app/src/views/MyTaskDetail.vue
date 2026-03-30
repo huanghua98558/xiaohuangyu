@@ -1,0 +1,1008 @@
+<template>
+  <div class="yx-page no-tabbar my-task-detail-page">
+    <header class="yx-header center">
+      <button class="yx-back-btn" @click="$router.back()">←</button>
+      <div class="yx-header-main">
+        <h1 class="yx-title sm">任务详情</h1>
+        <p class="yx-subtitle">查看状态、记录和截图。</p>
+      </div>
+      <div class="yx-icon-btn">🧾</div>
+    </header>
+    <div class="yx-empty" v-if="loading">
+      <strong>加载中...</strong>
+      <span>正在获取任务详情。</span>
+    </div>
+    <div class="yx-empty" v-else-if="error">
+      <strong>加载失败</strong>
+      <span>{{ error }}</span>
+    </div>
+    <div class="content" v-else-if="task && claim">
+      <!-- 状态标签 -->
+      <div class="status-tag" :class="statusClass">{{ statusText }}</div>
+      
+      <!-- 倒计时提醒（进行中任务） -->
+      <div class="countdown-banner" v-if="showCountdown && !isExpired">
+        <span class="countdown-icon">⏰</span>
+        <span class="countdown-label">剩余时间：</span>
+        <CountdownTimer 
+          :expiresAt="claim.expiresAt" 
+          :warningThreshold="2 * 60 * 60 * 1000"
+          @expire="onTaskExpire"
+          @warning="onTaskWarning"
+        />
+      </div>
+      
+      <!-- 已过期提示 -->
+      <div class="expired-banner" v-if="showCountdown && isExpired">
+        <span class="expired-icon">⚠️</span>
+        <span>任务已过期，请放弃或重新领取</span>
+      </div>
+      
+      <!-- 拒绝原因 -->
+      <div class="reject-reason yx-card" v-if="claim.reviewNote && (isRejected || isManual || isReleased)">
+        <h4>{{ isManual ? '人工复审说明' : '处理说明' }}</h4>
+        <p>{{ claim.reviewNote }}</p>
+      </div>
+
+      <div class="blocked-record yx-card" v-if="isBlockedConfirmed">
+        <h4>评论封控记录</h4>
+        <p>人工已确认本次任务使用的抖音评论账号被平台限制，仅自己可见，与平台账号无关。请更换抖音账号后重新领取任务。</p>
+        <div class="blocked-meta">
+          <span>状态：已确认封控</span>
+          <span v-if="claim.reviewedAt">确认时间：{{ formatTime(claim.reviewedAt) }}</span>
+        </div>
+      </div>
+      
+      <h2 class="title">{{ task.title }}</h2>
+      <div class="meta">
+        <span class="type">{{ getPlatformName(task.platform) }} · {{ getActionName(task.action) }}</span>
+        <span class="reward">{{ claim.settlement?.finalPoints || claim.reward || task.reward }} 积分</span>
+      </div>
+
+      <div class="yx-card" v-if="pureVideoLink">
+        <div class="yx-card-head">
+          <div>
+            <h3>任务链接</h3>
+            <div class="yx-card-note">复制后在{{ getPlatformName(task.platform) }} APP中打开</div>
+          </div>
+        </div>
+        <div class="link-box">{{ pureVideoLink }}</div>
+        <div class="link-actions">
+          <button class="yx-btn-ghost" @click="copyUrl">复制后在{{ getPlatformName(task.platform) }}打开</button>
+          <button class="yx-btn" @click="copyUrl">一键复制</button>
+        </div>
+      </div>
+      
+      <div class="desc yx-card">
+        <h3>任务说明</h3>
+        <p>{{ task.description }}</p>
+      </div>
+
+      <div class="example-images-card yx-card" v-if="exampleImages.length">
+        <div class="example-images-head">
+          <h3>示范图片</h3>
+          <span>点击图片可放大查看</span>
+        </div>
+        <div class="example-images-grid">
+          <button
+            v-for="(img, index) in exampleImages"
+            :key="index"
+            type="button"
+            class="example-image-item"
+            @click="previewImage(img)"
+          >
+            <img :src="img" :alt="`示范图片${index + 1}`" />
+            <span class="example-image-label">示范图 {{ index + 1 }}</span>
+          </button>
+        </div>
+      </div>
+      
+      <div class="require yx-card">
+        <h3>完成要求</h3>
+        <ul>
+          <li v-for="(r, i) in task.requirements" :key="i">
+          <template v-if="typeof r === 'object'">
+            <span class="step-num">{{ r.step || i + 1 }}.</span>
+            <span class="step-title">{{ r.title }}</span>
+            <span class="step-desc" v-if="r.description">：{{ r.description }}</span>
+          </template>
+          <template v-else>{{ r }}</template>
+        </li>
+        </ul>
+      </div>
+      
+      <!-- 已提交信息展示（待审核/已拒绝/已完成） -->
+      <div class="submitted-info yx-card" v-if="showSubmittedInfo">
+        <h3>提交信息</h3>
+        <div class="info-item">
+          <label>平台昵称</label>
+          <p>{{ claim.platformNickname || '-' }}</p>
+        </div>
+        <div class="info-item" v-if="displayScreenshots.length">
+          <label>完成任务截图</label>
+          <p class="screenshots-tip">点击图片可放大查看，再次点击背景即可关闭。</p>
+          <div class="screenshots">
+            <img 
+              v-for="(img, i) in displayScreenshots" 
+              :key="i" 
+              :src="img" 
+              alt="" 
+              @click="previewImage(img)"
+            />
+          </div>
+        </div>
+        <div class="info-item" v-if="isDone">
+          <label>完成时间</label>
+          <p>{{ formatTime(claim.reviewedAt) }}</p>
+        </div>
+        <div class="info-item" v-if="isDone && (claim.settlement?.finalPoints || claim.reward)">
+          <label>最终到账</label>
+          <p>{{ claim.settlement?.finalPoints || claim.reward }} 积分</p>
+        </div>
+        <div class="info-item" v-if="isDone && claim.settlement">
+          <label>积分明细</label>
+          <p>
+            基础 {{ claim.settlement.basePoints || 0 }}
+            <template v-if="Number(claim.settlement.coefficient || 1) > 1">
+              ，夜间倍率 x{{ Number(claim.settlement.coefficient || 1).toFixed(2) }}
+              ，加成 {{ claim.settlement.bonusPoints || 0 }}
+            </template>
+          </p>
+        </div>
+      </div>
+
+      <div class="submitted-info yx-card" v-if="simpleReviewHistory.length">
+        <h3>处理记录</h3>
+        <div class="history-list">
+          <div class="history-item" v-for="(item, index) in simpleReviewHistory" :key="`${item.key}-${index}`">
+            <div class="history-head">
+              <span class="history-stage">{{ item.label }}</span>
+              <span class="history-time">{{ formatTime(item.timestamp) }}</span>
+            </div>
+            <p class="history-reason">{{ item.reason || '—' }}</p>
+          </div>
+        </div>
+      </div>
+      
+      <!-- 操作按钮 -->
+      <div class="actions">
+        <!-- 进行中/已拒绝：去提交/修改重提 -->
+        <button 
+          v-if="canSubmit" 
+          class="btn-submit" 
+          @click="goSubmit"
+        >
+          {{ isRejected ? '修改并重新提交' : '去提交' }}
+        </button>
+        
+        <!-- 进行中/已拒绝：可以放弃任务 -->
+        <button 
+          v-if="canAbandon" 
+          class="btn-abandon" 
+          @click="handleAbandon"
+          :disabled="abandoning"
+        >
+          {{ abandoning ? '放弃中...' : '放弃任务' }}
+        </button>
+        
+        <!-- 待审核：可以撤回 -->
+        <button 
+          v-if="claim.canWithdraw" 
+          class="btn-withdraw" 
+          @click="handleWithdraw"
+          :disabled="withdrawing"
+        >
+          {{ withdrawing ? '撤回中...' : '撤回提交' }}
+        </button>
+      </div>
+    </div>
+    
+    <!-- 图片预览 -->
+    <div class="image-preview" v-if="previewUrl" @click="previewUrl = ''">
+      <button type="button" class="close" @click.stop="previewUrl = ''">关闭</button>
+      <div class="image-preview-stage" @click.stop>
+        <img :src="previewUrl" alt="" />
+      </div>
+    </div>
+    
+    <!-- Toast 提示 -->
+    <div class="toast" v-if="toast.show">{{ toast.message }}</div>
+  </div>
+</template>
+
+<script setup>
+import { ref, onMounted, onActivated, onUnmounted, computed, reactive } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { getMyClaimDetail, getTaskDetail, withdrawClaim, abandonClaim } from '../api/task'
+import CountdownTimer from '../components/CountdownTimer.vue'
+
+const route = useRoute()
+const router = useRouter()
+const claimId = route.params.claimId
+const task = ref(null)
+const claim = ref(null)
+const loading = ref(true)
+const error = ref('')
+const previewUrl = ref('')
+const exampleImages = ref([])
+const withdrawing = ref(false)
+const abandoning = ref(false)
+const toast = reactive({ show: false, message: '' })
+
+function showToast(message) {
+  toast.message = message
+  toast.show = true
+  setTimeout(() => { toast.show = false }, 3000)
+}
+
+function getPlatformName(platform) {
+  const map = {
+    'douyin': '抖音',
+    'kuaishou': '快手',
+    'weibo': '视频号',
+    'xiaohongshu': '小红书',
+    '抖音': '抖音',
+    '快手': '快手',
+    '视频号': '视频号',
+    '小红书': '小红书'
+  }
+  return map[platform] || platform
+}
+
+function getActionName(action) {
+  const map = {
+    'like': '点赞',
+    'comment': '评论',
+    'collect': '收藏',
+    'follow': '关注',
+    'share': '分享',
+    'short_video_research': '短视频评价官',
+    '点赞': '点赞',
+    '评论': '评论',
+    '收藏': '收藏',
+    '关注': '关注',
+    '分享': '分享',
+    '短视频评价官': '短视频评价官'
+  }
+  return map[action] || action
+}
+
+function formatTime(dateStr) {
+  if (!dateStr) return '-'
+  const date = new Date(dateStr)
+  const month = (date.getMonth() + 1).toString().padStart(2, '0')
+  const day = date.getDate().toString().padStart(2, '0')
+  const hour = date.getHours().toString().padStart(2, '0')
+  const min = date.getMinutes().toString().padStart(2, '0')
+  return `${month}-${day} ${hour}:${min}`
+}
+
+// 状态计算
+const statusClass = computed(() => {
+  if (!claim.value) return ''
+  switch (claim.value.status) {
+    case 'doing': return claim.value.isRejected ? 'rejected' : 'doing'
+    case 'submitted':
+    case 'image_reviewing':
+    case 'pending_link':
+    case 'link_reviewing':
+    case 'pending_manual':
+      return 'pending'
+    case 'approved':
+    case 'done':
+      return 'done'
+    case 'released':
+      return 'rejected'
+    default: return ''
+  }
+})
+
+const statusText = computed(() => {
+  if (!claim.value) return ''
+  switch (claim.value.status) {
+    case 'doing': return claim.value.isRejected ? '待重新提交' : '进行中'
+    case 'submitted': return '待图片审核'
+    case 'image_reviewing': return '图片审核中'
+    case 'pending_link': return '图片通过，待连接审核'
+    case 'link_reviewing': return '连接审核中'
+    case 'pending_manual': return '人工复审中'
+    case 'approved':
+    case 'done':
+      return '已完成'
+    case 'released':
+      return '已释放'
+    default: return claim.value.status
+  }
+})
+
+const isDoing = computed(() => {
+  return claim.value?.status === 'doing' && !claim.value?.isRejected
+})
+
+const isPending = computed(() => {
+  return ['submitted', 'image_reviewing', 'pending_link', 'link_reviewing', 'pending_manual'].includes(claim.value?.status)
+})
+
+const isRejected = computed(() => {
+  return Boolean(claim.value?.isRejected)
+})
+
+const isDone = computed(() => {
+  return ['approved', 'done'].includes(claim.value?.status)
+})
+
+const isManual = computed(() => {
+  return claim.value?.status === 'pending_manual'
+})
+
+const isReleased = computed(() => {
+  return claim.value?.status === 'released'
+})
+
+const isBlockedConfirmed = computed(() => {
+  return claim.value?.block_status === 'confirmed'
+})
+
+const isExpired = computed(() => {
+  if (!claim.value?.expiresAt) return false
+  return new Date(claim.value.expiresAt) < new Date()
+})
+
+const showCountdown = computed(() => {
+  return isDoing.value && claim.value?.expiresAt
+})
+
+const canSubmit = computed(() => {
+  return (
+    isDoing.value ||
+    claim.value?.canResubmit ||
+    claim.value?.status === 'doing' ||
+    task.value?.canSubmit
+  ) && !isExpired.value && !isReleased.value && !isBlockedConfirmed.value
+})
+
+const canAbandon = computed(() => {
+  return (isDoing.value || claim.value?.canResubmit) && !isReleased.value && !isBlockedConfirmed.value
+})
+
+const showSubmittedInfo = computed(() => {
+  return isPending.value || isRejected.value || isDone.value || isManual.value
+})
+
+const displayScreenshots = computed(() => {
+  if (!claim.value) return []
+  if (Array.isArray(claim.value.screenshotUrls) && claim.value.screenshotUrls.length) {
+    return claim.value.screenshotUrls
+  }
+  if (Array.isArray(claim.value.screenshots)) {
+    return claim.value.screenshots
+  }
+  if (typeof claim.value.screenshots === 'string') {
+    try {
+      const parsed = JSON.parse(claim.value.screenshots)
+      return Array.isArray(parsed) ? parsed.map(item => typeof item === 'string' ? item : item?.url).filter(Boolean) : []
+    } catch (e) {
+      return []
+    }
+  }
+  return []
+})
+
+const reviewHistory = computed(() => {
+  return Array.isArray(claim.value?.review_history) ? claim.value.review_history : []
+})
+
+const pureVideoLink = computed(() => {
+  const rawUrl = task.value?.videoUrl || task.value?.video_url || ''
+  if (!rawUrl) return ''
+  if (rawUrl.includes('https://')) {
+    const httpsIndex = rawUrl.indexOf('https://')
+    const beforeHttps = rawUrl.substring(0, httpsIndex)
+    const shareMatch = beforeHttps.match(/(\d+[\.\d]*\s*复制打开[^\n]*)$/)
+    if (shareMatch) return shareMatch[1] + rawUrl.substring(httpsIndex)
+    return rawUrl.substring(httpsIndex)
+  }
+  return rawUrl
+})
+
+function getHistoryReason(item, fallback = '') {
+  return item?.reason || item?.details?.reason || item?.details?.rejectReason || item?.details?.message || fallback || ''
+}
+
+function isApprovedAction(action) {
+  return ['approved', 'passed', 'success', 'completed'].includes(String(action || '').toLowerCase())
+}
+
+function isRejectedAction(action) {
+  return ['rejected', 'failed', 'returned', 'released'].includes(String(action || '').toLowerCase())
+}
+
+const simpleReviewHistory = computed(() => {
+  const latest = {
+    submission: null,
+    image: null,
+    link: null,
+    final: null
+  }
+
+  reviewHistory.value.forEach((item) => {
+    const stage = String(item?.stage || '')
+    const action = String(item?.action || '')
+    const timestamp = item?.timestamp || item?.createdAt || item?.updatedAt || claim.value?.reviewedAt || claim.value?.createdAt
+
+    if (stage === 'submission' && ['submitted', 'resubmitted'].includes(action)) {
+      latest.submission = {
+        key: 'submission',
+        label: '任务提交审核',
+        reason: '已提交，等待系统审核',
+        timestamp
+      }
+      return
+    }
+
+    if (stage === 'image_review') {
+      latest.image = {
+        key: 'image',
+        label: isApprovedAction(action) ? '图片审核通过' : '图片审核不通过',
+        reason: getHistoryReason(item, isApprovedAction(action) ? '图片审核已通过' : '图片审核未通过'),
+        timestamp
+      }
+      return
+    }
+
+    if (stage === 'link_review') {
+      latest.link = {
+        key: 'link',
+        label: isApprovedAction(action) ? '连接审核通过' : '连接审核不通过',
+        reason: getHistoryReason(item, isApprovedAction(action) ? '连接审核已通过' : '连接审核未通过'),
+        timestamp
+      }
+      return
+    }
+
+    if (['task_complete', 'claim_flow', 'manual_review', 'points_settlement'].includes(stage) && (isApprovedAction(action) || isRejectedAction(action))) {
+      latest.final = {
+        key: 'final',
+        label: isApprovedAction(action) ? '审核通过' : '审核不通过',
+        reason: getHistoryReason(item, isApprovedAction(action) ? '审核已通过' : '审核未通过'),
+        timestamp
+      }
+    }
+  })
+
+  if (!latest.submission && claim.value?.createdAt) {
+    latest.submission = {
+      key: 'submission',
+      label: '任务提交审核',
+      reason: '已提交，等待系统审核',
+      timestamp: claim.value.createdAt
+    }
+  }
+
+  if (!latest.final && isDone.value) {
+    latest.final = {
+      key: 'final',
+      label: '审核通过',
+      reason: claim.value?.reviewNote || '审核已通过，积分已到账',
+      timestamp: claim.value?.reviewedAt || claim.value?.updatedAt || claim.value?.createdAt
+    }
+  }
+
+  if (!latest.final && (isRejected.value || isReleased.value || isManual.value)) {
+    latest.final = {
+      key: 'final',
+      label: '审核不通过',
+      reason: claim.value?.reviewNote || '审核未通过',
+      timestamp: claim.value?.reviewedAt || claim.value?.updatedAt || claim.value?.createdAt
+    }
+  }
+
+  return ['submission', 'image', 'link', 'final'].map((key) => latest[key]).filter(Boolean)
+})
+
+// 倒计时回调
+function onTaskExpire() {
+  showToast('任务已过期')
+}
+
+function onTaskWarning() {
+  showToast('任务即将过期，请尽快完成！')
+}
+
+async function load() {
+  try {
+    loading.value = true
+    error.value = ''
+
+    const claimData = await getMyClaimDetail(claimId)
+    claim.value = claimData
+
+    const taskData = await getTaskDetail(claimData.taskId || claimData.task?.id)
+    task.value = taskData
+    const rawExamples = taskData?.exampleImages
+    exampleImages.value = Array.isArray(rawExamples) ? rawExamples.filter(Boolean).slice(0, 2) : []
+    
+    // 解析 requirements
+    if (typeof task.value.requirements === 'string') {
+      try {
+        task.value.requirements = JSON.parse(task.value.requirements)
+      } catch (e) {
+        task.value.requirements = []
+      }
+    }
+    
+  } catch (e) {
+    error.value = e.message || '加载失败'
+  } finally {
+    loading.value = false
+  }
+}
+
+function goSubmit() {
+  if (!canSubmit.value) {
+    showToast(isExpired.value ? '任务已过期，不能重新提交' : '当前状态不能重新提交')
+    return
+  }
+  router.push(`/submit/${claimId}`)
+}
+
+async function handleWithdraw() {
+  if (withdrawing.value) return
+  withdrawing.value = true
+  try {
+    await withdrawClaim(claimId)
+    showToast('撤回成功')
+    router.push({ path: '/my/tasks', query: { tab: 'doing' } })
+  } catch (e) {
+    showToast(e.message || '撤回失败')
+  } finally {
+    withdrawing.value = false
+  }
+}
+
+async function handleAbandon() {
+  if (abandoning.value) return
+  if (!confirm('确定要放弃这个任务吗？')) return
+  
+  abandoning.value = true
+  try {
+    await abandonClaim(claimId)
+    showToast('已放弃任务')
+    router.push({ path: '/my/tasks', query: { tab: 'doing' } })
+  } catch (e) {
+    showToast(e.message || '放弃失败')
+  } finally {
+    abandoning.value = false
+  }
+}
+
+function previewImage(url) {
+  previewUrl.value = url
+}
+
+async function copyUrl() {
+  if (!pureVideoLink.value) return
+  try {
+    await navigator.clipboard.writeText(pureVideoLink.value)
+    showToast('链接已复制')
+  } catch (e) {
+    showToast('复制失败，请手动复制')
+  }
+}
+
+const reloadFromEvent = (event) => {
+  if (!event?.detail?.claimId || String(event.detail.claimId) === String(claimId)) {
+    load()
+  }
+}
+
+onMounted(() => {
+  load()
+  window.addEventListener('review-result', reloadFromEvent)
+  window.addEventListener('points-update', reloadFromEvent)
+})
+onActivated(load)
+onUnmounted(() => {
+  window.removeEventListener('review-result', reloadFromEvent)
+  window.removeEventListener('points-update', reloadFromEvent)
+})
+</script>
+
+<style scoped>
+.my-task-detail-page {
+  padding-top: 18px;
+}
+
+.content {
+  padding: 0;
+}
+
+.status-tag {
+  display: inline-block;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+  margin-bottom: 8px;
+}
+.status-tag.doing {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+.status-tag.pending {
+  background: #fff3e0;
+  color: #f57c00;
+}
+.status-tag.rejected {
+  background: #ffebee;
+  color: #c62828;
+}
+.status-tag.done {
+  background: #e3f2fd;
+  color: #1565c0;
+}
+
+.blocked-record {
+  border: 1px solid rgba(239, 68, 68, 0.14);
+  background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(254,242,242,0.92));
+}
+
+.blocked-record h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #b91c1c;
+}
+
+.blocked-record p {
+  margin: 0;
+  line-height: 1.6;
+  color: #7f1d1d;
+}
+
+.blocked-meta {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #991b1b;
+}
+
+/* 倒计时横幅 */
+.countdown-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: linear-gradient(135deg, #24344d 0%, #355177 100%);
+  color: #fff;
+  padding: 11px 14px;
+  border-radius: 16px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.countdown-icon {
+  font-size: 18px;
+}
+
+.countdown-label {
+  opacity: 0.9;
+}
+
+/* 已过期横幅 */
+.expired-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #ffebee;
+  color: #c62828;
+  padding: 11px 14px;
+  border-radius: 16px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.expired-icon {
+  font-size: 18px;
+}
+
+.reject-reason h4 {
+  font-size: 12px;
+  color: #c62828;
+  margin-bottom: 6px;
+}
+.reject-reason p {
+  font-size: 12px;
+  color: var(--yx-deep);
+  line-height: 1.55;
+}
+
+.title { font-size: 20px; margin: 0 0 10px; color: var(--yx-deep); }
+.meta { display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+.type {
+  font-size: 11px;
+  color: #38507e;
+  padding: 5px 9px;
+  background: #e8f0ff;
+  border-radius: 999px;
+  font-weight: 700;
+}
+.reward { color: #e55436; font-weight: 700; font-size: 18px; }
+.desc, .require, .submitted-info, .example-images-card {
+  margin-bottom: 8px;
+}
+.link-box {
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(33,48,75,0.05);
+  border: 1px solid rgba(33,48,75,0.06);
+  word-break: break-all;
+  color: var(--yx-deep);
+  line-height: 1.45;
+  font-size: 11px;
+}
+
+.link-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  margin-top: 10px;
+}
+.desc h3, .require h3, .submitted-info h3, .example-images-card h3 {
+  font-size: 14px;
+  margin-bottom: 8px;
+  color: var(--yx-deep);
+}
+.desc p, .require ul {
+  font-size: 12px;
+  line-height: 1.55;
+}
+.require ul { padding-left: 18px; }
+
+.example-images-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.example-images-head span {
+  font-size: 11px;
+  color: var(--yx-muted);
+}
+
+.example-images-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.example-image-item {
+  border: 1px solid var(--yx-line);
+  border-radius: 14px;
+  background: #fff;
+  padding: 8px;
+  cursor: pointer;
+  text-align: left;
+  box-shadow: var(--yx-shadow-soft);
+}
+
+.example-image-item img {
+  width: 100%;
+  height: 120px;
+  object-fit: cover;
+  border-radius: 10px;
+  display: block;
+}
+
+.example-image-label {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #4b5563;
+}
+
+.submitted-info .info-item {
+  margin-bottom: 10px;
+}
+.submitted-info .info-item:last-child {
+  margin-bottom: 0;
+}
+.submitted-info label {
+  display: block;
+  font-size: 11px;
+  color: var(--yx-muted);
+  margin-bottom: 4px;
+}
+.submitted-info p {
+  font-size: 12px;
+  color: var(--yx-deep);
+}
+.screenshots-tip {
+  font-size: 11px;
+  color: var(--yx-muted);
+  margin-bottom: 6px;
+}
+.screenshots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.screenshots img {
+  width: 82px;
+  height: 82px;
+  object-fit: cover;
+  border-radius: 10px;
+  cursor: pointer;
+  border: 1px solid #eee;
+}
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.history-item {
+  padding: 9px 11px;
+  border-radius: 12px;
+  background: rgba(33,48,75,0.04);
+}
+.history-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+.history-stage {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(33,48,75,0.06);
+  font-size: 11px;
+  font-weight: 800;
+  color: #38507e;
+}
+.history-time {
+  font-size: 11px;
+  color: var(--yx-muted);
+}
+.history-reason {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--yx-deep);
+}
+
+.actions {
+  position: sticky;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+  z-index: 8;
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 16px 34px rgba(20, 30, 48, 0.12);
+}
+.btn-submit {
+  width: 100%;
+  padding: 13px;
+  background: #24344d;
+  color: #fff;
+  border: none;
+  border-radius: 16px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.btn-submit:active { opacity: 0.9; }
+
+.btn-withdraw {
+  width: 100%;
+  padding: 13px;
+  background: #fff;
+  color: #666;
+  border: 1px solid var(--yx-line);
+  border-radius: 16px;
+  font-size: 14px;
+  cursor: pointer;
+  margin-top: 10px;
+}
+.btn-withdraw:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-abandon {
+  width: 100%;
+  padding: 13px;
+  background: #fff;
+  color: #f44336;
+  border: 1px solid #ffcdd2;
+  border-radius: 16px;
+  font-size: 14px;
+  cursor: pointer;
+  margin-top: 10px;
+}
+.btn-abandon:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.btn-abandon:active { background: #ffebee; }
+
+.image-preview {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 24px 16px;
+}
+.image-preview-stage {
+  width: min(78vw, 520px);
+  max-width: 520px;
+  max-height: min(60vh, 560px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  border-radius: 16px;
+  padding: 14px;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.28);
+}
+.image-preview img {
+  width: 100%;
+  max-height: min(52vh, 500px);
+  object-fit: contain;
+  border-radius: 12px;
+}
+.image-preview .close {
+  position: absolute;
+  top: calc(50% - min(30vh, 280px) - 52px);
+  right: calc(50% - min(39vw, 260px));
+  min-width: 64px;
+  height: 36px;
+  padding: 0 14px;
+  background: rgba(17, 24, 39, 0.78);
+  color: #fff;
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  z-index: 1002;
+}
+
+.step-num { font-weight: bold; color: #3f51b5; margin-right: 4px; }
+.step-title { font-weight: 500; }
+.step-desc { color: var(--yx-muted); }
+.require li { margin: 8px 0; line-height: 1.55; padding-left: 4px; }
+
+/* Toast 样式 */
+.toast {
+  position: fixed;
+  bottom: 100px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.8);
+  color: #fff;
+  padding: 10px 18px;
+  border-radius: 24px;
+  font-size: 13px;
+  z-index: 1001;
+  animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateX(-50%) translateY(20px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+</style>

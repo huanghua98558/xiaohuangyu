@@ -1,0 +1,195 @@
+/**
+ * 链接验证智能调度器
+ * 功能：
+ * 1. 每 5 分钟检查一次延迟队列
+ * 2. 智能批量（时间 + 数量 + IP 有效期三重触发）
+ * 3. 按需获取代理 IP
+ */
+
+import { Queue, Worker } from 'bullmq';
+import { redisConnection } from '../config/queue.js';
+import logger from '../../utils/logger.js'
+
+// 平台延迟配置（毫秒）
+const PLATFORM_DELAY = {
+  douyin: 15 * 60 * 1000,      // 抖音：15 分钟
+  xiaohongshu: 30 * 60 * 1000, // 小红书：30 分钟
+  kuaishou: 20 * 60 * 1000,    // 快手：20 分钟
+  default: 20 * 60 * 1000      // 默认：20 分钟
+};
+
+// 批量触发配置
+const BATCH_CONFIG = {
+  maxBatchSize: 10,            // 最大批量大小（10 个链接）
+  timeTriggerMinutes: 10,      // 时间触发：每 10 分钟执行一次
+  minBatchSize: 3,             // 最小批量大小（达到 3 个也执行）
+  ipExpiryMinutes: 30          // IP 有效期：30 分钟
+};
+
+// 链接验证队列
+const linkVerifyQueue = new Queue('link-verify-queue', {
+  connection: redisConnection,
+  defaultJobOptions: {
+    removeOnComplete: 100,
+    removeOnFail: 1000,
+    attempts: 2,
+    backoff: {
+      type: 'fixed',
+      delay: 5000
+    }
+  }
+});
+
+// 延迟队列（存储待处理的链接审核）
+const delayQueue = new Queue('link-delay-queue', {
+  connection: redisConnection,
+  defaultJobOptions: {
+    removeOnComplete: 100,
+    removeOnFail: 1000
+  }
+});
+
+// 调度器状态
+let schedulerRunning = false;
+let lastRunTime = Date.now();
+let processedCount = 0;
+
+/**
+ * 智能批量检查逻辑
+ */
+async function shouldProcessBatch() {
+  const now = Date.now();
+  const timeSinceLastRun = now - lastRunTime;
+  
+  // 获取等待中的任务数量
+  const waitingJobs = await linkVerifyQueue.getWaitingCount();
+  
+  // 触发条件 1: 达到最大批量
+  if (waitingJobs >= BATCH_CONFIG.maxBatchSize) {
+    logger.info(`🚀 触发批量：达到最大批量 (${waitingJobs}/${BATCH_CONFIG.maxBatchSize})`);
+    return true;
+  }
+  
+  // 触发条件 2: 时间到期且达到最小批量
+  if (timeSinceLastRun >= BATCH_CONFIG.timeTriggerMinutes * 60 * 1000) {
+    if (waitingJobs >= BATCH_CONFIG.minBatchSize) {
+      logger.info(`⏰ 触发批量：时间到期 (${waitingJobs}/${BATCH_CONFIG.minBatchSize})`);
+      return true;
+    } else if (waitingJobs > 0) {
+      logger.info(`⏰ 触发批量：时间到期（强制，${waitingJobs}个）`);
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+/**
+ * 处理批量链接验证
+ */
+async function processBatch() {
+  try {
+    const shouldProcess = await shouldProcessBatch();
+    if (!shouldProcess) {
+      return;
+    }
+    
+    // 获取等待中的任务
+    const waitingJobs = await linkVerifyQueue.getWaiting();
+    const batchSize = Math.min(
+      waitingJobs.length,
+      BATCH_CONFIG.maxBatchSize
+    );
+    
+    logger.info(`📦 开始处理批量链接验证，批次大小：${batchSize}`);
+    
+    // 批量处理（这里只是标记，实际由 Worker 处理）
+    // Worker 会复用浏览器和 IP
+    lastRunTime = Date.now();
+    processedCount += batchSize;
+    
+    logger.info(`✅ 批量处理完成，已处理：${processedCount}个链接`);
+    
+  } catch (error) {
+    logger.error('批量处理失败:', error);
+  }
+}
+
+/**
+ * 启动调度器
+ */
+function startScheduler() {
+  if (schedulerRunning) {
+    logger.warn('调度器已在运行中');
+    return;
+  }
+  
+  schedulerRunning = true;
+  logger.info('🚀 链接验证智能调度器已启动');
+  logger.info(`配置：最大批量=${BATCH_CONFIG.maxBatchSize}, ` +
+              `时间触发=${BATCH_CONFIG.timeTriggerMinutes}分钟，` +
+              `最小批量=${BATCH_CONFIG.minBatchSize}`);
+  
+  // 每 1 分钟检查一次
+  const checkInterval = setInterval(async () => {
+    try {
+      await processBatch();
+    } catch (error) {
+      logger.error('调度器检查失败:', error);
+    }
+  }, 60 * 1000);
+  
+  // 优雅关闭
+  process.on('SIGINT', () => {
+    clearInterval(checkInterval);
+    schedulerRunning = false;
+    logger.info('调度器已停止');
+  });
+  
+  process.on('SIGTERM', () => {
+    clearInterval(checkInterval);
+    schedulerRunning = false;
+    logger.info('调度器已停止');
+  });
+}
+
+// 消费延迟队列，将到期的任务加入链接验证队列
+const delayWorker = new Worker('link-delay-queue', async (job) => {
+  const { claimId, links, platform, taskContext } = job.data;
+  
+  logger.info(`⏱️ 延迟任务到期：claimId=${claimId}, platform=${platform}`);
+  
+  // 添加到链接验证队列
+  await linkVerifyQueue.add('link-verify', {
+    claimId,
+    links,
+    platform,
+    taskContext,
+    scheduledAt: Date.now()
+  }, {
+    priority: 10  // 到期任务优先级较高
+  });
+  
+}, {
+  connection: redisConnection,
+  concurrency: 5,
+  limiter: {
+    max: 10,
+    duration: 1000
+  }
+});
+
+delayWorker.on('completed', (job) => {
+  logger.info(`✅ 延迟任务处理完成：${job.id}`);
+});
+
+delayWorker.on('failed', (job, err) => {
+  logger.error(`❌ 延迟任务失败：${job.id}`, err);
+});
+
+// 启动调度器
+startScheduler();
+
+logger.info('✅ Link Verify Scheduler 已启动');
+
+export { linkVerifyQueue, delayQueue, PLATFORM_DELAY };

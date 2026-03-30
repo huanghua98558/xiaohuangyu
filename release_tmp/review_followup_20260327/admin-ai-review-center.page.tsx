@@ -1,0 +1,1232 @@
+'use client'
+
+import { useState, useEffect, useMemo } from 'react'
+import { usePathname } from 'next/navigation'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Textarea } from '@/components/ui/textarea'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  CheckCircle, XCircle, Bot, RefreshCw, Scan, Globe, ClipboardCheck,
+  ChevronLeft, ChevronRight, Eye, Clock, TrendingUp,
+  FileText, ExternalLink, Loader2, AlertCircle, Zap
+} from 'lucide-react'
+import { toast } from 'sonner'
+import { cn } from '@/lib/utils'
+import { useAdminWebSocket } from '@/hooks/useAdminWebSocket'
+
+// 类型定义
+interface Task { id: number; title: string; platform: string; action: string }
+interface UserInfo { id: number; username: string }
+interface ReviewItem {
+  id: number
+  user_id: number
+  task_id: number
+  screenshots: string
+  status: string
+  ai_review_status?: string
+  ai_confidence?: number
+  ai_reason?: string
+  image_review_status?: string
+  image_review_reason?: string
+  link_review_status?: string
+  link_review_reason?: string
+  reject_count?: number
+  review_history?: Array<{ stage?: string; action: string; reason?: string; details?: any; data?: any; timestamp: string }>
+  claimed_at: string
+  tasks?: Task
+  users?: UserInfo
+}
+interface LogItem {
+  id: number
+  user_id: number
+  task_id: number
+  screenshots: string
+  status: string
+  ai_review_status: string
+  ai_confidence?: number
+  ai_reason?: string
+  review_note?: string
+  image_review_status?: string
+  image_review_reason?: string
+  link_review_status?: string
+  link_review_reason?: string
+  reject_count?: number
+  review_history?: Array<{ stage?: string; action: string; reason?: string; details?: any; data?: any; timestamp: string }>
+  claimed_at: string
+  submitted_at?: string
+  reviewed_at?: string
+  tasks?: Task
+  users?: UserInfo
+}
+interface Stats {
+  total: number
+  pending: number
+  aiApproved: number
+  aiRejected: number
+  manual: number
+  autoRate: number
+  imageReviewing?: number
+  linkReviewing?: number
+  pendingLink?: number
+  rejected?: number
+  approved?: number
+}
+interface ServiceStatus {
+  ocr: { healthy: boolean; url: string }
+  yolo: { healthy: boolean; url: string }
+  browser: { healthy: boolean; url: string }
+}
+interface UsageStats {
+  day: string
+  summary: {
+    requests: number
+    promptTokens: number
+    completionTokens: number
+    totalTokens: number
+    failures: number
+  }
+  stages?: Array<{
+    name: string
+    requests?: number
+    tokens?: number
+  }>
+}
+
+// 常量
+const PLATFORM_COLORS: Record<string, string> = {
+  douyin: 'text-pink-500',
+  xiaohongshu: 'text-red-500',
+  kuaishou: 'text-orange-500',
+  bilibili: 'text-blue-500',
+  shipinhao: 'text-green-500',
+}
+
+const isApiOk = (code?: number) => code === 0 || code === 200
+
+function tryParseJson<T = any>(value?: string | T | null): T | null {
+  if (!value) return null
+  if (typeof value !== 'string') return value as T
+  try {
+    return JSON.parse(value) as T
+  } catch {
+    return null
+  }
+}
+
+function formatImageReviewSource(source?: string | null) {
+  switch (source) {
+    case 'ai_review':
+      return 'AI复审'
+    case 'bailian_ai_fallback':
+      return 'AI降级复审'
+    case 'ocr_yolo':
+    default:
+      return 'OCR + YOLO'
+  }
+}
+
+function formatHistoryAction(entry: any) {
+  if (entry?.stage === 'manual_review' && entry?.action === 'queued') return '已加入人工检查'
+  if (entry?.stage === 'manual_review' && entry?.action === 'approved') return '人工纠正通过'
+  if (entry?.stage === 'manual_review' && entry?.action === 'rejected') return '人工确认拒绝'
+  if (entry?.stage === 'image_review' && entry?.action === 'approved') return '图片审核通过'
+  if (entry?.stage === 'image_review' && entry?.action === 'rejected') return '图片审核拒绝'
+  if (entry?.stage === 'image_review' && entry?.action === 'manual') return '图片转人工'
+  if (entry?.stage === 'link_review' && entry?.action === 'approved') return '连接审核通过'
+  if (entry?.stage === 'link_review' && entry?.action === 'rejected') return '连接审核拒绝'
+  if (entry?.stage === 'link_review' && entry?.action === 'manual') return '连接转人工'
+  if (entry?.stage === 'link_review' && entry?.action === 'queued') return '已进入连接队列'
+  if (entry?.stage === 'claim_flow' && entry?.action === 'returned') return '任务退回用户'
+  if (entry?.stage === 'claim_flow' && entry?.action === 'released') return '任务自动释放'
+  return entry?.action || '状态更新'
+}
+
+function buildHistoryHighlights(entry: any) {
+  const details = entry?.details || entry?.data || {}
+  const lines: string[] = []
+
+  if (details.source) {
+    lines.push(`来源: ${formatImageReviewSource(details.source)}`)
+  }
+  if (details.commenterNickname) {
+    lines.push(`评论人: ${details.commenterNickname}`)
+  }
+  if (details.comment) {
+    lines.push(`评论内容: ${details.comment}`)
+  }
+  if (details.authorName) {
+    lines.push(`达人: ${details.authorName}`)
+  }
+  if (details.commentResult?.matches?.length) {
+    lines.push(`匹配评论: ${details.commentResult.matches[0]?.extracted || '已匹配'}`)
+  }
+  if (details.nicknameResult?.submittedNickname || details.nicknameResult?.matchedNickname) {
+    lines.push(`昵称比对: ${details.nicknameResult?.submittedNickname || '没有'} / ${details.nicknameResult?.matchedNickname || '没有'}`)
+  }
+  if (details.authorResult?.reason) {
+    lines.push(details.authorResult.reason)
+  }
+  if (details.finalCommentJudgement?.reason) {
+    lines.push(`最终判定: ${details.finalCommentJudgement.reason}`)
+  }
+
+  return lines
+}
+
+
+// 多状态显示组件 - 同时显示图片审核和链接验证状态
+function MultiStatusBadge({ item }: { item: ReviewItem | LogItem }) {
+  const imageStatus = item.image_review_status;
+  const linkStatus = item.link_review_status;
+  
+  const getImageBadge = () => {
+    switch (imageStatus) {
+      case 'approved':
+        return <Badge variant="outline" className="text-[10px] h-5 gap-1 bg-green-500/10 text-green-600 border-green-500/30"><CheckCircle className="w-3 h-3" />图片通过</Badge>;
+      case 'rejected':
+        return <Badge variant="outline" className="text-[10px] h-5 gap-1 bg-red-500/10 text-red-600 border-red-500/30"><XCircle className="w-3 h-3" />图片未过</Badge>;
+      case 'pending':
+        return <Badge variant="outline" className="text-[10px] h-5 gap-1 bg-yellow-500/10 text-yellow-600 border-yellow-500/30"><Loader2 className="w-3 h-3 animate-spin" />图片审核中</Badge>;
+      default:
+        return null;
+    }
+  };
+  
+  const getLinkBadge = () => {
+    switch (linkStatus) {
+      case 'approved':
+        return <Badge variant="outline" className="text-[10px] h-5 gap-1 bg-green-500/10 text-green-600 border-green-500/30"><CheckCircle className="w-3 h-3" />链接通过</Badge>;
+      case 'rejected':
+        return <Badge variant="outline" className="text-[10px] h-5 gap-1 bg-red-500/10 text-red-600 border-red-500/30"><XCircle className="w-3 h-3" />链接未过</Badge>;
+      case 'pending':
+        return <Badge variant="outline" className="text-[10px] h-5 gap-1 bg-purple-500/10 text-purple-600 border-purple-500/30"><Clock className="w-3 h-3" />待连接审核</Badge>;
+      case 'reviewing':
+        return <Badge variant="outline" className="text-[10px] h-5 gap-1 bg-purple-500/10 text-purple-600 border-purple-500/30"><Loader2 className="w-3 h-3 animate-spin" />链接审核中</Badge>;
+      case 'manual':
+        return <Badge variant="outline" className="text-[10px] h-5 gap-1 bg-orange-500/10 text-orange-600 border-orange-500/30"><ClipboardCheck className="w-3 h-3" />人工复审</Badge>;
+      default:
+        return null;
+    }
+  };
+  
+  const imageBadge = getImageBadge();
+  const linkBadge = getLinkBadge();
+  
+  if (!imageBadge && !linkBadge) {
+    // 兜底：使用原有状态显示
+    const statusKey = item.status || 'pending';
+    const config = STATUS_CONFIG[statusKey] || STATUS_CONFIG['pending'];
+    return (
+      <Badge variant="outline" className={cn("text-[10px] h-5 gap-1", config.color)}>
+        {config.icon}
+        {config.label}
+      </Badge>
+    );
+  }
+  
+  return (
+    <div className="flex flex-wrap gap-1">
+      {imageBadge}
+      {linkBadge}
+    </div>
+  );
+}
+
+
+// 审核历史记录组件
+function ReviewHistoryPanel({ history, rejectCount }: { history?: Array<{ stage?: string; action: string; reason?: string; details?: any; data?: any; timestamp: string }>; rejectCount?: number }) {
+  if (!history || history.length === 0) return null;
+  
+  const getActionLabel = (action: string) => {
+    switch (action) {
+      case 'submitted': return '用户提交';
+      case 'resubmitted': return '重新提交';
+      case 'withdrawn': return '撤回提交';
+      case 'queued': return '进入连接队列';
+      case 'started': return '审核开始';
+      case 'approved': return '审核通过';
+      case 'rejected': return '审核拒绝';
+      case 'manual': return '转人工复审';
+      case 'returned': return '退回用户';
+      case 'released': return '任务释放';
+      default: return action;
+    }
+  };
+  
+  const getActionColor = (action: string) => {
+    if (action.includes('rejected')) return 'text-red-600';
+    if (action.includes('approved')) return 'text-green-600';
+    return 'text-gray-600';
+  };
+  
+  return (
+    <div className="space-y-2">
+      {rejectCount !== undefined && (
+        <div className="flex items-center gap-2 text-sm">
+          <AlertCircle className="w-4 h-4 text-orange-500" />
+          <span className="text-orange-600 font-medium">已拒绝 {rejectCount} 次</span>
+          <span className="text-muted-foreground">(3次后自动释放)</span>
+        </div>
+      )}
+      <div className="text-sm font-medium text-muted-foreground">审核历史</div>
+      <div className="space-y-2 max-h-40 overflow-y-auto">
+        {history.map((h, i) => (
+          <div key={i} className="flex items-start gap-2 p-2 bg-muted/50 rounded text-xs">
+            <div className="flex-1">
+              <div className={cn("font-medium", getActionColor(h.action))}>
+                {h.stage ? `${h.stage} · ` : ''}{getActionLabel(h.action)}
+              </div>
+              <div className="text-muted-foreground mt-1">
+                {h.reason || h.details?.reason || h.data?.reason || (typeof h.data?.details === 'string' ? h.data.details : '')}
+              </div>
+            </div>
+            <div className="text-muted-foreground shrink-0">
+              {new Date(h.timestamp).toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const STATUS_CONFIG: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
+  'pending': { label: '待处理', color: 'bg-gray-500/10 text-gray-600 border-gray-500/30', icon: <Clock className="w-3 h-3" /> },
+  'submitted': { label: '已提交', color: 'bg-gray-500/10 text-gray-600 border-gray-500/30', icon: <Clock className="w-3 h-3" /> },
+  'image_reviewing': { label: '图片审核中', color: 'bg-yellow-500/10 text-yellow-600 border-yellow-500/30', icon: <Scan className="w-3 h-3" /> },
+  'pending_link': { label: '待连接审核', color: 'bg-purple-500/10 text-purple-600 border-purple-500/30', icon: <Globe className="w-3 h-3" /> },
+  'link_reviewing': { label: '链接验证中', color: 'bg-purple-500/10 text-purple-600 border-purple-500/30', icon: <Globe className="w-3 h-3" /> },
+  'pending_manual': { label: '人工', color: 'bg-orange-500/10 text-orange-600 border-orange-500/30', icon: <ClipboardCheck className="w-3 h-3" /> },
+  'manual': { label: '人工', color: 'bg-orange-500/10 text-orange-600 border-orange-500/30', icon: <ClipboardCheck className="w-3 h-3" /> },
+  'approved': { label: '已通过', color: 'bg-green-500/10 text-green-600 border-green-500/30', icon: <CheckCircle className="w-3 h-3" /> },
+  'doing': { label: '已退回', color: 'bg-red-500/10 text-red-600 border-red-500/30', icon: <AlertCircle className="w-3 h-3" /> },
+  'rejected': { label: '已拒绝', color: 'bg-red-500/10 text-red-600 border-red-500/30', icon: <XCircle className="w-3 h-3" /> },
+  'image_rejected': { label: '图片未过', color: 'bg-red-500/10 text-red-600 border-red-500/30', icon: <XCircle className="w-3 h-3" /> },
+  'link_rejected': { label: '链接未过', color: 'bg-red-500/10 text-red-600 border-red-500/30', icon: <XCircle className="w-3 h-3" /> },
+  'image_approved': { label: '图片已过', color: 'bg-green-500/10 text-green-600 border-green-500/30', icon: <CheckCircle className="w-3 h-3" /> },
+  'link_approved': { label: '链接已过', color: 'bg-green-500/10 text-green-600 border-green-500/30', icon: <CheckCircle className="w-3 h-3" /> },
+  'done': { label: '已完成', color: 'bg-green-500/10 text-green-600 border-green-500/30', icon: <CheckCircle className="w-3 h-3" /> },
+  'released': { label: '已释放', color: 'bg-gray-500/10 text-gray-600 border-gray-500/30', icon: <AlertCircle className="w-3 h-3" /> },
+}
+
+
+
+// 审核进度组件
+function ReviewProgressIndicator({ item }: { item: ReviewItem }) {
+  const status = item.status
+  
+  // 判断当前阶段
+  const getImageStatus = () => {
+    if (status === 'image_reviewing') return 'processing'
+    if (status === 'image_rejected') return 'rejected'
+    // 图片审核通过的状态：image_approved 或 进入链接验证阶段
+    if (['image_approved', 'link_reviewing', 'link_rejected', 'link_approved', 'approved', 'done'].includes(status)) return 'approved'
+    return 'pending'
+  }
+  
+  const getLinkStatus = () => {
+    if (status === 'link_reviewing') return 'processing'
+    if (status === 'link_rejected') return 'rejected'
+    if (['link_approved', 'approved', 'done'].includes(status)) return 'approved'
+    if (status === 'image_rejected') return 'skipped'
+    return 'pending'
+  }
+  
+  const imageStatus = getImageStatus()
+  const linkStatus = getLinkStatus()
+  
+  const getStatusIcon = (s: string) => {
+    switch (s) {
+      case 'approved': return <CheckCircle className="w-4 h-4 text-green-500" />
+      case 'rejected': return <XCircle className="w-4 h-4 text-red-500" />
+      case 'processing': return <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />
+      case 'skipped': return <span className="text-gray-400 text-xs">跳过</span>
+      default: return <Clock className="w-4 h-4 text-gray-400" />
+    }
+  }
+  
+  const getStatusText = (s: string, type: 'image' | 'link') => {
+    switch (s) {
+      case 'approved': return type === 'image' ? '图片审核通过' : '链接验证通过'
+      case 'rejected': return type === 'image' ? '图片审核未通过' : '链接验证未通过'
+      case 'processing': return type === 'image' ? '正在审核图片...' : '正在验证链接...'
+      case 'skipped': return '已跳过'
+      default: return '等待中'
+    }
+  }
+  
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <div className={cn(
+        "flex items-center gap-1 px-2 py-1 rounded-full",
+        imageStatus === 'processing' && "bg-blue-500/10",
+        imageStatus === 'approved' && "bg-green-500/10",
+        imageStatus === 'rejected' && "bg-red-500/10"
+      )}>
+        {getStatusIcon(imageStatus)}
+        <span className={cn(
+          imageStatus === 'processing' && "text-blue-600 font-medium",
+          imageStatus === 'approved' && "text-green-600",
+          imageStatus === 'rejected' && "text-red-600"
+        )}>
+          {getStatusText(imageStatus, 'image')}
+        </span>
+      </div>
+      <div className="text-gray-300">→</div>
+      <div className={cn(
+        "flex items-center gap-1 px-2 py-1 rounded-full",
+        linkStatus === 'processing' && "bg-purple-500/10",
+        linkStatus === 'approved' && "bg-green-500/10",
+        linkStatus === 'rejected' && "bg-red-500/10"
+      )}>
+        {getStatusIcon(linkStatus)}
+        <span className={cn(
+          linkStatus === 'processing' && "text-purple-600 font-medium",
+          linkStatus === 'approved' && "text-green-600",
+          linkStatus === 'rejected' && "text-red-600"
+        )}>
+          {getStatusText(linkStatus, 'link')}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+export default function AIReviewCenterPage() {
+  const [loading, setLoading] = useState(true)
+  const [processing, setProcessing] = useState(false)
+  const [activeTab, setActiveTab] = useState('processing')
+  const [stats, setStats] = useState<Stats>({ total: 0, pending: 0, aiApproved: 0, aiRejected: 0, manual: 0, autoRate: 0 })
+  const [serviceStatus, setServiceStatus] = useState<ServiceStatus>({
+    ocr: { healthy: false, url: '' },
+    yolo: { healthy: false, url: '' },
+    browser: { healthy: false, url: '' }
+  })
+  const [usageStats, setUsageStats] = useState<UsageStats | null>(null)
+  const [imageQueue, setImageQueue] = useState<ReviewItem[]>([])
+  const [linkQueue, setLinkQueue] = useState<ReviewItem[]>([])
+  const [manualQueue, setManualQueue] = useState<ReviewItem[]>([])
+  const [rejectedQueue, setRejectedQueue] = useState<ReviewItem[]>([])
+  const [approvedQueue, setApprovedQueue] = useState<ReviewItem[]>([])
+  const [logsQueue, setLogsQueue] = useState<LogItem[]>([])
+  const [pendingLinkQueue, setPendingLinkQueue] = useState<ReviewItem[]>([])
+  const [selectedItem, setSelectedItem] = useState<ReviewItem | null>(null)
+  const [showDetail, setShowDetail] = useState(false)
+  const [showImagePreview, setShowImagePreview] = useState(false)
+  const [previewImages, setPreviewImages] = useState<string[]>([])
+  const [previewIndex, setPreviewIndex] = useState(0)
+  const [reviewNote, setReviewNote] = useState('')
+
+  const getHeaders = () => ({
+    'Authorization': `Bearer ${localStorage.getItem('admin_token')}`,
+    'Content-Type': 'application/json'
+  })
+
+  const getRelativeTime = (dateStr: string) => {
+    if (!dateStr) return '-'
+    const diff = Date.now() - new Date(dateStr).getTime()
+    const mins = Math.floor(diff / 60000)
+    if (mins < 60) return `${mins}分钟前`
+    const hours = Math.floor(mins / 60)
+    if (hours < 24) return `${hours}小时前`
+    return `${Math.floor(hours / 24)}天前`
+  }
+
+
+  // 合并正在处理的队列（包括图片审核中、链接验证中、待链接验证）
+  const processingQueue = useMemo(() => {
+    const allProcessing = [...imageQueue, ...linkQueue, ...pendingLinkQueue]
+    const uniqueMap = new Map<number, ReviewItem>()
+    allProcessing.forEach(item => {
+      if (!uniqueMap.has(item.id)) {
+        uniqueMap.set(item.id, item)
+      }
+    })
+    return Array.from(uniqueMap.values()).sort((a, b) => b.id - a.id)
+  }, [imageQueue, linkQueue, pendingLinkQueue])
+
+  const semanticUsage = useMemo(() => {
+    return usageStats?.stages?.find((stage) => stage.name === 'semantic_analysis') || null
+  }, [usageStats])
+
+  // Tab配置
+  const tabs = [
+    { key: 'processing', label: '正在处理', count: processingQueue.length, icon: Zap },
+    { key: 'image', label: '图片审核', count: stats.imageReviewing || imageQueue.length, icon: Scan },
+    { key: 'link', label: '链接验证', count: (stats.linkReviewing || 0) + (stats.pendingLink || 0), icon: Globe },
+    { key: 'manual', label: '人工', count: stats.manual || manualQueue.length, icon: ClipboardCheck },
+    { key: 'approved', label: '已通过', count: stats.approved || 0, icon: CheckCircle },
+    { key: 'rejected', label: '已拒绝', count: stats.rejected || 0, icon: XCircle },
+    { key: 'logs', label: '处理记录', count: logsQueue.length, icon: FileText },
+  ]
+
+  // 获取当前列表
+  const getCurrentList = () => {
+    switch (activeTab) {
+      case 'processing': return processingQueue
+      case 'image': return imageQueue
+      case 'link': return [...pendingLinkQueue, ...linkQueue]
+      case 'manual': return manualQueue
+      case 'approved': return approvedQueue
+      case 'rejected': return rejectedQueue
+      case 'logs': return logsQueue
+      default: return []
+    }
+  }
+
+  // 加载数据
+  const loadAllData = async () => {
+    setLoading(true)
+    try {
+      const headers = getHeaders()
+      const [statsRes, imageRes, linkRes, manualRes, approvedRes, rejectedRes, logsRes, pendingLinkRes, usageStatsRes] = await Promise.all([
+        fetch('/api/ai/reviewer/stats', { headers }),
+        fetch('/api/ai/reviewer/queue?status=image_reviewing', { headers }),
+        fetch('/api/ai/reviewer/queue?status=link_reviewing', { headers }),
+        fetch('/api/ai/reviewer/queue?status=manual', { headers }),
+        fetch('/api/ai/reviewer/queue?status=approved', { headers }),
+        fetch('/api/ai/reviewer/queue?status=rejected', { headers }),
+        fetch('/api/ai/reviewer/logs', { headers }),
+        fetch('/api/ai/reviewer/queue?status=pending_link', { headers }),
+        fetch('/admin/api/ai/admin/usage-stats', { headers })
+      ])
+
+      const [statsData, imageData, linkData, manualData, approvedData, rejectedData, logsData, pendingLinkData, usageStatsData] = await Promise.all([
+        statsRes.json(),
+        imageRes.json(),
+        linkRes.json(),
+        manualRes.json(),
+        approvedRes.json(),
+        rejectedRes.json(),
+        logsRes.json(),
+        pendingLinkRes.json(),
+        usageStatsRes.json()
+      ])
+
+      if (isApiOk(statsData.code)) setStats(statsData.data)
+      if (isApiOk(imageData.code)) setImageQueue(imageData.data.list || [])
+      if (isApiOk(linkData.code)) setLinkQueue(linkData.data.list || [])
+      if (isApiOk(manualData.code)) setManualQueue(manualData.data.list || [])
+      if (isApiOk(approvedData.code)) setApprovedQueue(approvedData.data.list || [])
+      if (isApiOk(rejectedData.code)) setRejectedQueue(rejectedData.data.list || [])
+      if (isApiOk(logsData.code)) setLogsQueue(logsData.data.list || [])
+      if (isApiOk(pendingLinkData.code)) setPendingLinkQueue(pendingLinkData.data.list || [])
+      if (isApiOk(usageStatsData.code)) setUsageStats(usageStatsData.data || null)
+    } catch (e) {
+      console.error('加载数据失败:', e)
+      toast.error('加载数据失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // 加载服务状态
+  const loadServiceStatus = async () => {
+    try {
+      const res = await fetch('/api/ai/reviewer/services', { headers: getHeaders() })
+      const data = await res.json()
+      if (isApiOk(data.code)) setServiceStatus(data.data)
+    } catch (e) {
+      console.error('加载服务状态失败:', e)
+    }
+  }
+
+  // 触发处理
+  const triggerProcess = async () => {
+    setProcessing(true)
+    try {
+      const res = await fetch('/api/ai/reviewer/process', {
+        method: 'POST',
+        headers: getHeaders()
+      })
+      const data = await res.json()
+      if (isApiOk(data.code)) {
+        toast.success('处理完成')
+        loadAllData()
+      } else {
+        toast.error(data.message || '处理失败')
+      }
+    } catch (e) {
+      toast.error('处理失败')
+    } finally {
+      setProcessing(false)
+    }
+  }
+
+  // 人工审核
+  const handleManualReview = async (claimId: number, action: 'approve' | 'reject', note?: string) => {
+    setProcessing(true)
+    try {
+      const res = await fetch(`/api/ai/reviewer/claim/${claimId}/action`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ action, reason: note })
+      })
+      const data = await res.json()
+      if (isApiOk(data.code)) {
+        toast.success(action === 'approve' ? '已通过' : '已拒绝')
+        setShowDetail(false)
+        loadAllData()
+      } else {
+        toast.error(data.message || '操作失败')
+      }
+    } catch (e) {
+      toast.error('操作失败')
+    } finally {
+      setProcessing(false)
+    }
+  }
+
+  const parseScreenshots = (screenshots: string): string[] => {
+    if (!screenshots) return []
+    try {
+      const parsed = JSON.parse(screenshots)
+      return Array.isArray(parsed)
+        ? parsed.map((item: any) => typeof item === 'string' ? item : item?.url).filter(Boolean)
+        : [parsed]
+    } catch {
+      return screenshots.split(',').filter(Boolean)
+    }
+  }
+
+  const getStatusBadge = (item: ReviewItem | LogItem) => {
+    const statusKey = item.status || 'pending'
+    const config = STATUS_CONFIG[statusKey] || STATUS_CONFIG['pending']
+    return (
+      <Badge variant="outline" className={cn("text-[10px] h-5 gap-1", config.color)}>
+        {config.icon}
+        {config.label}
+      </Badge>
+    )
+  }
+
+  const openImagePreview = (images: string[], index: number = 0) => {
+    setPreviewImages(images)
+    setPreviewIndex(index)
+    setShowImagePreview(true)
+  }
+
+  // WebSocket real-time updates
+  const { connected: wsConnected } = useAdminWebSocket(
+    ['ai_review_update', 'service_health', 'system_alert'],
+    (data: any) => {
+      if (data?.event === 'image_review_complete' || data?.event === 'link_verify_complete') {
+        loadAllData()
+      }
+      if (data?.ocr || data?.yolo || data?.browser) {
+        setServiceStatus({
+          ocr: { healthy: Array.isArray(data.ocr) ? data.ocr.some((s: any) => s.healthy) : false, url: '' },
+          yolo: { healthy: data.yolo?.healthy || false, url: '' },
+          browser: { healthy: Array.isArray(data.browser) ? data.browser.some((s: any) => s.healthy) : false, url: '' }
+        })
+      }
+    }
+  )
+
+  useEffect(() => {
+    loadAllData()
+    loadServiceStatus()
+  }, [])
+
+  // 路由变化时重新获取服务状态（从其他页面切换过来）
+  const pathname = usePathname()
+  useEffect(() => {
+    if (pathname) {
+      loadServiceStatus()
+    }
+  }, [pathname])
+
+  // 页面可见性变化时重新获取服务状态（标签页切换）
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        loadServiceStatus()
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [])
+
+  // 渲染列表项
+  const renderListItem = (item: ReviewItem, showProgress: boolean = false) => {
+    const screenshots = parseScreenshots(item.screenshots)
+    return (
+      <div
+        key={item.id}
+        className="group flex items-center gap-3 px-4 py-3 border-b border-border/50 cursor-pointer hover:bg-accent/30 transition-colors"
+        onClick={() => { setSelectedItem(item); setShowDetail(true) }}
+      >
+        <span className="font-mono text-sm w-14 text-muted-foreground">#{item.id}</span>
+        <div className="flex gap-1.5">
+          {screenshots.slice(0, 3).map((url, idx) => (
+            <img
+              key={idx}
+              src={url}
+              alt=""
+              className="w-10 h-10 rounded object-cover ring-1 ring-border/50 hover:ring-primary cursor-pointer"
+              onClick={(e) => { e.stopPropagation(); openImagePreview(screenshots, idx) }}
+            />
+          ))}
+          {screenshots.length === 0 && (
+            <div className="w-10 h-10 rounded bg-muted flex items-center justify-center">
+              <Eye className="w-4 h-4 text-muted-foreground" />
+            </div>
+          )}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-sm truncate">{item.tasks?.title || `任务#${item.task_id}`}</span>
+            {getStatusBadge(item)}
+          </div>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground mt-0.5">
+            <span>@{item.users?.username || '未知'}</span>
+            <span className={cn(PLATFORM_COLORS[item.tasks?.platform || ''])}>
+              {item.tasks?.platform || ''}
+            </span>
+          </div>
+        </div>
+        <div className="text-xs text-muted-foreground">{getRelativeTime(item.claimed_at)}</div>
+        {(item.status === 'pending_manual' || item.ai_review_status === 'manual' || item.link_review_status === 'manual') && (
+          <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+            <Button size="sm" variant="default" className="h-7 text-xs" onClick={(e) => { e.stopPropagation(); handleManualReview(item.id, 'approve') }}>
+              <CheckCircle className="w-3 h-3 mr-1" />通过
+            </Button>
+            <Button size="sm" variant="destructive" className="h-7 text-xs" onClick={(e) => { e.stopPropagation(); handleManualReview(item.id, 'reject') }}>
+              <XCircle className="w-3 h-3 mr-1" />拒绝
+            </Button>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // 渲染日志项
+  const renderLogItem = (item: LogItem) => {
+    const screenshots = parseScreenshots(item.screenshots)
+    return (
+      <div
+        key={item.id}
+        className="group flex items-center gap-3 px-4 py-3 border-b border-border/50 cursor-pointer hover:bg-accent/30 transition-colors"
+        onClick={() => { setSelectedItem(item as any); setShowDetail(true) }}
+      >
+        <span className="font-mono text-sm w-14 text-muted-foreground">#{item.id}</span>
+        <div className="flex gap-1.5">
+          {screenshots.slice(0, 3).map((url, idx) => (
+            <img key={idx} src={url} alt="" className="w-6 h-6 rounded object-cover" onClick={e => { e.stopPropagation(); openImagePreview(screenshots, idx) }} />
+          ))}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-xs truncate max-w-[120px]">{item.tasks?.title || `#${item.task_id}`}</span>
+            <MultiStatusBadge item={item} />
+          </div>
+          {item.reject_count !== undefined && item.reject_count > 0 && (
+            <div className="text-[10px] text-orange-600 mt-0.5">
+              已拒绝 {item.reject_count} 次
+            </div>
+          )}
+        </div>
+        <div className="text-[10px] text-muted-foreground">{getRelativeTime(item.reviewed_at || item.claimed_at)}</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="h-full flex flex-col bg-background">
+      {/* 顶部标题栏 */}
+      <div className="flex items-center justify-between px-6 py-4 border-b shrink-0">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center">
+            <Bot className="w-5 h-5 text-primary-foreground" />
+          </div>
+          <div>
+            <h1 className="text-xl font-bold">AI 审核中心</h1>
+            <p className="text-xs text-muted-foreground">图片审核 → 链接验证 → 完成</p>
+          </div>
+          <div className="rounded-xl border bg-muted/40 px-3 py-2 text-xs min-w-[260px]">
+            <div className="flex items-center gap-2 font-medium">
+              <Zap className="w-3.5 h-3.5 text-amber-500" />
+              百炼AI消耗实时统计
+            </div>
+            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground">
+              <span>请求 {usageStats?.summary.requests || 0}</span>
+              <span>评论检查 {semanticUsage?.tokens || 0}</span>
+              <span>Prompt {usageStats?.summary.promptTokens || 0}</span>
+              <span>Completion {usageStats?.summary.completionTokens || 0}</span>
+              <span>Total {usageStats?.summary.totalTokens || 0}</span>
+              <span>失败 {usageStats?.summary.failures || 0}</span>
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" className="gap-2" onClick={loadAllData} disabled={loading}>
+            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+            刷新
+          </Button>
+          <div className={cn("flex items-center gap-1.5 text-xs px-2 py-1 rounded-full", wsConnected ? "bg-green-500/10 text-green-600" : "bg-red-500/10 text-red-500")}>
+            <span className={cn("w-1.5 h-1.5 rounded-full", wsConnected ? "bg-green-500 animate-pulse" : "bg-red-500")} />
+            {wsConnected ? "实时" : "离线"}
+          </div>
+          <Button variant="default" size="sm" className="gap-2" onClick={triggerProcess}>
+            <Bot className="w-4 h-4" />
+            触发处理
+          </Button>
+        </div>
+      </div>
+
+      {/* 统计卡片 */}
+      <div className="grid grid-cols-6 gap-3 p-4 shrink-0">
+        <StatCard label="图片审核中" value={stats.imageReviewing || 0} icon={Scan} color="from-yellow-500 to-orange-500" subtitle="OCR + YOLO" />
+        <StatCard label="链接验证中" value={stats.linkReviewing || 0} icon={Globe} color="from-purple-500 to-violet-500" subtitle="验证视频/评论" />
+        <StatCard label="人工" value={stats.manual || 0} icon={ClipboardCheck} color="from-orange-500 to-amber-500" subtitle="可人工介入检查" />
+        <StatCard label="已通过" value={stats.approved || stats.aiApproved || 0} icon={CheckCircle} color="from-emerald-500 to-green-500" subtitle="累计通过" />
+        <StatCard label="已拒绝" value={stats.rejected || 0} icon={XCircle} color="from-red-500 to-rose-500" subtitle="累计拒绝" />
+        <StatCard label="自动化率" value={`${stats.autoRate || 0}%`} icon={TrendingUp} color="from-cyan-500 to-blue-500" subtitle="效率指标" />
+      </div>
+
+      {/* 服务状态 */}
+      <div className="flex items-center gap-4 px-4 pb-3 shrink-0">
+        <span className="text-xs text-muted-foreground">服务状态:</span>
+        <div className="flex items-center gap-3">
+          <ServiceIndicator name="OCR" healthy={serviceStatus.ocr.healthy} port={serviceStatus.ocr.url} />
+          <ServiceIndicator name="YOLO" healthy={serviceStatus.yolo.healthy} port={serviceStatus.yolo.url} />
+          <ServiceIndicator name="链接验证" healthy={serviceStatus.browser.healthy} port={serviceStatus.browser.url} />
+        </div>
+      </div>
+
+      {/* Tab 导航 */}
+      <div className="flex border-b shrink-0">
+        {tabs.map(tab => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
+            className={cn(
+              'flex items-center gap-2 px-4 py-2.5 text-sm font-medium transition-colors relative',
+              activeTab === tab.key
+                ? 'text-primary border-b-2 border-primary'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+          >
+            <tab.icon className="w-4 h-4" />
+            {tab.label}
+            {tab.count > 0 && (
+              <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-xs">
+                {tab.count}
+              </Badge>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* 列表内容 */}
+      <div className="flex-1 min-h-0 overflow-auto border-t">
+        {loading ? (
+          <div className="p-4 space-y-3">
+            {[...Array(5)].map((_, i) => <Skeleton key={i} className="h-16 w-full" />)}
+          </div>
+        ) : activeTab === 'logs' ? (
+          logsQueue.length === 0 ? (
+            <EmptyState icon={FileText} message="暂无审核记录" />
+          ) : (
+            <div>{logsQueue.map(renderLogItem)}</div>
+          )
+        ) : activeTab === 'processing' ? (
+          processingQueue.length === 0 ? (
+            <EmptyState icon={Zap} message="暂无正在处理的任务" />
+          ) : (
+            <div>{processingQueue.map(item => renderListItem(item, true))}</div>
+          )
+        ) : getCurrentList().length === 0 ? (
+          <EmptyState icon={CheckCircle} message={activeTab === 'manual' ? '暂无待审核项' : '队列为空'} />
+        ) : (
+          <div>{(getCurrentList() as ReviewItem[]).map(item => renderListItem(item, false))}</div>
+        )}
+      </div>
+
+      {/* 图片预览弹窗 */}
+      <Dialog open={showImagePreview} onOpenChange={setShowImagePreview}>
+        <DialogContent className="max-w-4xl p-0 bg-black/95 border-none">
+          <div className="relative flex items-center justify-center min-h-[300px]">
+            {previewImages[previewIndex] && (
+              <img src={previewImages[previewIndex]} alt="" className="max-w-full max-h-[70vh] object-contain" />
+            )}
+            {previewImages.length > 1 && (
+              <>
+                <Button variant="ghost" size="icon" className="absolute left-4 text-white/70 hover:text-white h-10 w-10 rounded-full" onClick={() => setPreviewIndex(i => (i - 1 + previewImages.length) % previewImages.length)}>
+                  <ChevronLeft className="w-5 h-5" />
+                </Button>
+                <Button variant="ghost" size="icon" className="absolute right-4 text-white/70 hover:text-white h-10 w-10 rounded-full" onClick={() => setPreviewIndex(i => (i + 1) % previewImages.length)}>
+                  <ChevronRight className="w-5 h-5" />
+                </Button>
+                <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/60 px-3 py-1 rounded-full text-white text-sm">
+                  {previewIndex + 1} / {previewImages.length}
+                </div>
+              </>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* 详情弹窗 */}
+      <Dialog open={showDetail} onOpenChange={setShowDetail}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Eye className="w-5 h-5 text-primary" />
+              审核详情 #{selectedItem?.id}
+            </DialogTitle>
+          </DialogHeader>
+          
+          {selectedItem && (
+            <div className="space-y-4">
+              {(() => {
+                const aiDetail = tryParseJson<any>(selectedItem.ai_reason)
+                const linkDetail = tryParseJson<any>(selectedItem.link_review_reason)
+                const canManualReview =
+                  selectedItem.status === 'pending_manual' ||
+                  selectedItem.ai_review_status === 'manual' ||
+                  selectedItem.link_review_status === 'manual'
+
+                return (
+                  <>
+              {/* 基础信息 */}
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="p-3 rounded bg-muted/50">
+                  <div className="text-muted-foreground text-xs">任务</div>
+                  <div className="font-medium">{selectedItem.tasks?.title || `#${selectedItem.task_id}`}</div>
+                </div>
+                <div className="p-3 rounded bg-muted/50">
+                  <div className="text-muted-foreground text-xs">用户</div>
+                  <div className="font-medium">@{selectedItem.users?.username || '未知'}</div>
+                </div>
+                <div className="p-3 rounded bg-muted/50">
+                  <div className="text-muted-foreground text-xs">平台</div>
+                  <div className={cn("font-medium", PLATFORM_COLORS[selectedItem.tasks?.platform || ''])}>
+                    {selectedItem.tasks?.platform || '-'}
+                  </div>
+                </div>
+                <div className="p-3 rounded bg-muted/50">
+                  <div className="text-muted-foreground text-xs">审核状态</div>
+                  <div><MultiStatusBadge item={selectedItem} /></div>
+                </div>
+              </div>
+
+              {/* 截图 */}
+              <div>
+                <div className="text-sm font-medium mb-2">截图</div>
+                <div className="grid grid-cols-4 gap-2">
+                  {parseScreenshots(selectedItem.screenshots).map((url, i) => (
+                    <img
+                      key={i}
+                      src={url}
+                      alt=""
+                      className="w-full aspect-square rounded object-cover cursor-pointer hover:ring-2 ring-primary"
+                      onClick={() => openImagePreview(parseScreenshots(selectedItem.screenshots), i)}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              {/* 审核信息 */}
+              {(selectedItem.ai_confidence || selectedItem.ai_reason || selectedItem.image_review_reason || selectedItem.link_review_reason) && (
+                <div className="p-3 rounded bg-muted/50 text-sm space-y-2">
+                  {selectedItem.ai_confidence && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-muted-foreground">置信度:</span>
+                      <span className={cn("font-medium", (selectedItem.ai_confidence || 0) >= 0.8 ? "text-green-600" : "text-orange-600")}>
+                        {Math.round((selectedItem.ai_confidence || 0) * 100)}%
+                      </span>
+                    </div>
+                  )}
+                  {selectedItem.ai_reason && (
+                    <div className="text-muted-foreground">AI判断: {selectedItem.ai_reason}</div>
+                  )}
+                  {aiDetail && (aiDetail.commenterNickname || aiDetail.comment || aiDetail.authorName || aiDetail.source) && (
+                    <div className="rounded bg-blue-50 px-3 py-2 text-xs text-slate-700 space-y-1">
+                      <div className="font-medium text-slate-900">图片审核明细</div>
+                      <div>审核来源: {formatImageReviewSource(aiDetail.source)}</div>
+                      <div>评论人昵称: {aiDetail.commenterNickname || '没有'}</div>
+                      <div>评论内容: {aiDetail.comment || '没有'}</div>
+                      <div>达人名字: {aiDetail.authorName || '没有'}</div>
+                      <div>点赞/收藏/关注: {aiDetail.detected?.like || '没有'} / {aiDetail.detected?.favorite || '没有'} / {aiDetail.detected?.follow || '没有'}</div>
+                    </div>
+                  )}
+                  {selectedItem.image_review_reason && (() => {
+                    try {
+                      const reason = typeof selectedItem.image_review_reason === 'string' 
+                        ? JSON.parse(selectedItem.image_review_reason) 
+                        : selectedItem.image_review_reason;
+                      
+                      return (
+                        <div className="text-red-600 bg-red-50 p-2 rounded text-xs">
+                          <div className="font-medium flex items-center gap-1">
+                            <XCircle className="w-3 h-3" /> 图片审核未通过
+                          </div>
+                          <div className="mt-1">
+                            {reason.ocr?.passed === false && <div>OCR识别: {reason.ocr.reason}</div>}
+                            {reason.yolo?.passed === false && <div>物体检测: {reason.yolo.reason}</div>}
+                            {reason.screenshots?.length > 0 && (
+                              <div className="mt-1">截图问题: {reason.screenshots.map((s: any) => s.reason).join('; ')}</div>
+                            )}
+                            {typeof reason === 'string' && reason}
+                          </div>
+                        </div>
+                      );
+                    } catch (e) {
+                      return (
+                        <div className="text-red-600 bg-red-50 p-2 rounded text-xs">
+                          <span className="font-medium">图片审核未通过:</span> {selectedItem.image_review_reason}
+                        </div>
+                      );
+                    }
+                  })()}
+                  {selectedItem.link_review_reason && (() => {
+                    try {
+                      const reason = typeof selectedItem.link_review_reason === 'string' 
+                        ? JSON.parse(selectedItem.link_review_reason) 
+                        : selectedItem.link_review_reason;
+                      
+                      const isSystemError = reason.linkResult?.error?.includes('IP 均失败') || 
+                        reason.linkResult?.error?.includes('Browser Service');
+                      
+                      return (
+                        <div className={cn(
+                          "p-2 rounded text-xs",
+                          isSystemError ? "bg-orange-50 text-orange-700" : "bg-red-50 text-red-600"
+                        )}>
+                          <div className="font-medium flex items-center gap-1">
+                            {isSystemError ? (
+                              <><AlertCircle className="w-3 h-3" /> 系统问题 - 需转人工</>
+                            ) : (
+                              <><XCircle className="w-3 h-3" /> 链接审核未通过</>
+                            )}
+                          </div>
+                          
+                          {reason.linkResult && (
+                            <div className="mt-1">
+                              链接验证: {reason.linkResult.valid ? '✅ 通过' : 
+                                <span className="text-red-600">{reason.linkResult.error || '未通过'}</span>}
+                            </div>
+                          )}
+                          
+                          {reason.commentResult && (
+                            <div className="mt-1">
+                              评论验证: {reason.commentResult.passed ? '✅ 通过' : 
+                                <span className="text-red-600">{reason.commentResult.reasons?.join('; ') || '未通过'}</span>}
+                            </div>
+                          )}
+                          {linkDetail?.commentResult?.matches?.length > 0 && (
+                            <div className="mt-1">
+                              对比成功评论: {linkDetail.commentResult.matches[0]?.extracted || '已匹配'}
+                            </div>
+                          )}
+                          {reason.linkResult?.authorName && (
+                            <div className="mt-1">
+                              页面达人: {reason.linkResult.authorName}
+                            </div>
+                          )}
+                          
+                          {reason.attemptLog && reason.attemptLog.length > 0 && (
+                            <div className="mt-2 pt-2 border-t border-current/10">
+                              <div className="text-muted-foreground">尝试记录:</div>
+                              <div className="flex flex-wrap gap-1 mt-1">
+                                {reason.attemptLog.map((log: any, i: number) => (
+                                  <span key={i} className={cn(
+                                    "px-1.5 py-0.5 rounded text-[10px]",
+                                    log.success ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
+                                  )}>
+                                    {log.type === 'direct' ? '直连' : `代理#${log.attempt}`}
+                                    {log.success ? '✓' : '✗'}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    } catch (e) {
+                      return (
+                        <div className="text-red-600 bg-red-50 p-2 rounded text-xs">
+                          <span className="font-medium">链接审核未通过:</span> {selectedItem.link_review_reason}
+                        </div>
+                      );
+                    }
+                  })()}
+                </div>
+              )}
+
+              {/* 审核历史 - 已处理记录显示 */}
+              {(selectedItem.review_history || selectedItem.reject_count || (selectedItem.image_review_status && selectedItem.image_review_status !== 'pending')) && (
+                <div className="p-3 rounded bg-muted/30 space-y-3">
+                  <div className="text-sm font-medium flex items-center gap-2">
+                    <Clock className="w-4 h-4" />
+                    审核记录
+                  </div>
+                  
+                  {/* 拒绝次数 */}
+                  {selectedItem.reject_count !== undefined && selectedItem.reject_count > 0 && (
+                    <div className="flex items-center gap-2 text-sm">
+                      <AlertCircle className="w-4 h-4 text-orange-500" />
+                      <span className="text-orange-600 font-medium">已拒绝 {selectedItem.reject_count} 次</span>
+                      <span className="text-muted-foreground">(3次后自动释放)</span>
+                    </div>
+                  )}
+                  
+                  {/* 两阶段审核结果 */}
+                  <div className="grid grid-cols-2 gap-3">
+                    {/* 图片审核 */}
+                    <div className={cn(
+                      "p-2.5 rounded border",
+                      selectedItem.image_review_status === 'approved' ? "bg-green-500/5 border-green-500/30" :
+                      selectedItem.image_review_status === 'rejected' ? "bg-red-500/5 border-red-500/30" :
+                      "bg-muted/50 border-border"
+                    )}>
+                      <div className="flex items-center gap-1.5 text-xs font-medium">
+                        <Scan className="w-3.5 h-3.5" />
+                        图片审核
+                      </div>
+                      <div className={cn(
+                        "mt-1 text-sm font-medium",
+                        selectedItem.image_review_status === 'approved' ? "text-green-600" :
+                        selectedItem.image_review_status === 'rejected' ? "text-red-600" :
+                        "text-muted-foreground"
+                      )}>
+                        {selectedItem.image_review_status === 'approved' ? '通过' :
+                         selectedItem.image_review_status === 'rejected' ? '未通过' :
+                         selectedItem.image_review_status || '未知'}
+                      </div>
+                    </div>
+                    
+                    {/* 链接验证 */}
+                    <div className={cn(
+                      "p-2.5 rounded border",
+                      selectedItem.link_review_status === 'approved' ? "bg-green-500/5 border-green-500/30" :
+                      selectedItem.link_review_status === 'rejected' ? "bg-red-500/5 border-red-500/30" :
+                      "bg-muted/50 border-border"
+                    )}>
+                      <div className="flex items-center gap-1.5 text-xs font-medium">
+                        <Globe className="w-3.5 h-3.5" />
+                        链接验证
+                      </div>
+                      <div className={cn(
+                        "mt-1 text-sm font-medium",
+                        selectedItem.link_review_status === 'approved' ? "text-green-600" :
+                        selectedItem.link_review_status === 'rejected' ? "text-red-600" :
+                        "text-muted-foreground"
+                      )}>
+                        {selectedItem.link_review_status === 'approved' ? '通过' :
+                         selectedItem.link_review_status === 'rejected' ? '未通过' :
+                         selectedItem.link_review_status || '未知'}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* 审核历史时间线 */}
+                  {selectedItem.review_history && selectedItem.review_history.length > 0 && (
+                    <div className="space-y-1.5 mt-2">
+                      <div className="text-xs text-muted-foreground">操作历史</div>
+                      <div className="space-y-1 max-h-32 overflow-y-auto">
+                        {selectedItem.review_history.map((h: any, i: number) => (
+                          <div key={i} className="flex items-start gap-2 p-2 bg-background rounded text-xs border">
+                            <div className="flex-1">
+                              <div className={cn(
+                                "font-medium",
+                                h.action?.includes('rejected') ? "text-red-600" :
+                                h.action?.includes('approved') ? "text-green-600" : "text-gray-600"
+                              )}>
+                                {formatHistoryAction(h)}
+                              </div>
+                              {(h.reason || h.data?.reason) && (
+                                <div className="text-muted-foreground mt-0.5">{h.reason || h.data?.reason}</div>
+                              )}
+                              {buildHistoryHighlights(h).map((line, index) => (
+                                <div key={index} className="text-[11px] text-muted-foreground mt-0.5">{line}</div>
+                              ))}
+                            </div>
+                            <div className="text-muted-foreground shrink-0 text-[10px]">
+                              {h.timestamp ? new Date(h.timestamp).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 人工审核操作 */}
+              {canManualReview && (
+                <>
+                  <div>
+                    <div className="text-sm font-medium mb-2">审核备注</div>
+                    <Textarea
+                      value={reviewNote}
+                      onChange={(e) => setReviewNote(e.target.value)}
+                      placeholder="输入审核备注..."
+                      className="h-20"
+                    />
+                  </div>
+                  <div className="flex gap-3 justify-end pt-4 border-t">
+                    <Button variant="outline" onClick={() => setShowDetail(false)}>取消</Button>
+                    <Button variant="destructive" disabled={processing} onClick={() => handleManualReview(selectedItem.id, 'reject', reviewNote)}>
+                      <XCircle className="w-4 h-4 mr-1" />拒绝
+                    </Button>
+                    <Button disabled={processing} onClick={() => handleManualReview(selectedItem.id, 'approve', reviewNote)}>
+                      <CheckCircle className="w-4 h-4 mr-1" />通过
+                    </Button>
+                  </div>
+                </>
+              )}
+                  </>
+                )
+              })()}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
+
+// 统计卡片组件
+function StatCard({ label, value, icon: Icon, color, subtitle }: {
+  label: string
+  value: number | string
+  icon: React.ElementType
+  color: string
+  subtitle?: string
+}) {
+  return (
+    <div className="rounded-lg p-3 border bg-gradient-to-br from-muted/50 to-background">
+      <div className="flex items-center gap-2 mb-1">
+        <Icon className="w-4 h-4 text-muted-foreground" />
+        <span className="text-xs text-muted-foreground">{label}</span>
+      </div>
+      <div className={cn("text-2xl font-bold bg-gradient-to-r bg-clip-text text-transparent", color)}>{value}</div>
+      {subtitle && <div className="text-[10px] text-muted-foreground mt-0.5">{subtitle}</div>}
+    </div>
+  )
+}
+
+// 服务状态指示器
+function ServiceIndicator({ name, healthy, port }: { name: string; healthy: boolean; port: string }) {
+  return (
+    <div className="flex items-center gap-1.5 text-xs">
+      <div className={cn("w-2 h-2 rounded-full", healthy ? "bg-green-500" : "bg-red-500")} />
+      <span className={healthy ? "text-foreground" : "text-red-500"}>{name}</span>
+      {port && <span className="text-muted-foreground">(:{port})</span>}
+    </div>
+  )
+}
+
+// 空状态组件
+function EmptyState({ icon: Icon, message }: { icon: React.ElementType; message: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center h-full text-muted-foreground py-20">
+      <Icon className="w-12 h-12 mb-4 opacity-50" />
+      <p>{message}</p>
+    </div>
+  )
+}

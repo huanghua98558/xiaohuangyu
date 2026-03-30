@@ -1,0 +1,3 @@
+{
+  "/(admin)/data-center/page": "app/(admin)/data-center/page.js"
+}

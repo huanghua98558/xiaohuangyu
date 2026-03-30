@@ -1,0 +1,13 @@
+# 小黄鱼管理后台 - 独立服务配置
+# Next.js 服务模式，端口 5001
+
+[project]
+requires = ["nodejs-24"]
+
+[dev]
+build = ["pnpm", "install"]
+run = ["pnpm", "dev", "--port", "5001", "--host"]
+
+[deploy]
+build = ["pnpm", "install", "&&", "pnpm", "run", "build"]
+run = ["pnpm", "start", "--port", "5001"]

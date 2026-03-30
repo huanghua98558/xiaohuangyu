@@ -1,0 +1,1056 @@
+#!/usr/bin/env python3
+"""
+Browser Pool Service - 浏览器池化服务
+功能：
+1. 浏览器持久化，不重复启动
+2. 页面池复用
+3. 动态页面调整（空闲5/正常10/高峰20）
+4. 支持 Worker 传入 proxy_url
+5. 保留原有评论获取逻辑
+"""
+
+import asyncio
+import os
+import re
+import json
+import logging
+import time
+import httpx
+from datetime import datetime, timedelta
+from typing import List, Optional, Dict, Any
+from dataclasses import dataclass, field
+from fastapi import FastAPI
+from pydantic import BaseModel
+import uvicorn
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+CONFIG = {
+    "backend_url": os.environ.get("BACKEND_URL", "http://127.0.0.1:5000"),
+    "timeout": 60000,
+}
+
+def env_int(name: str, default: int, minimum: Optional[int] = None) -> int:
+    raw = os.environ.get(name)
+    if raw in (None, ""):
+        value = default
+    else:
+        try:
+            value = int(str(raw).strip())
+        except Exception:
+            value = default
+    if minimum is not None:
+        value = max(minimum, value)
+    return value
+
+# PC端 User-Agent
+PC_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+# ============ URL 清洗工具 ============
+
+def extract_valid_url(raw_url: str) -> str:
+    """
+    从原始字符串中提取有效的 HTTP URL
+    
+    支持格式：
+    1. 标准 URL: https://v.douyin.com/xxx/
+    2. 抖音口令: 8.92 复制打开抖音... https://v.douyin.com/xxx/ ...
+    3. 小红书口令: 小红书链接 https://www.xiaohongshu.com/xxx
+    """
+    if not raw_url:
+        return raw_url
+    
+    raw_url = raw_url.strip()
+    
+    # 如果已经是有效的 HTTP URL，直接返回
+    if raw_url.startswith('http://') or raw_url.startswith('https://'):
+        return raw_url
+    
+    # 从口令格式中提取 URL
+    # 匹配 https:// 或 http:// 开头的 URL
+    url_pattern = r'(https?://[^\s<>"\']+)'
+    match = re.search(url_pattern, raw_url)
+    
+    if match:
+        extracted = match.group(1)
+        # 清理 URL 末尾的可能干扰字符
+        extracted = re.sub(r'[<>"\')]+$', '', extracted)
+        logger.info(f"[URL] 从口令提取: {extracted}")
+        return extracted
+    
+    # 尝试匹配抖音短链接格式 (v.douyin.com/xxx)
+    douyin_pattern = r'(v\.douyin\.com/[\w-]+/?)'
+    match = re.search(douyin_pattern, raw_url)
+    if match:
+        extracted = 'https://' + match.group(1)
+        logger.info(f"[URL] 构建抖音链接: {extracted}")
+        return extracted
+    
+    # 尝试匹配小红书链接格式
+    xhs_pattern = r'(www\.xiaohongshu\.com/[\w/-]+|xhslink\.com/[\w-]+)'
+    match = re.search(xhs_pattern, raw_url)
+    if match:
+        extracted = 'https://' + match.group(1)
+        logger.info(f"[URL] 构建小红书链接: {extracted}")
+        return extracted
+    
+    # 无法提取，返回原始值（后续会失败并记录错误）
+    logger.warning(f"[URL] 无法从口令提取有效 URL: {raw_url[:50]}...")
+    return raw_url
+
+
+# ============ 数据模型 ============
+
+class VisitRequest(BaseModel):
+    url: str
+    check_comment: bool = False
+    target_comment: Optional[str] = None
+    max_comments: int = 100
+    proxy_url: Optional[str] = None  # Worker 传入的代理 URL
+
+class CommentInfo(BaseModel):
+    nickname: str
+    content: str
+
+class VisitResponse(BaseModel):
+    success: bool
+    has_comment: bool = False
+    comment_text: Optional[str] = None
+    page_title: Optional[str] = None
+    author_name: Optional[str] = None
+    comments: List[CommentInfo] = []
+    total_comments: int = 0
+    mode: str = "pc"
+    ip_mode: str = "direct"
+    proxy_used: Optional[str] = None
+    error: Optional[str] = None
+    duration_ms: int = 0
+    debug_info: Optional[Dict[str, Any]] = None
+
+# ============ 页面配置 ============
+
+@dataclass
+class PageConfig:
+    """页面动态配置"""
+    MIN_PAGES: int = env_int("BROWSER_POOL_MIN_PAGES", 2, 1)
+    NORMAL_PAGES: int = env_int("BROWSER_POOL_NORMAL_PAGES", 4, 1)
+    MAX_PAGES: int = env_int("BROWSER_POOL_MAX_PAGES", 8, 1)
+    
+    # 队列阈值
+    SCALE_UP_THRESHOLD: int = env_int("BROWSER_POOL_SCALE_UP_THRESHOLD", 8, 1)
+    SCALE_DOWN_THRESHOLD: int = env_int("BROWSER_POOL_SCALE_DOWN_THRESHOLD", 2, 0)
+    SCALE_DOWN_DELAY: int = env_int("BROWSER_POOL_SCALE_DOWN_DELAY_SECONDS", 60, 10)
+    
+    # 浏览器重启
+    MAX_REQUESTS: int = env_int("BROWSER_POOL_MAX_REQUESTS", 300, 50)
+    MAX_AGE_MINUTES: int = env_int("BROWSER_POOL_MAX_AGE_MINUTES", 45, 10)
+    PAGE_MAX_REQUESTS: int = env_int("BROWSER_PAGE_MAX_REQUESTS", 60, 10)
+    PAGE_MAX_AGE_MINUTES: int = env_int("BROWSER_PAGE_MAX_AGE_MINUTES", 15, 1)
+
+    # 峰值等待
+    WAIT_FOR_PAGE_TIMEOUT_MS: int = env_int("BROWSER_POOL_WAIT_TIMEOUT_MS", 5000, 1000)
+    WAIT_FOR_PAGE_POLL_MS: int = env_int("BROWSER_POOL_WAIT_POLL_MS", 200, 50)
+
+# ============ 浏览器池 ============
+
+@dataclass
+class PageInstance:
+    """页面实例"""
+    page: Any = None
+    created_at: datetime = field(default_factory=datetime.now)
+    last_used: datetime = field(default_factory=datetime.now)
+    request_count: int = 0
+
+class BrowserPool:
+    """
+    浏览器池 - 核心类
+    
+    特性:
+    1. 浏览器持久化
+    2. 页面动态调整
+    3. 自动重启防泄漏
+    """
+    
+    def __init__(self, port: int):
+        self.port = port
+        self.config = PageConfig()
+        
+        # 浏览器实例
+        self.playwright = None
+        self.browser = None
+        self.default_context = None
+        
+        # 页面池
+        self.pages: List[PageInstance] = []
+        self.available_pages: List[PageInstance] = []
+        self.lock = asyncio.Lock()
+        
+        # 状态
+        self.request_count = 0
+        self.created_at = None
+        self.last_activity_at = None
+        self.target_pages = self.config.MIN_PAGES
+        self.last_queue_size = 0
+        self.in_flight = 0
+        
+        # 动态调整
+        self.low_load_since: Optional[datetime] = None
+        self.monitor_task = None
+        
+    async def initialize(self):
+        """初始化浏览器池"""
+        logger.info(f"[Pool:{self.port}] 初始化...")
+        logger.info(
+            f"[Pool:{self.port}] 配置: min={self.config.MIN_PAGES}, normal={self.config.NORMAL_PAGES}, "
+            f"max={self.config.MAX_PAGES}, waitTimeout={self.config.WAIT_FOR_PAGE_TIMEOUT_MS}ms"
+        )
+
+        await self._start_browser_stack()
+
+        if self.monitor_task is None or self.monitor_task.done():
+            self.monitor_task = asyncio.create_task(self._monitor_loop())
+
+    async def _start_browser_stack(self):
+        """启动浏览器和初始页面。重启时也复用这条路径，避免重复创建监控任务。"""
+        try:
+            from playwright.async_api import async_playwright
+
+            self.playwright = await async_playwright().start()
+
+            self.browser = await self.playwright.chromium.launch(
+                headless=True,
+                args=[
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-blink-features=AutomationControlled',
+                    '--disable-gpu',
+                    '--disable-dev-shm-usage',
+                ]
+            )
+
+            self.default_context = await self.browser.new_context(
+                user_agent=PC_UA,
+                viewport={'width': 1920, 'height': 1080},
+                locale='zh-CN',
+            )
+
+            self.pages = []
+            self.available_pages = []
+            self.request_count = 0
+            self.in_flight = 0
+            self.created_at = datetime.now()
+            self.last_activity_at = datetime.now()
+            self.target_pages = max(self.config.MIN_PAGES, min(self.target_pages, self.config.MAX_PAGES))
+
+            for _ in range(self.target_pages):
+                await self._create_page_instance()
+
+            logger.info(f"[Pool:{self.port}] ✅ 初始化完成，{len(self.pages)} 个页面")
+
+        except Exception as e:
+            logger.error(f"[Pool:{self.port}] 初始化失败: {e}")
+            raise
+
+    async def _create_page_instance(self) -> Optional[PageInstance]:
+        """创建一个可复用页面。"""
+        if not self.default_context:
+            return None
+        page = await self.default_context.new_page()
+        page_instance = PageInstance(page=page)
+        self.pages.append(page_instance)
+        self.available_pages.append(page_instance)
+        return page_instance
+
+    async def _close_browser_stack(self):
+        """关闭浏览器及其所有资源。"""
+        for p in list(self.pages):
+            try:
+                await p.page.close()
+            except Exception:
+                pass
+        self.pages.clear()
+        self.available_pages.clear()
+
+        if self.default_context:
+            try:
+                await self.default_context.close()
+            except Exception:
+                pass
+        self.default_context = None
+
+        if self.browser:
+            try:
+                await self.browser.close()
+            except Exception:
+                pass
+        self.browser = None
+
+        if self.playwright:
+            try:
+                await self.playwright.stop()
+            except Exception:
+                pass
+        self.playwright = None
+    
+    async def _monitor_loop(self):
+        """监控循环 - 动态调整页面数量"""
+        while True:
+            try:
+                await asyncio.sleep(10)  # 每10秒检查
+                
+                # 获取队列积压
+                queue_size = await self._get_queue_size()
+                self.last_queue_size = queue_size
+                
+                # 计算目标页面数
+                new_target = self._calculate_target_pages(queue_size)
+                
+                if new_target != self.target_pages:
+                    self.target_pages = new_target
+                    await self._adjust_pages()
+
+                await self._maintain_pool()
+                    
+            except Exception as e:
+                logger.warning(f"[Pool:{self.port}] 监控异常: {e}")
+
+    async def _maintain_pool(self):
+        """空闲时收缩和重建老旧页面/浏览器，避免 Chromium 进程长期膨胀。"""
+        async with self.lock:
+            if self.in_flight != 0 or len(self.available_pages) != len(self.pages):
+                return
+
+            await self._recycle_stale_available_pages()
+
+            if await self._should_restart():
+                await self._restart()
+    
+    async def _get_queue_size(self) -> int:
+        """获取队列积压数量"""
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                res = await client.get(f"{CONFIG['backend_url']}/api/internal/queue/status")
+                if res.status_code == 200:
+                    data = res.json().get("data", {})
+                    if isinstance(data, dict) and "waiting" in data:
+                        return int(data.get("waiting", 0) or 0)
+                    queues = data.get("queues", []) if isinstance(data, dict) else []
+                    return sum(int((q or {}).get("waiting", 0) or 0) + int((q or {}).get("active", 0) or 0) for q in queues)
+        except:
+            pass
+        return 0
+    
+    def _calculate_target_pages(self, queue_size: int) -> int:
+        """计算目标页面数"""
+        if queue_size > self.config.SCALE_UP_THRESHOLD:
+            # 高峰期
+            self.low_load_since = None
+            return self.config.MAX_PAGES
+        elif queue_size > self.config.SCALE_DOWN_THRESHOLD:
+            # 正常期
+            self.low_load_since = None
+            return self.config.NORMAL_PAGES
+        else:
+            # 空闲期 - 延迟收缩
+            if self.low_load_since is None:
+                self.low_load_since = datetime.now()
+            elif (datetime.now() - self.low_load_since).total_seconds() > self.config.SCALE_DOWN_DELAY:
+                return self.config.MIN_PAGES
+            return self.config.NORMAL_PAGES
+    
+    async def _adjust_pages(self):
+        """调整页面数量"""
+        async with self.lock:
+            current = len(self.pages)
+            target = self.target_pages
+            
+            if current < target:
+                # 扩展
+                to_create = target - current
+                logger.info(f"[Pool:{self.port}] 扩展页面: +{to_create}")
+                for _ in range(to_create):
+                    try:
+                        await self._create_page_instance()
+                    except Exception as e:
+                        logger.warning(f"[Pool:{self.port}] 创建页面失败: {e}")
+                        break
+                        
+            elif current > target:
+                # 收缩 - 只关闭空闲页面
+                to_remove = current - target
+                removed = 0
+                while removed < to_remove and len(self.available_pages) > 0:
+                    page_instance = self.available_pages.pop()
+                    try:
+                        await page_instance.page.close()
+                    except:
+                        pass
+                    if page_instance in self.pages:
+                        self.pages.remove(page_instance)
+                    removed += 1
+                logger.info(f"[Pool:{self.port}] 收缩页面: -{removed}")
+    
+    async def acquire(self, proxy_url: Optional[str] = None):
+        """
+        获取页面
+        
+        Returns:
+            (page, context, page_instance, is_proxy_context)
+        """
+        waited_ms = 0
+        while True:
+            async with self.lock:
+                # 检查是否需要重启
+                if await self._should_restart():
+                    await self._restart()
+                
+                # 如果需要代理，创建临时上下文
+                if proxy_url:
+                    try:
+                        proxy_context = await self.browser.new_context(
+                            proxy={"server": proxy_url},
+                            user_agent=PC_UA,
+                            viewport={'width': 1920, 'height': 1080},
+                            locale='zh-CN',
+                        )
+                        proxy_page = await proxy_context.new_page()
+                        self.in_flight += 1
+                        self.last_activity_at = datetime.now()
+                        logger.info(f"[Pool:{self.port}] 创建代理页面: {proxy_url}")
+                        return proxy_page, proxy_context, None, True
+                    except Exception as e:
+                        logger.error(f"[Pool:{self.port}] 创建代理上下文失败: {e}")
+                        raise
+                
+                if not self.available_pages and len(self.pages) < self.config.MAX_PAGES:
+                    try:
+                        page_instance = await self._create_page_instance()
+                        logger.info(f"[Pool:{self.port}] 动态创建页面: {len(self.pages)}")
+                    except Exception as e:
+                        logger.warning(f"[Pool:{self.port}] 创建页面失败: {e}")
+                
+                if self.available_pages:
+                    page_instance = self.available_pages.pop(0)
+                    page_instance.last_used = datetime.now()
+                    self.in_flight += 1
+                    self.last_activity_at = datetime.now()
+                    return page_instance.page, None, page_instance, False
+            
+            if waited_ms >= self.config.WAIT_FOR_PAGE_TIMEOUT_MS:
+                break
+
+            if waited_ms == 0:
+                logger.warning(f"[Pool:{self.port}] 页面池已满，等待空闲页面释放...")
+            await asyncio.sleep(self.config.WAIT_FOR_PAGE_POLL_MS / 1000)
+            waited_ms += self.config.WAIT_FOR_PAGE_POLL_MS
+        
+        raise Exception(f"无可用页面（等待 {waited_ms}ms 后超时）")
+    
+    async def release(self, page, context=None, page_instance=None, is_proxy=False):
+        """归还页面"""
+        try:
+            async with self.lock:
+                if is_proxy and context:
+                    # 代理上下文，直接关闭
+                    await page.close()
+                    await context.close()
+                    logger.debug(f"[Pool:{self.port}] 关闭代理上下文")
+                elif page_instance:
+                    # 直连页面，重置后归还
+                    try:
+                        await page.goto('about:blank', timeout=3000)
+                        await page.evaluate('() => { localStorage.clear(); }')
+                    except:
+                        pass
+                    
+                    page_instance.request_count += 1
+                    self.request_count += 1
+                    self.last_activity_at = datetime.now()
+
+                    if await self._page_needs_refresh(page_instance):
+                        logger.info(
+                            f"[Pool:{self.port}] 回收老旧页面: age="
+                            f"{(datetime.now() - page_instance.created_at).total_seconds() / 60:.1f}m "
+                            f"requests={page_instance.request_count}"
+                        )
+                        await self._replace_page_instance(page_instance)
+                    else:
+                        self.available_pages.append(page_instance)
+                    logger.debug(f"[Pool:{self.port}] 归还页面")
+                
+        except Exception as e:
+            logger.warning(f"[Pool:{self.port}] 归还页面异常: {e}")
+        finally:
+            self.in_flight = max(0, self.in_flight - 1)
+
+    async def _page_needs_refresh(self, page_instance: PageInstance) -> bool:
+        age_minutes = (datetime.now() - page_instance.created_at).total_seconds() / 60
+        return (
+            page_instance.request_count >= self.config.PAGE_MAX_REQUESTS
+            or age_minutes >= self.config.PAGE_MAX_AGE_MINUTES
+        )
+
+    async def _replace_page_instance(self, page_instance: PageInstance):
+        try:
+            await page_instance.page.close()
+        except Exception:
+            pass
+
+        if page_instance in self.pages:
+            self.pages.remove(page_instance)
+        if page_instance in self.available_pages:
+            self.available_pages.remove(page_instance)
+
+        if len(self.pages) < self.target_pages:
+            try:
+                await self._create_page_instance()
+            except Exception as e:
+                logger.warning(f"[Pool:{self.port}] 替换页面失败: {e}")
+
+    async def _recycle_stale_available_pages(self):
+        """空闲时主动刷新长期存活的页签。"""
+        stale = [p for p in list(self.available_pages) if await self._page_needs_refresh(p)]
+        for page_instance in stale:
+            if len(self.pages) <= self.config.MIN_PAGES:
+                break
+            await self._replace_page_instance(page_instance)
+    
+    async def _should_restart(self) -> bool:
+        """检查是否需要重启"""
+        if not self.browser:
+            return True
+
+        # 只在完全空闲时重启，避免影响正在处理的请求
+        if self.in_flight != 0 or len(self.available_pages) != len(self.pages):
+            return False
+        
+        # 请求次数
+        if self.request_count >= self.config.MAX_REQUESTS:
+            logger.info(f"[Pool:{self.port}] 触发重启: 请求次数 {self.request_count}")
+            return True
+        
+        # 运行时间
+        if self.created_at:
+            age = (datetime.now() - self.created_at).total_seconds() / 60
+            if age >= self.config.MAX_AGE_MINUTES:
+                logger.info(f"[Pool:{self.port}] 触发重启: 运行 {age:.0f} 分钟")
+                return True
+        
+        # 浏览器断开
+        if not self.browser.is_connected():
+            logger.warning(f"[Pool:{self.port}] 触发重启: 浏览器断开")
+            return True
+        
+        return False
+    
+    async def _restart(self):
+        """重启浏览器"""
+        logger.info(f"[Pool:{self.port}] 重启浏览器...")
+
+        await self._close_browser_stack()
+        await self._start_browser_stack()
+    
+    async def get_status(self) -> dict:
+        """获取状态"""
+        return {
+            "healthy": self.browser.is_connected() if self.browser else False,
+            "port": self.port,
+            "available_pages": len(self.available_pages),
+            "busy_pages": max(0, len(self.pages) - len(self.available_pages)),
+            "total_pages": len(self.pages),
+            "target_pages": self.target_pages,
+            "request_count": self.request_count,
+            "queue_size": self.last_queue_size,
+            "in_flight": self.in_flight,
+            "age_minutes": (datetime.now() - self.created_at).total_seconds() / 60 if self.created_at else 0,
+            "config": {
+                "min_pages": self.config.MIN_PAGES,
+                "normal_pages": self.config.NORMAL_PAGES,
+                "max_pages": self.config.MAX_PAGES,
+                "scale_up_threshold": self.config.SCALE_UP_THRESHOLD,
+                "scale_down_threshold": self.config.SCALE_DOWN_THRESHOLD,
+                "wait_timeout_ms": self.config.WAIT_FOR_PAGE_TIMEOUT_MS,
+                "page_max_requests": self.config.PAGE_MAX_REQUESTS,
+                "page_max_age_minutes": self.config.PAGE_MAX_AGE_MINUTES,
+            },
+        }
+    
+    async def shutdown(self):
+        """关闭浏览器池"""
+        logger.info(f"[Pool:{self.port}] 关闭...")
+        
+        if self.monitor_task:
+            self.monitor_task.cancel()
+
+        await self._close_browser_stack()
+
+
+# ============ FastAPI 应用 ============
+
+app = FastAPI(title="Browser Pool Service")
+
+browser_pool: Optional[BrowserPool] = None
+PORT = 8000
+
+
+async def wait_for_page_ready(page, max_wait_ms: int = 5000):
+    waited = 0
+    last_title = ""
+    while waited < max_wait_ms:
+        try:
+            last_title = await page.title()
+            ready_state = await page.evaluate("() => document.readyState")
+            if ready_state in ("interactive", "complete") and last_title:
+                break
+        except Exception:
+            pass
+        await asyncio.sleep(0.4)
+        waited += 400
+    return last_title
+
+
+async def extract_video_id_from_page(page, url: str) -> Optional[str]:
+    patterns = [
+        r'video/(\d+)',
+        r'note/(\d+)',
+        r'share/video/(\d+)',
+        r'modal_id=(\d+)',
+        r'aweme_id[=:"\']+(\d+)',
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+
+    try:
+        hints = await page.evaluate("""
+            () => {
+                const canonical = document.querySelector('link[rel="canonical"]')?.href || '';
+                const ogUrl = document.querySelector('meta[property="og:url"]')?.content || '';
+                const scriptText = Array.from(document.scripts)
+                    .slice(0, 30)
+                    .map(script => script.textContent || '')
+                    .join('\\n')
+                    .slice(0, 300000);
+                return { canonical, ogUrl, scriptText };
+            }
+        """)
+        candidates = [hints.get("canonical", ""), hints.get("ogUrl", ""), hints.get("scriptText", "")]
+        for candidate in candidates:
+            for pattern in patterns:
+                match = re.search(pattern, candidate)
+                if match:
+                    return match.group(1)
+    except Exception as e:
+        logger.warning(f"[Browser] video_id 页面提取失败: {e}")
+
+    return None
+
+
+async def warm_up_comment_area(page):
+    try:
+        for _ in range(4):
+            await page.mouse.wheel(0, 1400)
+            await asyncio.sleep(0.6)
+    except Exception as e:
+        logger.warning(f"[Browser] 预热评论区失败: {e}")
+
+
+@app.on_event("startup")
+async def startup():
+    global browser_pool, PORT
+    PORT = int(os.environ.get("PORT", 8000))
+    browser_pool = BrowserPool(PORT)
+    await browser_pool.initialize()
+    logger.info(f"[Browser Pool] 启动在端口 {PORT}")
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    if browser_pool:
+        await browser_pool.shutdown()
+
+
+@app.get("/")
+async def health():
+    return {"status": "ok", "port": PORT}
+
+
+@app.get("/browser/health")
+async def browser_health():
+    if browser_pool and browser_pool.browser:
+        return {"status": "ok", "connected": browser_pool.browser.is_connected()}
+    return {"status": "error", "connected": False}
+
+
+@app.get("/browser/status")
+async def browser_status():
+    if browser_pool:
+        return await browser_pool.get_status()
+    return {"healthy": False}
+
+
+@app.post("/browser/visit", response_model=VisitResponse)
+async def visit_page(request: VisitRequest):
+    """
+    访问页面并获取评论
+    
+    保留原有评论获取逻辑:
+    1. 处理短链接 (v.douyin.com)
+    2. 提取视频 ID
+    3. 使用 page.evaluate 调用抖音评论 API
+    4. DOM 提取作为备选
+    5. 去重
+    """
+    start_time = time.time()
+    
+    page = None
+    context = None
+    page_instance = None
+    is_proxy = False
+    
+    comments_data = []
+    debug_info = {"steps": [], "video_id": None, "api_status": None}
+    api_low_quality = False
+    
+    try:
+        # 获取页面
+        page, context, page_instance, is_proxy = await browser_pool.acquire(request.proxy_url)
+        debug_info["steps"].append("获取页面成功")
+        
+        url = request.url
+        
+        # ========== 0. URL 清洗 ==========
+        original_url = url
+        url = extract_valid_url(url)
+        if url != original_url:
+            debug_info["steps"].append(f"URL清洗: {original_url[:30]}... -> {url[:30]}...")
+        else:
+            debug_info["steps"].append(f"原始URL: {url[:50]}...")
+
+        
+        # ========== 1. 处理短链接 ==========
+        if 'v.douyin.com' in url:
+            debug_info["steps"].append("检测到短链接")
+            try:
+                await page.goto(url, timeout=15000, wait_until='domcontentloaded')
+                await wait_for_page_ready(page, 6000)
+                url = page.url
+                debug_info["steps"].append(f"跳转到: {url[:60]}...")
+            except Exception as e:
+                logger.warning(f"[Browser] 短链接跳转超时: {e}")
+        
+        # ========== 2. 提取视频 ID ==========
+        video_id = await extract_video_id_from_page(page, url)
+        if video_id:
+            debug_info["video_id"] = video_id
+            debug_info["steps"].append(f"视频ID: {video_id}")
+        else:
+            debug_info["steps"].append("未从链接或页面提取到视频ID")
+        
+        # ========== 3. 访问页面 ==========
+        try:
+            await page.goto(url, timeout=30000, wait_until='domcontentloaded')
+            title = await wait_for_page_ready(page, 7000)
+            if not title:
+                await asyncio.sleep(1.0)
+                title = await page.title()
+            debug_info["steps"].append(f"页面标题: {title[:30]}...")
+        except Exception as e:
+            logger.warning(f"[Browser] 页面加载超时: {e}")
+            title = ""
+        
+        # ========== 4. 提取达人名字 ==========
+        author_name = None
+        try:
+            author_name = await page.evaluate("""
+                () => {
+                    const pickText = (value) => (value || '').replace(/\\s+/g, ' ').trim();
+                    const candidates = [];
+                    const title = pickText(document.title);
+                    if (title) candidates.push(title);
+
+                    const metaTitle = pickText(document.querySelector('meta[property=\"og:title\"]')?.content);
+                    if (metaTitle) candidates.push(metaTitle);
+
+                    const selectors = [
+                        '[data-e2e=\"user-name\"]',
+                        '[class*=\"author\"] [class*=\"name\"]',
+                        '[class*=\"AuthorCard\"] [class*=\"name\"]',
+                        '[class*=\"account\"] [class*=\"name\"]',
+                        'h1',
+                    ];
+                    for (const selector of selectors) {
+                        const el = document.querySelector(selector);
+                        const text = pickText(el?.textContent);
+                        if (text) candidates.push(text);
+                    }
+
+                    const rawBody = document.body?.innerText || '';
+                    const textBlob = pickText(rawBody).slice(0, 4000);
+                    const fanMatch = rawBody.match(/(?:^|\\n)([^\\n]{2,30})\\n\\s*粉丝/);
+                    if (fanMatch?.[1]) candidates.push(pickText(fanMatch[1]));
+                    const atMatch = textBlob.match(/@([^\\s#：:]{2,40})/);
+                    if (atMatch) candidates.push(pickText(atMatch[1]));
+
+                    for (const candidate of candidates) {
+                        const titleMatch = candidate.match(/(.+?)的作品/);
+                        if (titleMatch?.[1]) return pickText(titleMatch[1]);
+
+                        if (candidate.startsWith('@')) return pickText(candidate.slice(1));
+
+                        if (candidate.length >= 2 && candidate.length <= 40 && !/抖音|评论|点赞|收藏|分享|打开|搜索/.test(candidate)) {
+                            return candidate;
+                        }
+                    }
+
+                    return null;
+                }
+            """)
+            if author_name:
+                debug_info["steps"].append(f"达人: {author_name}")
+                logger.info(f"[Browser] 提取达人: {author_name}")
+        except Exception as e:
+            debug_info["steps"].append(f"达人提取失败: {str(e)[:30]}")
+
+        # ========== 4. 获取评论 (核心逻辑) ==========
+        await warm_up_comment_area(page)
+        
+        if video_id:
+            # 方式1: 分页调用抖音评论 API，直到命中目标评论或达到抓取上限
+            try:
+                api_result = await page.evaluate(
+                    """
+                    async ({ videoId, maxComments, targetComment }) => {
+                        const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+                        const comments = [];
+                        const seen = new Set();
+                        const normalizedTarget = clean(targetComment);
+                        const maxNeeded = Math.max(Number(maxComments) || 50, 50);
+                        const pageLimit = Math.max(3, Math.min(10, Math.ceil(maxNeeded / 20) + 2));
+                        let cursor = 0;
+                        let hasMore = true;
+                        let pageCount = 0;
+                        let targetMatched = false;
+                        let stopReason = 'completed';
+
+                        while (hasMore && pageCount < pageLimit && comments.length < maxNeeded) {
+                            const apiUrl = `https://www.douyin.com/aweme/v1/web/comment/list/?device_platform=webapp&aid=6383&channel=channel_pc_web&aweme_id=${videoId}&cursor=${cursor}&count=20`;
+                            let data = null;
+                            try {
+                                const res = await fetch(apiUrl, { credentials: 'include' });
+                                data = await res.json();
+                            } catch (e) {
+                                stopReason = `fetch_error:${e?.message || 'unknown'}`;
+                                break;
+                            }
+
+                            const items = Array.isArray(data?.comments) ? data.comments : [];
+                            for (const c of items) {
+                                const nickname = clean(c?.user?.nickname);
+                                const content = clean(c?.text);
+                                if (!content) continue;
+                                const key = `${nickname}__${content}`;
+                                if (seen.has(key)) continue;
+                                seen.add(key);
+                                comments.push({ nickname, content });
+                                if (normalizedTarget && (content.includes(normalizedTarget) || normalizedTarget.includes(content))) {
+                                    targetMatched = true;
+                                }
+                            }
+
+                            pageCount += 1;
+                            if (targetMatched) {
+                                stopReason = 'target_matched';
+                                break;
+                            }
+
+                            const rawCursor = Number(data?.cursor);
+                            const nextCursor = Number.isFinite(rawCursor) ? rawCursor : (cursor + items.length);
+                            const cursorChanged = nextCursor !== cursor;
+                            hasMore = Boolean(data?.has_more) && items.length > 0 && cursorChanged;
+                            cursor = nextCursor;
+
+                            if (!hasMore) {
+                                stopReason = items.length === 0 ? 'empty_page' : 'no_more';
+                                break;
+                            }
+                        }
+
+                        return {
+                            comments,
+                            pageCount,
+                            targetMatched,
+                            stopReason,
+                        };
+                    }
+                    """,
+                    {
+                        "videoId": video_id,
+                        "maxComments": request.max_comments,
+                        "targetComment": request.target_comment or "",
+                    }
+                )
+
+                comments_data = api_result.get("comments") or []
+                debug_info["api_status"] = api_result.get("stopReason") or "success"
+                debug_info["steps"].append(
+                    f"API获取: {len(comments_data)} 条, {api_result.get('pageCount', 0)}页, 命中目标={bool(api_result.get('targetMatched'))}"
+                )
+                logger.info(
+                    f"[Browser] API获取 {len(comments_data)} 条评论, pages={api_result.get('pageCount', 0)}, targetMatched={bool(api_result.get('targetMatched'))}"
+                )
+            except Exception as e:
+                debug_info["api_status"] = f"failed: {str(e)[:50]}"
+                debug_info["steps"].append(f"API获取失败: {str(e)[:30]}")
+
+        normalized_target_comment = re.sub(r"\s+", " ", request.target_comment or "").strip()
+        api_contains_target = bool(normalized_target_comment) and any(
+            normalized_target_comment in re.sub(r"\s+", " ", str(item.get("content", ""))).strip()
+            or re.sub(r"\s+", " ", str(item.get("content", ""))).strip() in normalized_target_comment
+            for item in comments_data
+        )
+        time_like_nickname_pattern = re.compile(r"^(昨天|前天|刚刚|\d+分钟前|\d+小时前|\d+天前)$")
+        api_low_quality = bool(comments_data) and not api_contains_target and (
+            len(comments_data) <= 2
+            or all(
+                time_like_nickname_pattern.match(str(item.get("nickname", "")).strip() or "")
+                for item in comments_data
+            )
+        )
+        if api_low_quality:
+            debug_info["steps"].append("API结果疑似不稳定，尝试DOM补充提取")
+            logger.warning(f"[Browser] API评论结果疑似不稳定: comments={len(comments_data)}, target={normalized_target_comment or 'N/A'}")
+        # 方式2: DOM 提取作为备选 (API 无结果或结果明显不稳定时补充)
+        if not comments_data or api_low_quality:
+            debug_info["steps"].append("尝试 DOM 提取")
+            try:
+                dom_comments = await page.evaluate('''
+                    () => {
+                        const comments = [];
+                        const clean = (value) => (value || '').replace(/\\s+/g, ' ').trim();
+                        const pushComment = (nickname, content) => {
+                            const safeContent = clean(content);
+                            const safeNickname = clean(nickname);
+                            if (!safeContent || safeContent.length < 2 || safeContent.length > 500) return;
+                            if (/^(昨天|前天|刚刚|\d+分钟前|\d+小时前|\d+天前)$/.test(safeNickname)) return;
+                            comments.push({ nickname: safeNickname, content: safeContent });
+                        };
+
+                        const selectors = [
+                            '[class*="CommentItem"]',
+                            '[class*="comment-item"]',
+                            '[data-e2e="comment-item"]',
+                            '[class*="comment-mainContent"]',
+                            '[class*="comment"] [class*="content"]',
+                            '[class*="comment-text"]',
+                        ];
+
+                        for (const selector of selectors) {
+                            const elements = document.querySelectorAll(selector);
+                            elements.forEach(el => {
+                                const text = clean(el.innerText);
+                                if (!text) return;
+
+                                const nicknameEl = el.querySelector('[class*="name"], [class*="nick"], [data-e2e="comment-user-name"]');
+                                const contentEl = el.querySelector('[class*="content"], [class*="text"], [data-e2e="comment-item-content"]');
+
+                                if (nicknameEl || contentEl) {
+                                    pushComment(nicknameEl?.textContent, contentEl?.textContent || text);
+                                    return;
+                                }
+
+                                const lines = text.split('\\n').map(clean).filter(Boolean);
+                                if (lines.length >= 2) {
+                                    pushComment(lines[0], lines.slice(1).join(' '));
+                                } else {
+                                    const chunks = text.split('0分享回复').map(clean).filter(Boolean);
+                                    if (chunks.length > 1) {
+                                        chunks.forEach(chunk => {
+                                            const match = chunk.match(/(.+?)([^\\n]{1,24})(\\d+(?:小时前|分钟前|天前)|刚刚)·([^\\n]{1,12})$/);
+                                            if (match) {
+                                                pushComment(match[2], match[1]);
+                                            }
+                                        });
+                                        return;
+                                    }
+                                    pushComment('', text);
+                                }
+                            });
+                            if (comments.length > 0) break;
+                        }
+
+                        return comments.slice(0, 50);
+                    }
+                ''')
+                
+                if dom_comments:
+                    comments_data = (comments_data or []) + dom_comments
+                    debug_info["steps"].append(f"DOM提取补充: {len(dom_comments)} 条")
+                    logger.info(f"[Browser] DOM提取补充 {len(dom_comments)} 条评论")
+            except Exception as e:
+                logger.warning(f"[Browser] DOM提取失败: {e}")
+        
+        # ========== 5. 去重 ==========
+        seen = set()
+        unique = []
+        for c in comments_data:
+            if c['content'] not in seen:
+                seen.add(c['content'])
+                unique.append(c)
+        
+        # ========== 6. 返回结果 ==========
+        has_comment = len(unique) > 0
+        comment_text = "\n".join([f"{c['nickname']}: {c['content']}" for c in unique[:10]]) if has_comment else None
+
+        if not title and not author_name and not has_comment:
+            debug_info["steps"].append("页面信息提取不完整：标题、达人、评论均为空")
+        
+        duration_ms = int((time.time() - start_time) * 1000)
+        
+        logger.info(f"[Browser] ✅ 完成: 评论数={len(unique)}, 耗时={duration_ms}ms")
+        
+        return VisitResponse(
+            success=True,
+            has_comment=has_comment,
+            comment_text=comment_text,
+            page_title=title,
+            author_name=author_name,
+            comments=[CommentInfo(**c) for c in unique[:request.max_comments]],
+            total_comments=len(unique),
+            mode="pc",
+            ip_mode="proxy" if request.proxy_url else "direct",
+            proxy_used=request.proxy_url,
+            duration_ms=duration_ms,
+            debug_info=debug_info
+        )
+        
+    except Exception as e:
+        logger.error(f"[Browser] ❌ 错误: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        duration_ms = int((time.time() - start_time) * 1000)
+        
+        return VisitResponse(
+            success=False,
+            error=str(e),
+            ip_mode="proxy" if request.proxy_url else "direct",
+            proxy_used=request.proxy_url,
+            duration_ms=duration_ms,
+            debug_info=debug_info
+        )
+    
+    finally:
+        if page:
+            await browser_pool.release(page, context, page_instance, is_proxy)
+
+
+if __name__ == "__main__":
+    import sys
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
+    os.environ["PORT"] = str(port)
+    logger.info(f"[Browser Pool Service] 启动在端口 {port}")
+    uvicorn.run(app, host="0.0.0.0", port=port)

@@ -1,0 +1,16 @@
+{
+  "headers": {
+    "x-nextjs-stale-time": "300",
+    "x-nextjs-prerender": "1",
+    "x-next-cache-tags": "_N_T_/layout,_N_T_/(admin)/layout,_N_T_/(admin)/ai-reviewer/layout,_N_T_/(admin)/ai-reviewer/page,_N_T_/ai-reviewer"
+  },
+  "segmentPaths": [
+    "/_tree",
+    "/_full",
+    "/!KGFkbWluKQ/ai-reviewer/__PAGE__",
+    "/!KGFkbWluKQ/ai-reviewer",
+    "/!KGFkbWluKQ",
+    "/_index",
+    "/_head"
+  ]
+}

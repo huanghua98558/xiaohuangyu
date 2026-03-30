@@ -1,0 +1,293 @@
+/**
+ * 全局样式 - 使用主题CSS变量
+ */
+
+/* 基础重置 */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+/* 页面容器 */
+html, body {
+  height: 100%;
+  font-family: var(--font-body, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  background: var(--bg-primary, #f5f5f5);
+  color: var(--text-primary, #333);
+  display: flex;
+  justify-content: center;
+}
+
+/* 移动端容器 */
+#app {
+  width: 100%;
+  max-width: 480px;
+  min-height: 100vh;
+  background: var(--bg-primary, #f5f5f5);
+  position: relative;
+  box-shadow: var(--shadow-lg, 0 0 20px rgba(0, 0, 0, 0.1));
+  transition: background-color var(--transition-normal, 200ms ease);
+}
+
+/* 暗黑科技主题特殊处理 */
+[data-theme="dark-tech"] body {
+  background: #000;
+}
+
+[data-theme="dark-tech"] #app {
+  background: var(--bg-primary, #000);
+}
+
+/* 玻璃拟态主题特殊处理 */
+[data-theme="glassmorphism"] body {
+  background: linear-gradient(135deg, #667EEA 0%, #764BA2 100%);
+}
+
+[data-theme="glassmorphism"] #app {
+  background: linear-gradient(135deg, #667EEA 0%, #764BA2 100%);
+}
+
+/* 桌面端适配 */
+@media (min-width: 481px) {
+  #app {
+    min-height: 100vh;
+    border-radius: 0;
+  }
+}
+
+@media (min-width: 768px) {
+  #app {
+    max-width: 520px;
+  }
+}
+
+/* 链接和图片 */
+a { text-decoration: none; color: inherit; }
+img { max-width: 100%; height: auto; display: block; }
+
+/* 按钮基础样式 */
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 输入框基础样式 */
+input, textarea, select {
+  font-family: inherit;
+  font-size: inherit;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+/* 滚动条美化 */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--text-muted, #c1c1c1);
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 暗黑主题滚动条 */
+[data-theme="dark-tech"] ::-webkit-scrollbar-thumb {
+  background: rgba(0, 255, 255, 0.3);
+}
+
+/* 安全区域适配 */
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  .tabbar {
+    padding-bottom: env(safe-area-inset-bottom);
+    min-height: calc(56px + env(safe-area-inset-bottom));
+  }
+}
+
+/* ============================================
+   通用组件样式 - 使用CSS变量
+   ============================================ */
+
+/* 按钮样式 */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 24px;
+  font-size: 16px;
+  font-weight: 500;
+  border-radius: var(--radius-md, 8px);
+  transition: all var(--transition-fast, 150ms ease);
+  cursor: pointer;
+}
+
+.btn-primary {
+  background: var(--color-primary, #2563EB);
+  color: var(--text-inverse, #fff);
+}
+
+.btn-primary:hover {
+  background: var(--color-primary-hover, #1D4ED8);
+}
+
+.btn-secondary {
+  background: var(--bg-tertiary, #F1F5F9);
+  color: var(--text-primary, #1E293B);
+}
+
+.btn-secondary:hover {
+  background: var(--border-color, #E2E8F0);
+}
+
+/* 卡片样式 */
+.card {
+  background: var(--bg-secondary, #fff);
+  border-radius: var(--radius-lg, 12px);
+  box-shadow: var(--shadow-md, 0 4px 6px rgba(0, 0, 0, 0.1));
+  padding: 16px;
+  transition: all var(--transition-normal, 200ms ease);
+}
+
+/* 玻璃拟态卡片 */
+[data-theme="glassmorphism"] .card {
+  background: var(--glass-bg, rgba(255, 255, 255, 0.15));
+  backdrop-filter: blur(var(--glass-blur, 15px));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 15px));
+  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.2));
+}
+
+/* 暗黑科技卡片 */
+[data-theme="dark-tech"] .card {
+  background: var(--bg-secondary, #0A0E27);
+  border: 1px solid var(--border-color, rgba(0, 255, 255, 0.2));
+  box-shadow: var(--shadow-md, 0 0 10px rgba(0, 255, 255, 0.2));
+}
+
+/* 柔和治愈卡片 - Neumorphism */
+[data-theme="soft-cure"] .card {
+  box-shadow: var(--shadow-md, -5px -5px 15px rgba(255, 255, 255, 0.8), 5px 5px 15px rgba(0, 0, 0, 0.1));
+}
+
+/* 极简扁平卡片 */
+[data-theme="minimal"] .card {
+  box-shadow: none;
+  border: 1px solid var(--border-color, #E2E8F0);
+}
+
+/* 输入框样式 */
+.input {
+  width: 100%;
+  padding: 12px 16px;
+  font-size: 16px;
+  background: var(--bg-secondary, #fff);
+  color: var(--text-primary, #1E293B);
+  border: 1px solid var(--border-color, #E2E8F0);
+  border-radius: var(--radius-md, 8px);
+  transition: all var(--transition-fast, 150ms ease);
+}
+
+.input:focus {
+  border-color: var(--border-color-focus, var(--color-primary));
+  box-shadow: 0 0 0 3px var(--color-primary-light, rgba(37, 99, 235, 0.1));
+}
+
+/* 标签样式 */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: var(--radius-full, 9999px);
+  background: var(--color-primary-light, #DBEAFE);
+  color: var(--color-primary, #2563EB);
+}
+
+.tag-success {
+  background: var(--color-success-light, #DCFCE7);
+  color: var(--color-success, #22C55E);
+}
+
+.tag-warning {
+  background: var(--color-warning-light, #FEF3C7);
+  color: var(--color-warning, #F59E0B);
+}
+
+.tag-danger {
+  background: var(--color-danger-light, #FEE2E2);
+  color: var(--color-danger, #EF4444);
+}
+
+/* 分割线 */
+.divider {
+  height: 1px;
+  background: var(--border-color, #E2E8F0);
+  margin: 16px 0;
+}
+
+/* 加载动画 */
+.loading-spinner {
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--border-color, #E2E8F0);
+  border-top-color: var(--color-primary, #2563EB);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 暗黑科技加载动画 */
+[data-theme="dark-tech"] .loading-spinner {
+  border-color: rgba(0, 255, 255, 0.2);
+  border-top-color: var(--neon-cyan, #00FFFF);
+  box-shadow: 0 0 10px var(--neon-cyan, #00FFFF);
+}
+
+/* 霓虹发光效果（暗黑科技主题专用） */
+[data-theme="dark-tech"] .neon-glow {
+  text-shadow: 0 0 10px var(--neon-cyan, #00FFFF), 0 0 20px var(--neon-cyan, #00FFFF);
+}
+
+[data-theme="dark-tech"] .neon-border {
+  box-shadow: 0 0 10px var(--neon-cyan, #00FFFF), inset 0 0 10px rgba(0, 255, 255, 0.1);
+}
+
+/* 文字渐变效果（玻璃拟态主题专用） */
+[data-theme="glassmorphism"] .gradient-text {
+  background: linear-gradient(135deg, #667EEA, #F472B6);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ========== iPhone刘海屏安全区域适配 ========== */
+@supports (padding-top: env(safe-area-inset-top)) {
+  #app {
+    padding-top: env(safe-area-inset-top);
+  }
+  
+  .header-fixed,
+  .navbar-fixed {
+    padding-top: env(safe-area-inset-top);
+  }
+  
+  .notification-toast {
+    top: calc(16px + env(safe-area-inset-top));
+  }
+  
+  .task-push-modal {
+    padding-top: env(safe-area-inset-top);
+  }
+}

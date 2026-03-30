@@ -1,0 +1,13 @@
+# 小黄鱼任务中心 - 后端服务配置
+# v3.0 独立服务模式：仅提供 API 和 WebSocket
+
+[project]
+requires = ["nodejs-24"]
+
+[dev]
+build = ["pnpm", "install"]
+run = ["node", "src/app.js"]
+
+[deploy]
+build = ["pnpm", "install"]
+run = ["node", "src/app.js"]

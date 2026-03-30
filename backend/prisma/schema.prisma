@@ -1,0 +1,962 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "cockroachdb"
+  url      = env("DATABASE_URL")
+}
+
+model achievements {
+  id                Int                 @id @default(sequence(maxValue: 2147483647))
+  name              String              @unique
+  description       String?
+  condition_type    String
+  condition_value   Int
+  reward_points     Int                 @default(0)
+  sort_order        Int                 @default(0)
+  is_active         Boolean             @default(true)
+  created_at        DateTime            @default(now())
+  user_achievements user_achievements[]
+}
+
+model admin_notifications {
+  id         BigInt    @id @default(autoincrement())
+  type       String    @db.String(50)
+  title      String    @db.String(200)
+  content    String?
+  data       Json?
+  priority   String?   @default("normal") @db.String(20)
+  is_read    Boolean?  @default(false)
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+
+  @@index([created_at], map: "idx_admin_notifications_created_at")
+  @@index([is_read], map: "idx_admin_notifications_is_read")
+  @@index([type], map: "idx_admin_notifications_type")
+}
+
+model ai_configs {
+  key         String   @id
+  value       String
+  type        String   @default("text")
+  description String?
+  category    String   @default("general")
+  is_enabled  Boolean  @default(true)
+  created_at  DateTime @default(now())
+  updated_at  DateTime
+
+  @@index([category])
+}
+
+model ai_conversations {
+  id          Int           @id @default(sequence(maxValue: 2147483647))
+  user_id     Int
+  type        String
+  title       String?
+  context     String        @default("{}")
+  status      String        @default("active")
+  created_at  DateTime      @default(now())
+  updated_at  DateTime
+  ai_messages ai_messages[]
+
+  @@index([status])
+  @@index([type])
+  @@index([user_id])
+}
+
+model ai_messages {
+  id               Int              @id @default(sequence(maxValue: 2147483647))
+  conversation_id  Int
+  role             String
+  content          String
+  metadata         String           @default("{}")
+  created_at       DateTime         @default(now())
+  ai_conversations ai_conversations @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
+
+  @@index([conversation_id])
+}
+
+model ai_operation_logs {
+  id         Int      @id @default(sequence(maxValue: 2147483647))
+  user_id    Int
+  type       String
+  action     String
+  input      String   @default("{}")
+  output     String   @default("{}")
+  status     String   @default("success")
+  error_msg  String?
+  duration   Int      @default(0)
+  created_at DateTime @default(now())
+
+  @@index([status])
+  @@index([type])
+  @@index([user_id])
+}
+
+model ai_quick_templates {
+  id                 Int      @id @default(sequence(maxValue: 2147483647))
+  user_id            String
+  name               String
+  platform           String
+  action             String   @default("short_video_research")
+  reward             Int      @default(3)
+  remain             Int      @default(10)
+  time_limit_minutes Int       @default(15)
+  description        String?
+  is_default         Boolean  @default(false)
+  sort_order         Int      @default(0)
+  status             String   @default("online")
+  created_at         DateTime @default(now())
+  updated_at         DateTime
+
+  @@index([platform])
+  @@index([status])
+  @@index([user_id])
+}
+
+model ai_review_queue {
+  id            BigInt    @id @default(autoincrement())
+  claim_id      Int       @unique
+  user_id       Int
+  task_id       BigInt
+  screenshots   String    @default("[]")
+  ai_result     String?
+  ai_confidence Float?
+  ai_reason     String?
+  status        String    @default("pending")
+  priority      Int       @default(0)
+  retry_count   Int       @default(0)
+  processed_at  DateTime?
+  processed_by  String?
+  created_at    DateTime  @default(now())
+  updated_at    DateTime
+
+  @@index([claim_id])
+  @@index([priority])
+  @@index([status])
+}
+
+model ai_screenshot_fingerprints {
+  id          Int      @id @default(sequence(maxValue: 2147483647))
+  user_id     Int
+  claim_id    Int?
+  image_url   String
+  fingerprint String
+  status      String   @default("valid")
+  reason      String?
+  created_at  DateTime @default(now())
+
+  @@index([claim_id])
+  @@index([fingerprint])
+  @@index([status])
+  @@index([user_id])
+}
+
+model audit_alerts {
+  id           BigInt    @id @default(autoincrement())
+  alert_type   String
+  alert_level  String    @default("info")
+  user_id      Int?
+  ip_address   String?
+  location     String?
+  alert_detail String    @default("{}")
+  is_resolved  Boolean   @default(false)
+  resolved_by  Int?
+  resolved_at  DateTime?
+  created_at   DateTime  @default(now())
+
+  @@index([alert_type])
+  @@index([created_at])
+  @@index([is_resolved])
+  @@index([user_id])
+}
+
+model balance_logs {
+  id          BigInt   @id @default(autoincrement())
+  user_id     Int
+  admin_id    Int?
+  old_balance Float    @default(0.0)
+  new_balance Float    @default(0.0)
+  change      Float    @default(0.0)
+  type        String   @default("admin_adjust")
+  description String?
+  related_id  Int?
+  created_at  DateTime @default(now())
+
+  @@index([created_at])
+  @@index([type])
+  @@index([user_id])
+}
+
+model blocked_accounts {
+  id                   BigInt    @id @default(autoincrement())
+  platform             String    @db.String(20)
+  platform_nickname    String?   @db.String(100)
+  platform_user_id     String?   @db.String(100)
+  task_id              BigInt?
+  video_url            String?   @db.String(500)
+  comment_content      String?
+  comment_submitted_at DateTime? @db.Timestamp(6)
+  block_type           String?   @default("comment_hidden") @db.String(50)
+  detection_method     String?   @db.String(50)
+  status               String?   @default("suspected") @db.String(20)
+  reviewed_by          BigInt?
+  reviewed_at          DateTime? @db.Timestamp(6)
+  review_note          String?
+  occurrence_count     BigInt?   @default(1)
+  detected_at          DateTime? @default(now()) @db.Timestamp(6)
+  created_at           DateTime? @default(now()) @db.Timestamp(6)
+  updated_at           DateTime? @default(now()) @db.Timestamp(6)
+  user_id              Int
+  claim_id             Int
+
+  @@index([detected_at], map: "idx_blocked_accounts_detected_at")
+  @@index([platform], map: "idx_blocked_accounts_platform")
+  @@index([status], map: "idx_blocked_accounts_status")
+}
+
+model claims {
+  id                  Int                  @id @default(sequence(maxValue: 2147483647))
+  user_id             Int
+  task_id             BigInt
+  title               String
+  platform            String
+  action              String
+  base_reward         Int                  @default(0)
+  reward              Int                  @default(0)
+  level_coefficient   Float                @default(1.0)
+  status              String               @default("doing")
+  city                String?
+  province            String?
+  platform_nickname   String?
+  screenshots         String               @default("[]")
+  expires_at          DateTime
+  claimed_at          DateTime             @default(now())
+  submitted_at        DateTime?
+  reviewed_at         DateTime?
+  reviewer_id         Int?
+  review_note         String?
+  ai_review_status    String?
+  ai_confidence       Float?
+  ai_reason           String?
+  ai_reviewed_at      DateTime?
+  image_review_status String?
+  image_reviewed_at   DateTime?
+  image_review_reason String?
+  link_review_status  String?
+  link_reviewed_at    DateTime?
+  link_review_reason  String?
+  block_status        String?              @default("none") @db.String(20)
+  review_history      Json?                @default("[]")
+  reject_count        BigInt?              @default(0)
+  released_at         DateTime?            @db.Timestamp(6)
+  ocr_comment         String?
+  final_points        Decimal?             @default(0) @db.Decimal(12, 2)
+  bonus_points        Decimal?             @default(0) @db.Decimal(12, 2)
+  publish_time_snapshot DateTime?          @db.Timestamp(6)
+  config_snapshot     Json?
+  settlement_snapshot Json?
+  tasks               tasks                @relation(fields: [task_id], references: [id], onDelete: Cascade)
+  users               users                @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  highlight_queue     highlight_queue[]
+  promotion_earnings  promotion_earnings[]
+
+  @@index([ai_review_status])
+  @@index([status])
+  @@index([task_id])
+  @@index([user_id])
+  @@index([block_status], map: "idx_claims_block_status")
+}
+
+model configs {
+  id    BigInt  @id @default(sequence())
+  key   String  @unique
+  value String
+  desc  String?
+}
+
+model exposure_allocation_logs {
+  id              BigInt   @id @default(autoincrement())
+  task_id         BigInt
+  user_id         BigInt
+  allocation_type String   @default("regular")
+  selection_score BigInt   @default(0)
+  user_level      BigInt   @default(1)
+  user_city       String?
+  created_at      DateTime @default(now()) @db.Timestamp(6)
+}
+
+model exposure_config {
+  id                           BigInt   @id @default(autoincrement())
+  is_active                    Boolean  @unique(map: "idx_exposure_config_active") @default(true)
+  initial_coefficient          Float    @default(1.0)
+  initial_min_extra            BigInt   @default(5)
+  initial_max_extra            BigInt   @default(10)
+  max_coefficient              Float    @default(3.0)
+  check_interval_minutes       BigInt   @default(5)
+  add_ratio_high               Float    @default(0.3)
+  add_ratio_mid                Float    @default(0.5)
+  add_ratio_low                Float    @default(1.0)
+  rate_threshold_high          Float    @default(0.7)
+  rate_threshold_mid           Float    @default(0.4)
+  rate_threshold_low           Float    @default(0.2)
+  exposure_mode                String   @default("priority")
+  sequential_threshold         Float    @default(0.8)
+  exposure_window              BigInt   @default(9999)
+  whitelist_bonus              Float    @default(100.0)
+  blacklist_penalty            Float    @default(-50.0)
+  activity_weight              Float    @default(0.4)
+  speed_weight                 Float    @default(0.3)
+  completion_weight            Float    @default(0.3)
+  freshness_weight            Float    @default(1.0)
+  remain_weight               Float    @default(1.0)
+  city_match_weight           Float    @default(1.0)
+  city_exposure_limit          BigInt   @default(3)
+  province_exposure_limit      BigInt   @default(10)
+  reserved_exposure_quota      BigInt   @default(3)
+  heartbeat_timeout            BigInt   @default(120)
+  offline_buffer_time          BigInt   @default(300)
+  exposure_allocation_interval BigInt   @default(300)
+  created_at                   DateTime @default(now()) @db.Timestamp(6)
+  updated_at                   DateTime @default(now()) @db.Timestamp(6)
+}
+
+model highlight_queue {
+  id              BigInt    @id @default(autoincrement())
+  claim_id        Int
+  user_id         Int
+  user_nickname   String?
+  user_phone      String?
+  task_title      String?
+  screenshot_url  String?
+  link_url        String?
+  reason          String
+  details         Json?
+  status          String?   @default("pending")
+  created_at      DateTime? @default(now()) @db.Timestamp(6)
+  viewed_at       DateTime? @db.Timestamp(6)
+  resolved_at     DateTime? @db.Timestamp(6)
+  resolution_note String?
+  claims          claims    @relation(fields: [claim_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users           users     @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([created_at], map: "idx_highlight_created_at")
+  @@index([status], map: "idx_highlight_status")
+  @@index([user_id], map: "idx_highlight_user_id")
+}
+
+model leaderboard_rewards {
+  id               Int       @id @default(sequence(maxValue: 2147483647))
+  type             String
+  stat_date        DateTime
+  user_id          Int
+  rank_no          Int
+  points           Int       @default(0)
+  title            String?
+  extra_privileges String?
+  status           String    @default("pending")
+  issued_at        DateTime?
+  created_at       DateTime  @default(now())
+  users            users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([type, stat_date, user_id])
+  @@index([type, stat_date, status])
+}
+
+model leaderboard_snapshots {
+  id          Int      @id @default(sequence(maxValue: 2147483647))
+  type        String
+  stat_date   DateTime
+  user_id     Int
+  rank_no     Int
+  points      Int      @default(0)
+  task_count  Int      @default(0)
+  level       Int      @default(1)
+  is_verified Boolean  @default(false)
+  created_at  DateTime @default(now())
+  users       users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([type, stat_date, rank_no])
+  @@index([type, user_id, stat_date])
+}
+
+model level_configs {
+  level                   Int      @id @default(sequence(maxValue: 2147483647))
+  name                    String
+  coefficient             Float    @default(1.0)
+  min_tasks               Int      @default(0)
+  min_points              Int      @default(0)
+  min_pass_rate           Float    @default(0.0)
+  concurrent_tasks        Int      @default(1)
+  priority_support        Boolean  @default(false)
+  icon                    String   @default("")
+  is_enabled              Boolean  @default(true)
+  created_at              DateTime @default(now())
+  updated_at              DateTime
+  exposure_limit          BigInt?  @default(10)
+  regular_exposure_quota  BigInt?  @default(7)
+  reserved_exposure_quota BigInt?  @default(0)
+  level_weight            BigInt?  @default(1)
+}
+
+model link_verification_queue {
+  id                     BigInt    @id @default(autoincrement())
+  claim_id               BigInt
+  user_id                BigInt
+  task_id                BigInt
+  video_url              String?   @db.String(500)
+  comment                String?   @db.String(500)
+  user_name              String?   @db.String(100)
+  platform               String?   @db.String(50)
+  task_author_name       String?   @db.String(100)
+  status                 String?   @default("pending") @db.String(50)
+  priority               BigInt?   @default(0)
+  scheduled_at           DateTime? @db.Timestamp(6)
+  max_process_at         DateTime? @db.Timestamp(6)
+  retry_count            BigInt?   @default(0)
+  proxy_ip               String?   @db.String(50)
+  proxy_used_at          DateTime? @db.Timestamp(6)
+  verification_result    Json?
+  verified               Boolean?
+  error_message          String?   @db.String(500)
+  screenshot_verified_at DateTime? @db.Timestamp(6)
+  processed_at           DateTime? @db.Timestamp(6)
+  created_at             DateTime? @default(now()) @db.Timestamp(6)
+  updated_at             DateTime? @default(now()) @db.Timestamp(6)
+
+  @@index([claim_id], map: "idx_link_queue_claim_id")
+  @@index([created_at], map: "idx_link_queue_created_at")
+  @@index([max_process_at], map: "idx_link_queue_max_process_at")
+  @@index([scheduled_at], map: "idx_link_queue_scheduled_at")
+  @@index([status], map: "idx_link_queue_status")
+}
+
+model login_logs {
+  id             BigInt    @id @default(autoincrement())
+  user_id        BigInt?
+  username       String?
+  login_status   String    @default("success")
+  failure_reason String?
+  ip_address     String?
+  location       String?
+  device         String?
+  user_agent     String?
+  login_time     DateTime  @default(now())
+  logout_time    DateTime?
+  is_anomaly     Boolean   @default(false)
+  anomaly_reason String?
+
+  @@index([is_anomaly])
+  @@index([login_status])
+  @@index([login_time])
+  @@index([user_id])
+  @@index([username])
+}
+
+model night_point_config {
+  id               Int      @id @default(sequence(maxValue: 2147483647))
+  time_start       Int      @default(0)
+  time_end         Int      @default(6)
+  base_coefficient Float    @default(1.4)
+  max_coefficient  Float    @default(1.8)
+  no_accept_bonus  Float    @default(0.1)
+  is_active        Boolean  @default(true)
+  created_at       DateTime @default(now())
+  updated_at       DateTime
+}
+
+model notifications {
+  id         BigInt   @id @default(sequence())
+  user_id    BigInt
+  type       String
+  title      String
+  content    String
+  is_read    Boolean  @default(false)
+  created_at DateTime @default(now())
+}
+
+model online_user_coefficient_map {
+  id               Int      @id @default(sequence(maxValue: 2147483647))
+  online_users_max Int
+  coefficient      Float
+  description      String?
+  sort_order       Int      @default(0)
+  created_at       DateTime @default(now())
+}
+
+model operation_logs {
+  id            Int      @id @default(sequence(maxValue: 2147483647))
+  admin_id      Int?
+  admin_name    String?
+  operator_role String?
+  action        String
+  target_type   String?
+  target_id     Int?
+  target_name   String?
+  description   String?
+  old_value     String?
+  new_value     String?
+  ip_address    String?
+  user_agent    String?
+  created_at    DateTime @default(now())
+
+  @@index([action])
+  @@index([admin_id])
+  @@index([created_at])
+  @@index([target_type])
+}
+
+model points_logs {
+  id          BigInt    @id @default(autoincrement())
+  user_id     BigInt
+  change      BigInt?   @default(0)
+  type        String?   @db.String(50)
+  description String?
+  related_id  BigInt?
+  created_at  DateTime? @default(now()) @db.Timestamp(6)
+}
+
+model promotion_earnings {
+  id            BigInt    @id @default(autoincrement())
+  type          String
+  user_id       Int
+  from_user_id  Int
+  from_claim_id Int?
+  level         Int       @default(1)
+  points        Int       @default(0)
+  source_points Int       @default(0)
+  rate          Float     @default(0.0)
+  status        String    @default("settled")
+  settled_at    DateTime?
+  created_at    DateTime  @default(now())
+  claims        claims?   @relation(fields: [from_claim_id], references: [id])
+  users         users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([from_user_id])
+  @@index([type, user_id, status])
+}
+
+model promotion_relations {
+  id                                         BigInt   @id @default(autoincrement())
+  type                                       String
+  parent_id                                  Int
+  child_id                                   Int
+  level                                      Int      @default(1)
+  created_at                                 DateTime @default(now())
+  users_promotion_relations_child_idTousers  users    @relation("promotion_relations_child_idTousers", fields: [child_id], references: [id], onDelete: Cascade)
+  users_promotion_relations_parent_idTousers users    @relation("promotion_relations_parent_idTousers", fields: [parent_id], references: [id], onDelete: Cascade)
+
+  @@unique([type, parent_id, child_id])
+  @@index([type, child_id])
+  @@index([type, parent_id])
+}
+
+model proxy_pool {
+  id            BigInt    @id @default(autoincrement())
+  ip_address    String    @db.String(50)
+  ip            String?   @db.String(45)
+  port          BigInt?
+  status        String?   @default("available") @db.String(20)
+  use_count     BigInt?   @default(0)
+  fail_count    BigInt?   @default(0)
+  success_count BigInt?   @default(0)
+  last_used_at  DateTime? @db.Timestamp(6)
+  created_at    DateTime? @default(now()) @db.Timestamp(6)
+  updated_at    DateTime? @default(now()) @db.Timestamp(6)
+
+  @@index([status], map: "idx_proxy_pool_status")
+  @@index([use_count], map: "idx_proxy_pool_use_count")
+}
+
+model proxy_usage_logs {
+  id            BigInt   @id @default(autoincrement())
+  action        String   @db.String(50)
+  ip_address    String?  @db.String(50)
+  port          Int?
+  proxy_url     String?  @db.String(100)
+  success       Boolean  @default(true)
+  error_message String?
+  usage_count   Int      @default(0)
+  task_id       BigInt?
+  worker_id     String?  @db.String(50)
+  response_time Int?
+  created_at    DateTime @default(now()) @db.Timestamp(6)
+
+  @@index([action], map: "idx_proxy_usage_logs_action")
+  @@index([created_at], map: "idx_proxy_usage_logs_created_at")
+  @@index([ip_address], map: "idx_proxy_usage_logs_ip")
+}
+
+model records {
+  id         BigInt   @id @default(autoincrement())
+  user_id    Int
+  type       String
+  desc       String
+  points     Decimal  @default(0) @db.Decimal(12, 2)
+  balance    Float    @default(0.0)
+  extra_data String?
+  created_at DateTime @default(now())
+  users      users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([type])
+  @@index([user_id])
+}
+
+model review_rules {
+  id                           BigInt    @id @default(autoincrement())
+  platform                     String    @db.String(50)
+  action                       String    @db.String(50)
+  is_active                    Boolean?  @default(true)
+  ocr_enabled                  Boolean?  @default(true)
+  ocr_provider                 String?   @default("paddleocr") @db.String(50)
+  ocr_confidence_threshold     Decimal?  @default(0.70) @db.Decimal(3, 2)
+  comment_required             Boolean?  @default(true)
+  comment_min_length           BigInt?   @default(8)
+  comment_owner_required       Boolean?  @default(true)
+  comment_owner_keyword        String?   @default("我") @db.String(50)
+  author_match_required        Boolean?  @default(true)
+  author_match_enabled         Boolean?  @default(true)
+  like_required                Boolean?  @default(true)
+  collect_required             Boolean?  @default(true)
+  ai_review_enabled            Boolean?  @default(true)
+  ai_review_trigger            String?   @default("ocr_failed") @db.String(50)
+  ai_provider                  String?   @default("gemini") @db.String(50)
+  auto_approve_enabled         Boolean?  @default(false)
+  auto_approve_threshold       Decimal?  @default(0.85) @db.Decimal(3, 2)
+  auto_reject_enabled          Boolean?  @default(false)
+  auto_reject_threshold        Decimal?  @default(0.50) @db.Decimal(3, 2)
+  link_verify_enabled          Boolean?  @default(true)
+  link_verify_delay_minutes    BigInt?   @default(15)
+  link_verify_batch_threshold  BigInt?   @default(5)
+  link_verify_max_wait_minutes BigInt?   @default(60)
+  description                  String?   @db.String(500)
+  created_at                   DateTime? @default(now()) @db.Timestamp(6)
+  updated_at                   DateTime? @default(now()) @db.Timestamp(6)
+  created_by                   BigInt?
+  updated_by                   BigInt?
+
+  @@index([action], map: "idx_review_rules_action")
+  @@index([is_active], map: "idx_review_rules_active")
+  @@index([platform], map: "idx_review_rules_platform")
+}
+
+model roles {
+  id              BigInt   @id @default(autoincrement())
+  code            String   @unique
+  name            String
+  role_type       String
+  can_b_promotion Boolean  @default(false)
+  description     String?
+  permissions     String   @default("[]")
+  created_at      DateTime @default(now())
+}
+
+model sign_ins {
+  id              Int      @id @default(sequence(maxValue: 2147483647))
+  user_id         Int
+  sign_date       String
+  points_earned   Int      @default(0)
+  continuous_days Int      @default(1)
+  created_at      DateTime @default(now())
+
+  @@unique([user_id, sign_date])
+  @@index([sign_date])
+  @@index([user_id])
+}
+
+model suspicious_users {
+  id         Int      @id @default(sequence(maxValue: 2147483647))
+  user_id    Int
+  username   String?
+  reason     String?
+  risk_level String   @default("medium")
+  evidence   String   @default("{}")
+  status     String   @default("monitoring")
+  created_at DateTime @default(now())
+  updated_at DateTime
+
+  @@index([status])
+  @@index([user_id])
+}
+
+model system_config {
+  id          Int      @id @default(sequence(maxValue: 2147483647))
+  key         String   @unique @db.String(100)
+  value       Json?
+  description String?
+  created_at  DateTime @default(now())
+  updated_at  DateTime @default(now())
+
+  @@index([key], map: "idx_system_config_key")
+}
+
+model system_configs {
+  key         String   @id
+  value       String
+  description String?
+  created_at  DateTime @default(now())
+  updated_at  DateTime
+}
+
+model system_logs {
+  id         Int      @id @default(sequence(maxValue: 2147483647))
+  level      String   @default("info")
+  type       String?
+  message    String
+  context    String?
+  user_id    Int?
+  username   String?
+  ip_address String?
+  created_at DateTime @default(now())
+
+  @@index([created_at])
+  @@index([level])
+  @@index([type])
+  @@index([user_id])
+}
+
+model task_exposure {
+  id               BigInt    @id @default(autoincrement())
+  task_id          BigInt
+  need_count       BigInt    @default(0)
+  initial_exposure BigInt    @default(0)
+  current_exposure BigInt    @default(0)
+  max_exposure     BigInt    @default(0)
+  accepted_count   BigInt    @default(0)
+  submitted_count  BigInt    @default(0)
+  status           String    @default("active")
+  queue_position   BigInt    @default(0)
+  unlocked_at      DateTime? @db.Timestamp(6)
+  last_check_at    DateTime? @db.Timestamp(6)
+  created_at       DateTime  @default(now()) @db.Timestamp(6)
+  updated_at       DateTime  @default(now()) @db.Timestamp(6)
+}
+
+model task_exposure_logs {
+  id              BigInt   @id @default(autoincrement())
+  task_id         BigInt
+  event_type      String
+  exposure_before BigInt   @default(0)
+  exposure_after  BigInt   @default(0)
+  exposure_add    BigInt   @default(0)
+  accept_rate     Float?
+  reason          String?
+  created_at      DateTime @default(now()) @db.Timestamp(6)
+}
+
+model task_review_logs {
+  id          BigInt    @id @default(autoincrement())
+  claim_id    BigInt?
+  task_id     BigInt?
+  user_id     BigInt?
+  reviewer_id BigInt?
+  action      String?
+  old_status  String?
+  new_status  String?
+  note        String?
+  ai_reviewed Boolean?
+  created_at  DateTime? @default(now())
+}
+
+model task_templates {
+  id          BigInt    @id @default(autoincrement())
+  title       String    @db.String(255)
+  platform    String?   @db.String(50)
+  action      String?   @db.String(100)
+  reward      Decimal?  @default(0) @db.Decimal(10, 2)
+  total_count BigInt?   @default(0)
+  remain      BigInt?   @default(0)
+  video_url   String?
+  description String?
+  is_active   Boolean?  @default(true)
+  created_by  BigInt?
+  created_at  DateTime? @default(now()) @db.Timestamp(6)
+  updated_at  DateTime? @default(now()) @db.Timestamp(6)
+}
+
+model task_view_records {
+  id         BigInt   @id @default(autoincrement())
+  task_id    BigInt
+  user_id    BigInt
+  city       String?
+  province   String?
+  source     String   @default("list")
+  created_at DateTime @default(now()) @db.Timestamp(6)
+
+  @@unique([task_id, user_id])
+}
+
+model tasks {
+  id                 BigInt    @id @default(sequence())
+  title              String
+  platform           String
+  action             String
+  video_url          String?
+  description        String
+  task_code          String?
+  example_images     String    @default("[]")
+  need_count         Int       @default(0)
+  template_images    String    @default("[]")
+  requirements       String    @default("[]")
+  base_reward        Int       @default(0)
+  reward             Int       @default(0)
+  remain             Int       @default(0)
+  time_limit_minutes Int       @default(15)
+  city_limit         Int       @default(1)
+  province_limit     Int       @default(4)
+  publisher_type     String    @default("official")
+  publisher_id       Int?
+  platform_fee_rate  Float     @default(0.0)
+  limit_cities       String    @default("[]")
+  daily_limit        Int       @default(0)
+  start_time         DateTime?
+  end_time           DateTime?
+  status             String    @default("pending_audit")
+  created_at         DateTime  @default(now())
+  updated_at         DateTime
+  claims             claims[]
+
+  @@index([platform])
+  @@index([publisher_type])
+  @@index([status])
+}
+
+model user_achievements {
+  id             Int          @id @default(sequence(maxValue: 2147483647))
+  user_id        Int
+  achievement_id Int
+  achieved_at    DateTime     @default(now())
+  achievements   achievements @relation(fields: [achievement_id], references: [id], onDelete: Cascade)
+  users          users        @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([user_id, achievement_id])
+}
+
+model user_credit_scores {
+  id                Int      @id @default(sequence(maxValue: 2147483647))
+  user_id           Int      @unique
+  score             Int      @default(50)
+  level             String   @default("normal")
+  pass_rate_score   Float    @default(0.0)
+  speed_score       Float    @default(0.0)
+  frequency_score   Float    @default(0.0)
+  cheat_score       Float    @default(0.0)
+  random_check_rate Float    @default(0.05)
+  stats_snapshot    String   @default("{}")
+  updated_at        DateTime
+
+  @@index([level])
+  @@index([score])
+}
+
+model user_notifications {
+  id         BigInt    @id @default(autoincrement())
+  user_id    BigInt
+  type       String    @db.String(50)
+  title      String    @db.String(200)
+  content    String?
+  data       Json?
+  is_read    Boolean?  @default(false)
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+
+  @@index([created_at], map: "idx_user_notifications_created_at")
+  @@index([is_read], map: "idx_user_notifications_is_read")
+  @@index([user_id], map: "idx_user_notifications_user")
+}
+
+model user_quality_score {
+  id                 BigInt   @id @default(autoincrement())
+  user_id            BigInt   @unique
+  activity_score     BigInt   @default(0)
+  quality_score      BigInt   @default(0)
+  online_score       BigInt   @default(0)
+  total_score        BigInt   @default(0)
+  level              String   @default("new")
+  last_calculated_at DateTime @default(now()) @db.Timestamp(6)
+  created_at         DateTime @default(now()) @db.Timestamp(6)
+  updated_at         DateTime @default(now()) @db.Timestamp(6)
+}
+
+model users {
+  id                                                       Int                     @id @default(sequence(maxValue: 2147483647))
+  username                                                 String                  @unique
+  phone                                                    String?
+  password_hash                                            String
+  role                                                     String                  @default("part_timer")
+  level                                                    Int                     @default(1)
+  total_tasks                                              Int                     @default(0)
+  total_points                                             Decimal                 @default(0) @db.Decimal(12, 2)
+  pass_rate_30d                                            Float                   @default(100.0)
+  last_task_date                                           DateTime?
+  points                                                   Decimal                 @default(0) @db.Decimal(12, 2)
+  balance                                                  Float                   @default(0.0)
+  b_promotion_points                                       Int                     @default(0)
+  invite_code                                              String                  @unique
+  invited_by                                               Int?
+  c_parent_id                                              Int?
+  c_grand_id                                               Int?
+  b_inviter_id                                             Int?
+  status                                                   Int                     @default(1)
+  created_at                                               DateTime                @default(now())
+  updated_at                                               DateTime
+  has_blocked_account                                      Boolean?                @default(false)
+  blocked_account_count                                    BigInt?                 @default(0)
+  last_blocked_at                                          DateTime?               @db.Timestamp(6)
+  exposure_level                                           BigInt?                 @default(1)
+  exposure_priority                                        BigInt?                 @default(50)
+  is_whitelist                                             Boolean?                @default(false)
+  is_blacklist                                             Boolean?                @default(false)
+  province                                                 String?
+  city                                                     String?
+  current_exposure                                         BigInt?                 @default(0)
+  regular_used                                             BigInt?                 @default(0)
+  reserved_used                                            BigInt?                 @default(0)
+  completed_tasks                                          BigInt?                 @default(0)
+  canceled_tasks                                           BigInt?                 @default(0)
+  avg_submit_time                                          Float?                  @default(0.0)
+  exchanged_points                                         BigInt?                 @default(0)
+  task_points                                              BigInt?                 @default(0)
+  total_approved_tasks                                     BigInt?                 @default(0)
+  notification_enabled                                     Boolean?                @default(true)
+  theme_preference                                         String?                 @db.String(50)
+  language                                                 String?                 @db.String(20)
+  claims                                                   claims[]
+  highlight_queue                                          highlight_queue[]
+  leaderboard_rewards                                      leaderboard_rewards[]
+  leaderboard_snapshots                                    leaderboard_snapshots[]
+  promotion_earnings                                       promotion_earnings[]
+  promotion_relations_promotion_relations_child_idTousers  promotion_relations[]   @relation("promotion_relations_child_idTousers")
+  promotion_relations_promotion_relations_parent_idTousers promotion_relations[]   @relation("promotion_relations_parent_idTousers")
+  records                                                  records[]
+  user_achievements                                        user_achievements[]
+  users                                                    users?                  @relation("usersTousers", fields: [invited_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  other_users                                              users[]                 @relation("usersTousers")
+  withdrawals                                              withdrawals[]
+
+  @@index([b_inviter_id])
+  @@index([c_parent_id])
+  @@index([level])
+  @@index([role])
+  @@index([username])
+}
+
+model withdrawals {
+  id          Int       @id @default(sequence(maxValue: 2147483647))
+  user_id     Int
+  type        String    @default("part_time")
+  amount      Float
+  points      Int       @default(0)
+  status      String    @default("pending")
+  wechat_info String?
+  reviewed_at DateTime?
+  reviewer_id Int?
+  review_note String?
+  paid_at     DateTime?
+  created_at  DateTime  @default(now())
+  updated_at  DateTime
+  users       users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@index([type])
+  @@index([user_id])
+}

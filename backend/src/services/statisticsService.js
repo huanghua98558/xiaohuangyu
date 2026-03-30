@@ -1,0 +1,631 @@
+import supabase from '../utils/supabaseToPrismaAdapter.js'
+import prisma from '../utils/prisma.js'
+import db from '../config/database.js'
+import logger from '../utils/logger.js'
+import { PENDING_REVIEW_STATUSES } from '../constants/claimLifecycle.js'
+
+const CLAIM_COMPLETED_AT_SQL = `
+  COALESCE(
+    GREATEST(
+      COALESCE(c.reviewed_at, c.image_reviewed_at, c.link_reviewed_at),
+      COALESCE(c.image_reviewed_at, c.reviewed_at, c.link_reviewed_at),
+      COALESCE(c.link_reviewed_at, c.reviewed_at, c.image_reviewed_at)
+    ),
+    c.reviewed_at,
+    c.image_reviewed_at,
+    c.link_reviewed_at
+  )
+`
+
+/**
+ * 统计分析服务
+ */
+class StatisticsService {
+  /**
+   * 获取概览统计
+   */
+  async getOverviewStats() {
+    try {
+      const today = new Date()
+      today.setHours(0, 0, 0, 0)
+      const todayStart = today
+
+      // 本周开始（周一）
+      const weekStart = new Date(today)
+      const dayOfWeek = weekStart.getDay() || 7
+      weekStart.setDate(weekStart.getDate() - dayOfWeek + 1)
+      
+      // 上周开始
+      const lastWeekStart = new Date(weekStart)
+      lastWeekStart.setDate(lastWeekStart.getDate() - 7)
+      const lastWeekEnd = new Date(weekStart)
+      lastWeekEnd.setDate(lastWeekEnd.getDate() - 1)
+
+      // 本月开始
+      const monthStart = new Date(today.getFullYear(), today.getMonth(), 1)
+      
+      // 上月开始
+      const lastMonthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1)
+      const overview = await db.queryOne(
+        `
+        SELECT
+          (SELECT COUNT(*)::int FROM operation_logs) AS total_operations,
+          (SELECT COUNT(*)::int FROM operation_logs WHERE created_at >= $1::timestamp) AS today_operations,
+          (SELECT COUNT(*)::int FROM audit_alerts) AS total_alerts,
+          (SELECT COUNT(*)::int FROM audit_alerts WHERE COALESCE(is_resolved, false) = false) AS unhandled_alerts,
+          (SELECT COUNT(*)::int FROM login_logs) AS total_logins,
+          (SELECT COUNT(*)::int FROM login_logs WHERE login_time >= $1::timestamp) AS today_logins,
+          (SELECT COUNT(*)::int FROM users) AS total_users,
+          (SELECT COUNT(*)::int FROM users WHERE created_at >= $1::timestamp) AS today_new_users,
+          (SELECT COUNT(*)::int FROM tasks) AS total_tasks,
+          (SELECT COUNT(*)::int FROM tasks WHERE created_at >= $1::timestamp) AS today_tasks,
+          (SELECT COUNT(*)::int FROM tasks WHERE status = 'active') AS active_tasks,
+          (SELECT COUNT(*)::int FROM claims) AS total_claims,
+          (SELECT COUNT(*)::int FROM claims WHERE claimed_at >= $1::timestamp) AS today_claims,
+          (SELECT COUNT(*)::int FROM claims c WHERE c.status IN ('approved','done')
+            AND LOWER(COALESCE(TRIM(c.image_review_status), '')) IN ('approved', 'checked')
+            AND LOWER(COALESCE(TRIM(c.link_review_status), '')) IN ('approved', 'skipped', 'passed', 'checked')
+          ) AS total_completed,
+          (SELECT COUNT(*)::int FROM claims c WHERE c.status IN ('approved','done')
+            AND LOWER(COALESCE(TRIM(c.image_review_status), '')) IN ('approved', 'checked')
+            AND LOWER(COALESCE(TRIM(c.link_review_status), '')) IN ('approved', 'skipped', 'passed', 'checked')
+            AND ${CLAIM_COMPLETED_AT_SQL} >= $1::timestamp
+          ) AS today_completed,
+          (SELECT COUNT(*)::int FROM claims c WHERE c.status IN ('approved','done')
+            AND LOWER(COALESCE(TRIM(c.image_review_status), '')) IN ('approved', 'checked')
+            AND LOWER(COALESCE(TRIM(c.link_review_status), '')) IN ('approved', 'skipped', 'passed', 'checked')
+            AND ${CLAIM_COMPLETED_AT_SQL} >= $2::timestamp
+          ) AS week_completed,
+          (SELECT COUNT(*)::int FROM claims c WHERE c.status IN ('approved','done')
+            AND LOWER(COALESCE(TRIM(c.image_review_status), '')) IN ('approved', 'checked')
+            AND LOWER(COALESCE(TRIM(c.link_review_status), '')) IN ('approved', 'skipped', 'passed', 'checked')
+            AND ${CLAIM_COMPLETED_AT_SQL} >= $3::timestamp AND ${CLAIM_COMPLETED_AT_SQL} < $2::timestamp
+          ) AS last_week_completed,
+          (SELECT COUNT(*)::int FROM claims c WHERE c.status IN ('approved','done')
+            AND LOWER(COALESCE(TRIM(c.image_review_status), '')) IN ('approved', 'checked')
+            AND LOWER(COALESCE(TRIM(c.link_review_status), '')) IN ('approved', 'skipped', 'passed', 'checked')
+            AND ${CLAIM_COMPLETED_AT_SQL} >= $4::timestamp
+          ) AS month_completed,
+          (SELECT COUNT(*)::int FROM claims c WHERE c.status IN ('approved','done')
+            AND LOWER(COALESCE(TRIM(c.image_review_status), '')) IN ('approved', 'checked')
+            AND LOWER(COALESCE(TRIM(c.link_review_status), '')) IN ('approved', 'skipped', 'passed', 'checked')
+            AND ${CLAIM_COMPLETED_AT_SQL} >= $5::timestamp AND ${CLAIM_COMPLETED_AT_SQL} < $4::timestamp
+          ) AS last_month_completed,
+          (SELECT COUNT(*)::int FROM claims WHERE status = ANY($6::text[])) AS pending_claims
+        `,
+        [
+          todayStart,
+          weekStart,
+          lastWeekStart,
+          monthStart,
+          lastMonthStart,
+          PENDING_REVIEW_STATUSES,
+        ]
+      )
+
+      return {
+        totalOperations: Number(overview?.total_operations || 0),
+        todayOperations: Number(overview?.today_operations || 0),
+        totalAlerts: Number(overview?.total_alerts || 0),
+        unhandledAlerts: Number(overview?.unhandled_alerts || 0),
+        totalLogins: Number(overview?.total_logins || 0),
+        todayLogins: Number(overview?.today_logins || 0),
+        totalUsers: Number(overview?.total_users || 0),
+        todayNewUsers: Number(overview?.today_new_users || 0),
+        totalTasks: Number(overview?.total_tasks || 0),
+        todayTasks: Number(overview?.today_tasks || 0),
+        activeTasks: Number(overview?.active_tasks || 0),
+        totalClaims: Number(overview?.total_claims || 0),
+        todayClaims: Number(overview?.today_claims || 0),
+        pendingClaims: Number(overview?.pending_claims || 0),
+        // 完成统计
+        totalCompleted: Number(overview?.total_completed || 0),
+        todayCompleted: Number(overview?.today_completed || 0),
+        weekCompleted: Number(overview?.week_completed || 0),
+        lastWeekCompleted: Number(overview?.last_week_completed || 0),
+        monthCompleted: Number(overview?.month_completed || 0),
+        lastMonthCompleted: Number(overview?.last_month_completed || 0),
+      }
+    } catch (error) {
+      logger.error('获取概览统计失败:', error)
+      throw error
+    }
+  }
+
+  /**
+   * 获取审核员绩效统计
+   */
+  async getReviewerStats(options = {}) {
+    const { startDate, endDate, sortBy = 'total_reviews', sortOrder = 'desc' } = options
+    
+    try {
+      // 构建基础查询 - 从claims表获取审核记录
+      let query = supabase
+        .from('claims')
+        .select('reviewer_id, status, reviewed_at')
+        .not('reviewer_id', 'is', null)
+        .in('status', [CLAIM_STATUS.APPROVED, CLAIM_STATUS.DONE, CLAIM_STATUS.REJECTED, CLAIM_STATUS.IMAGE_REJECTED, CLAIM_STATUS.LINK_REJECTED, CLAIM_STATUS.RELEASED])
+
+      // 时间范围筛选
+      if (startDate) {
+        query = query.gte('reviewed_at', new Date(startDate))
+      }
+      if (endDate) {
+        const end = new Date(endDate)
+        end.setHours(23, 59, 59, 999)
+        query = query.lte('reviewed_at', end)
+      }
+
+      const { data: claims, error } = await query
+
+      if (error) {
+        logger.error('查询审核记录失败:', error)
+        return []
+      }
+
+      // 获取所有审核员ID
+      const reviewerIds = [...new Set((claims || []).map(c => c.reviewer_id).filter(Boolean))]
+      
+      // 查询审核员信息
+      let reviewerMap = new Map()
+      if (reviewerIds.length > 0) {
+        const { data: reviewers } = await supabase
+          .from('users')
+          .select('id, username, name')
+          .in('id', reviewerIds)
+        
+        ;(reviewers || []).forEach(r => {
+          reviewerMap.set(r.id, r.name || r.username || `用户${r.id}`)
+        })
+      }
+
+      // 按审核员分组统计
+      const statsMap = new Map()
+
+      for (const claim of claims || []) {
+        const reviewerId = claim.reviewer_id
+        if (!reviewerId) continue
+
+        if (!statsMap.has(reviewerId)) {
+          statsMap.set(reviewerId, {
+            reviewer_id: reviewerId,
+            reviewer_name: reviewerMap.get(reviewerId) || `用户${reviewerId}`,
+            total_reviews: 0,
+            approved: 0,
+            rejected: 0,
+            review_times: []
+          })
+        }
+
+        const stats = statsMap.get(reviewerId)
+        stats.total_reviews++
+        
+        if (claim.status === 'done') {
+          stats.approved++
+        } else if (claim.status === 'rejected') {
+          stats.rejected++
+        }
+
+        if (claim.reviewed_at) {
+          stats.review_times.push(new Date(claim.reviewed_at))
+        }
+      }
+
+      // 计算通过率和平均审核时间
+      const result = Array.from(statsMap.values()).map(stats => {
+        const approvalRate = stats.total_reviews > 0 
+          ? Math.round((stats.approved / stats.total_reviews) * 100) 
+          : 0
+
+        // 计算平均审核时间（简化版：基于审核记录的时间间隔）
+        let avgReviewTime = 0
+        if (stats.review_times.length > 1) {
+          stats.review_times.sort((a, b) => a - b)
+          let totalTime = 0
+          for (let i = 1; i < stats.review_times.length; i++) {
+            totalTime += stats.review_times[i] - stats.review_times[i - 1]
+          }
+          avgReviewTime = totalTime / (stats.review_times.length - 1) / 1000 / 60 // 转换为分钟
+        }
+
+        return {
+          reviewer_id: stats.reviewer_id,
+          reviewer_name: stats.reviewer_name,
+          total_reviews: stats.total_reviews,
+          approved: stats.approved,
+          rejected: stats.rejected,
+          approval_rate: approvalRate,
+          avg_review_time: avgReviewTime
+        }
+      })
+
+      // 排序
+      result.sort((a, b) => {
+        const aVal = a[sortBy] || 0
+        const bVal = b[sortBy] || 0
+        return sortOrder === 'desc' ? bVal - aVal : aVal - bVal
+      })
+
+      return result
+    } catch (error) {
+      logger.error('获取审核员统计失败:', error)
+      throw error
+    }
+  }
+
+  /**
+   * 获取发布者任务质量统计
+   */
+  async getPublisherStats(options = {}) {
+    const { startDate, endDate, sortBy = 'total_tasks', sortOrder = 'desc' } = options
+    
+    try {
+      // 构建基础查询 - 从tasks表获取任务记录
+      let query = supabase
+        .from('tasks')
+        .select('id, publisher_id, status, need_count')
+
+      // 时间范围筛选
+      if (startDate) {
+        query = query.gte('created_at', new Date(startDate))
+      }
+      if (endDate) {
+        const end = new Date(endDate)
+        end.setHours(23, 59, 59, 999)
+        query = query.lte('created_at', end)
+      }
+
+      const { data: tasks, error: tasksError } = await query
+
+      if (tasksError) {
+        logger.error('查询任务记录失败:', tasksError)
+        return []
+      }
+
+      // 获取所有发布者ID
+      const publisherIds = [...new Set((tasks || []).map(t => t.publisher_id).filter(Boolean))]
+      
+      // 查询发布者信息
+      let publisherMap = new Map()
+      if (publisherIds.length > 0) {
+        const { data: publishers } = await supabase
+          .from('users')
+          .select('id, username, name')
+          .in('id', publisherIds)
+        
+        ;(publishers || []).forEach(p => {
+          publisherMap.set(p.id, p.name || p.username || `用户${p.id}`)
+        })
+      }
+
+      // 获取所有任务的领取记录
+      const taskIds = (tasks || []).map(t => t.id)
+      let claimsData = []
+      
+      if (taskIds.length > 0) {
+        const { data } = await supabase
+          .from('claims')
+          .select('task_id, status')
+          .in('task_id', taskIds)
+        claimsData = data || []
+      }
+
+      // 统计每个任务的领取情况
+      const taskClaimStats = new Map()
+      for (const claim of claimsData) {
+        if (!taskClaimStats.has(claim.task_id)) {
+          taskClaimStats.set(claim.task_id, { total: 0, completed: 0 })
+        }
+        const stats = taskClaimStats.get(claim.task_id)
+        stats.total++
+        if (claim.status === 'done') {
+          stats.completed++
+        }
+      }
+
+      // 按发布者分组统计
+      const statsMap = new Map()
+
+      for (const task of tasks || []) {
+        const publisherId = task.publisher_id
+        if (!publisherId) continue
+
+        if (!statsMap.has(publisherId)) {
+          statsMap.set(publisherId, {
+            publisher_id: publisherId,
+            publisher_name: publisherMap.get(publisherId) || `用户${publisherId}`,
+            total_tasks: 0,
+            active_tasks: 0,
+            total_claims: 0,
+            completed_claims: 0,
+            total_needed: 0
+          })
+        }
+
+        const stats = statsMap.get(publisherId)
+        stats.total_tasks++
+        
+        if (task.status === 'active') {
+          stats.active_tasks++
+        }
+
+        const claimStats = taskClaimStats.get(task.id) || { total: 0, completed: 0 }
+        stats.total_claims += claimStats.total
+        stats.completed_claims += claimStats.completed
+        stats.total_needed += task.need_count || 0
+      }
+
+      // 计算完成率和平均评分
+      const result = Array.from(statsMap.values()).map(stats => {
+        const completionRate = stats.total_claims > 0 
+          ? Math.round((stats.completed_claims / stats.total_claims) * 100) 
+          : 0
+
+        // 平均评分暂时用完成率来模拟（实际项目中可以添加评分表）
+        const avgRating = completionRate / 20 // 转换为1-5分
+
+        return {
+          publisher_id: stats.publisher_id,
+          publisher_name: stats.publisher_name,
+          total_tasks: stats.total_tasks,
+          active_tasks: stats.active_tasks,
+          total_claims: stats.total_claims,
+          completion_rate: completionRate,
+          avg_rating: Math.min(5, avgRating).toFixed(1)
+        }
+      })
+
+      // 排序
+      result.sort((a, b) => {
+        let aVal = a[sortBy]
+        let bVal = b[sortBy]
+        
+        // 字符串转数字
+        if (sortBy === 'avg_rating') {
+          aVal = parseFloat(aVal) || 0
+          bVal = parseFloat(bVal) || 0
+        }
+        
+        return sortOrder === 'desc' ? bVal - aVal : aVal - bVal
+      })
+
+      return result
+    } catch (error) {
+      logger.error('获取发布者统计失败:', error)
+      throw error
+    }
+  }
+
+  /**
+   * 获取趋势数据
+   */
+  async getTrendData(days = 7) {
+    try {
+      const today = new Date()
+      today.setHours(0, 0, 0, 0)
+
+      const startDate = new Date(today)
+      startDate.setDate(startDate.getDate() - (days - 1))
+
+      const tomorrow = new Date(today)
+      tomorrow.setDate(tomorrow.getDate() + 1)
+
+      const startSignDate = startDate.toISOString().split('T')[0]
+      const endSignDate = today.toISOString().split('T')[0]
+
+      const [claimsByDay, tasksByDay, completionsByDay, pointsByDay, signInsByDay] = await Promise.all([
+        prisma.$queryRaw`
+          SELECT CAST(DATE(claimed_at) AS STRING) AS day, COUNT(*)::int AS cnt
+          FROM claims
+          WHERE claimed_at >= ${startDate}
+            AND claimed_at < ${tomorrow}
+          GROUP BY 1
+        `,
+        prisma.$queryRaw`
+          SELECT CAST(DATE(created_at) AS STRING) AS day, COUNT(*)::int AS cnt
+          FROM tasks
+          WHERE created_at >= ${startDate}
+            AND created_at < ${tomorrow}
+          GROUP BY 1
+        `,
+        prisma.$queryRawUnsafe(
+          `
+          SELECT CAST(DATE(${CLAIM_COMPLETED_AT_SQL}) AS STRING) AS day, COUNT(*)::int AS cnt
+          FROM claims c
+          WHERE c.status IN ('approved', 'done')
+            AND LOWER(COALESCE(TRIM(c.image_review_status), '')) IN ('approved', 'checked')
+            AND LOWER(COALESCE(TRIM(c.link_review_status), '')) IN ('approved', 'skipped', 'passed', 'checked')
+            AND ${CLAIM_COMPLETED_AT_SQL} >= $1
+            AND ${CLAIM_COMPLETED_AT_SQL} < $2
+          GROUP BY 1
+          `,
+          startDate,
+          tomorrow
+        ),
+        prisma.$queryRaw`
+          SELECT CAST(DATE(created_at) AS STRING) AS day,
+                 COALESCE(SUM(CASE WHEN points > 0 THEN points ELSE 0 END), 0) AS total
+          FROM records
+          WHERE created_at >= ${startDate}
+            AND created_at < ${tomorrow}
+          GROUP BY 1
+        `,
+        prisma.$queryRawUnsafe(
+          `
+          SELECT sign_date AS day, COUNT(*)::int AS cnt
+          FROM sign_ins
+          WHERE sign_date >= $1
+            AND sign_date <= $2
+          GROUP BY 1
+          `,
+          startSignDate,
+          endSignDate
+        ),
+      ])
+
+      const dateMap = new Map()
+      for (let i = 0; i < days; i++) {
+        const date = new Date(startDate)
+        date.setDate(startDate.getDate() + i)
+        const dateStr = date.toISOString().split('T')[0]
+        dateMap.set(dateStr, {
+          date: dateStr,
+          publishedTasks: 0,
+          claims: 0,
+          completions: 0,
+          pointsIssued: 0,
+          signIns: 0,
+        })
+      }
+
+      for (const row of claimsByDay || []) {
+        const day = row.day ? String(row.day).trim() : null
+        if (day && dateMap.has(day)) dateMap.get(day).claims = Number(row.cnt || 0)
+      }
+
+      for (const row of tasksByDay || []) {
+        const day = row.day ? String(row.day).trim() : null
+        if (day && dateMap.has(day)) dateMap.get(day).publishedTasks = Number(row.cnt || 0)
+      }
+
+      for (const row of completionsByDay || []) {
+        const day = row.day ? String(row.day).trim() : null
+        if (day && dateMap.has(day)) dateMap.get(day).completions = Number(row.cnt || 0)
+      }
+
+      for (const row of pointsByDay || []) {
+        const day = row.day ? String(row.day).trim() : null
+        if (day && dateMap.has(day)) dateMap.get(day).pointsIssued = Number(row.total || 0)
+      }
+
+      for (const row of signInsByDay || []) {
+        const day = row.day ? String(row.day).trim() : null
+        if (day && dateMap.has(day)) dateMap.get(day).signIns = Number(row.cnt || 0)
+      }
+
+      return Array.from(dateMap.values())
+    } catch (error) {
+      logger.error('获取趋势数据失败:', error)
+      throw error
+    }
+  }
+
+  /**
+   * 获取今日实时趋势数据（按指定时间间隔）
+   */
+  async getTodayRealtimeTrend(intervalMinutes = 10) {
+    try {
+      const now = new Date()
+      const todayStart = new Date(now)
+      todayStart.setHours(0, 0, 0, 0)
+
+      const totalMinutes = (now - todayStart) / (1000 * 60)
+      const intervals = Math.floor(totalMinutes / intervalMinutes)
+
+      const trendData = []
+      for (let i = 0; i <= intervals; i++) {
+        const intervalStart = new Date(todayStart)
+        intervalStart.setMinutes(i * intervalMinutes, 0, 0)
+
+        const intervalEnd = new Date(intervalStart)
+        intervalEnd.setMinutes((i + 1) * intervalMinutes, 0, 0)
+
+        const [claimsRows, publishedRows, completionRows, pointsRows, signInRows] = await Promise.all([
+          prisma.$queryRaw`
+            SELECT COUNT(*)::int AS cnt
+            FROM claims
+            WHERE claimed_at >= ${intervalStart}
+              AND claimed_at < ${intervalEnd}
+          `,
+          prisma.$queryRaw`
+            SELECT COUNT(*)::int AS cnt
+            FROM tasks
+            WHERE created_at >= ${intervalStart}
+              AND created_at < ${intervalEnd}
+          `,
+          prisma.$queryRawUnsafe(
+            `
+            SELECT COUNT(*)::int AS cnt
+            FROM claims c
+            WHERE c.status IN ('approved', 'done')
+              AND LOWER(COALESCE(TRIM(c.image_review_status), '')) IN ('approved', 'checked')
+              AND LOWER(COALESCE(TRIM(c.link_review_status), '')) IN ('approved', 'skipped', 'passed', 'checked')
+              AND ${CLAIM_COMPLETED_AT_SQL} >= $1
+              AND ${CLAIM_COMPLETED_AT_SQL} < $2
+            `,
+            intervalStart,
+            intervalEnd
+          ),
+          prisma.$queryRaw`
+            SELECT COALESCE(SUM(CASE WHEN points > 0 THEN points ELSE 0 END), 0) AS total
+            FROM records
+            WHERE created_at >= ${intervalStart}
+              AND created_at < ${intervalEnd}
+          `,
+          prisma.$queryRaw`
+            SELECT COUNT(*)::int AS cnt
+            FROM sign_ins
+            WHERE created_at >= ${intervalStart}
+              AND created_at < ${intervalEnd}
+          `,
+        ])
+
+        trendData.push({
+          time: intervalStart.toLocaleTimeString('zh-CN', {
+            hour: '2-digit',
+            minute: '2-digit'
+          }),
+          timestamp: intervalStart.getTime(),
+          publishedTasks: Number(publishedRows[0]?.cnt || 0),
+          claims: Number(claimsRows[0]?.cnt || 0),
+          completions: Number(completionRows[0]?.cnt || 0),
+          pointsIssued: Number(pointsRows[0]?.total || 0),
+          signIns: Number(signInRows[0]?.cnt || 0),
+        })
+      }
+
+      return {
+        interval: intervalMinutes,
+        data: trendData,
+        lastUpdated: Date.now()
+      }
+    } catch (error) {
+      logger.error('获取今日实时趋势失败:', error)
+      throw error
+    }
+  }
+
+  async getRealtimeStats() {
+    const now = new Date()
+    const fiveMinutesAgo = new Date(now.getTime() - 5 * 60 * 1000)
+
+    const [claims, onlineUsers, blockedAccounts] = await Promise.all([
+      prisma.$queryRaw`
+        SELECT COUNT(*) as total,
+          SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) as done
+        FROM claims
+        WHERE claimed_at >= ${fiveMinutesAgo}
+      `,
+      prisma.$queryRaw`
+        SELECT COUNT(DISTINCT user_id) as count
+        FROM login_logs
+        WHERE login_time >= ${fiveMinutesAgo}
+      `,
+      prisma.$queryRaw`
+        SELECT COUNT(*) as count
+        FROM users
+        WHERE status = 0
+      `
+    ])
+
+    return {
+      claimsLast5Minutes: claims[0]?.total || 0,
+      completionsLast5Minutes: claims[0]?.done || 0,
+      onlineUsers: onlineUsers[0]?.count || 0,
+      blockedAccounts: blockedAccounts[0]?.count || 0,
+      timestamp: Date.now()
+    }
+  }
+}
+
+export default new StatisticsService()

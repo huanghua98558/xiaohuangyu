@@ -1,0 +1,422 @@
+[
+  {
+    "key": "bailian_api_key",
+    "value": "sk-92b0cec5b87c4c739794c2b767685cc1",
+    "type": "text",
+    "description": "阿里云百炼API密钥",
+    "category": "general",
+    "is_enabled": true,
+    "created_at": "2026-03-19T09:40:38.926Z",
+    "updated_at": "2026-03-19T17:40:37.000Z"
+  },
+  {
+    "key": "image_review_enabled",
+    "value": "true",
+    "type": "text",
+    "description": "图片审核开关",
+    "category": "general",
+    "is_enabled": true,
+    "created_at": "2026-03-18T19:13:02.119Z",
+    "updated_at": "2026-03-18T19:13:01.556Z"
+  },
+  {
+    "key": "image_review_settings",
+    "value": "{\"checks\":{\"follow\":false,\"like\":true,\"favorite\":true,\"comment\":true,\"authorName\":true,\"commentNickname\":true}}",
+    "type": "text",
+    "description": null,
+    "category": "image_review",
+    "is_enabled": true,
+    "created_at": "2026-03-26T08:19:47.992Z",
+    "updated_at": "2026-03-26T08:19:47.915Z"
+  },
+  {
+    "key": "link_verify_batch_size",
+    "value": "10",
+    "type": "text",
+    "description": "单次批量处理数量",
+    "category": "link_verify",
+    "is_enabled": true,
+    "created_at": "2026-03-17T23:55:52.821Z",
+    "updated_at": "2026-03-26T07:22:37.392Z"
+  },
+  {
+    "key": "link_verify_batch_threshold",
+    "value": "1",
+    "type": "text",
+    "description": "批量处理阈值（队列达到此数量立即处理）",
+    "category": "link_verify",
+    "is_enabled": true,
+    "created_at": "2026-03-17T23:55:52.821Z",
+    "updated_at": "2026-03-26T07:22:37.307Z"
+  },
+  {
+    "key": "link_verify_cron_interval",
+    "value": "5",
+    "type": "text",
+    "description": "定时任务间隔（分钟）",
+    "category": "link_verify",
+    "is_enabled": true,
+    "created_at": "2026-03-17T23:55:52.821Z",
+    "updated_at": "2026-03-17T23:55:52.821Z"
+  },
+  {
+    "key": "link_verify_delay_minutes",
+    "value": "0",
+    "type": "text",
+    "description": "截图审核后延迟审查时间（分钟）",
+    "category": "link_verify",
+    "is_enabled": true,
+    "created_at": "2026-03-17T23:55:52.821Z",
+    "updated_at": "2026-03-26T07:22:37.265Z"
+  },
+  {
+    "key": "link_verify_enabled",
+    "value": "true",
+    "type": "text",
+    "description": "是否启用链接审查",
+    "category": "link_verify",
+    "is_enabled": true,
+    "created_at": "2026-03-17T23:55:52.821Z",
+    "updated_at": "2026-03-26T07:22:37.474Z"
+  },
+  {
+    "key": "link_verify_max_wait_minutes",
+    "value": "0",
+    "type": "text",
+    "description": "最大等待时间（分钟），超时必须处理",
+    "category": "link_verify",
+    "is_enabled": true,
+    "created_at": "2026-03-17T23:55:52.821Z",
+    "updated_at": "2026-03-26T07:22:37.350Z"
+  },
+  {
+    "key": "link_verify_retry_count",
+    "value": "3",
+    "type": "text",
+    "description": "失败重试次数",
+    "category": "link_verify",
+    "is_enabled": true,
+    "created_at": "2026-03-17T23:55:52.821Z",
+    "updated_at": "2026-03-26T07:22:37.434Z"
+  },
+  {
+    "key": "paddle_ocr_enabled",
+    "value": "true",
+    "type": "text",
+    "description": "PaddleOCR开关",
+    "category": "general",
+    "is_enabled": true,
+    "created_at": "2026-03-18T19:13:01.711Z",
+    "updated_at": "2026-03-18T19:13:01.556Z"
+  },
+  {
+    "key": "paddle_ocr_timeout",
+    "value": "30000",
+    "type": "text",
+    "description": "PaddleOCR请求超时(ms)",
+    "category": "general",
+    "is_enabled": true,
+    "created_at": "2026-03-18T19:13:01.996Z",
+    "updated_at": "2026-03-18T19:13:01.556Z"
+  },
+  {
+    "key": "paddle_ocr_url",
+    "value": "http://localhost:8088",
+    "type": "text",
+    "description": "PaddleOCR服务地址",
+    "category": "general",
+    "is_enabled": true,
+    "created_at": "2026-03-18T19:13:01.862Z",
+    "updated_at": "2026-03-18T19:13:01.556Z"
+  },
+  {
+    "key": "review_global_ai_fallback_enabled",
+    "value": "true",
+    "type": "boolean",
+    "description": "百炼降级开关",
+    "category": "review_global",
+    "is_enabled": true,
+    "created_at": "2026-03-22T03:02:43.993Z",
+    "updated_at": "2026-03-22T03:02:43.000Z"
+  },
+  {
+    "key": "review_global_ai_fallback_on_reject",
+    "value": "true",
+    "type": "boolean",
+    "description": "识别拒绝时也降级",
+    "category": "review_global",
+    "is_enabled": true,
+    "created_at": "2026-03-22T03:02:43.993Z",
+    "updated_at": "2026-03-22T03:02:43.000Z"
+  },
+  {
+    "key": "review_global_check_author_name",
+    "value": "true",
+    "type": "boolean",
+    "description": "达人名字匹配开关",
+    "category": "review_global",
+    "is_enabled": true,
+    "created_at": "2026-03-22T03:02:15.668Z",
+    "updated_at": "2026-03-22T03:23:13.608Z"
+  },
+  {
+    "key": "review_global_check_comment",
+    "value": "true",
+    "type": "boolean",
+    "description": "评论检测开关",
+    "category": "review_global",
+    "is_enabled": true,
+    "created_at": "2026-03-22T03:02:15.668Z",
+    "updated_at": "2026-03-22T03:23:13.608Z"
+  },
+  {
+    "key": "review_global_check_comment_nickname",
+    "value": "true",
+    "type": "boolean",
+    "description": "评论昵称一致性开关",
+    "category": "review_global",
+    "is_enabled": true,
+    "created_at": "2026-03-22T03:02:15.668Z",
+    "updated_at": "2026-03-22T03:23:13.608Z"
+  },
+  {
+    "key": "review_global_check_favorite",
+    "value": "true",
+    "type": "boolean",
+    "description": "收藏检测开关",
+    "category": "review_global",
+    "is_enabled": true,
+    "created_at": "2026-03-22T03:02:15.668Z",
+    "updated_at": "2026-03-22T03:23:13.608Z"
+  },
+  {
+    "key": "review_global_check_follow",
+    "value": "true",
+    "type": "boolean",
+    "description": "关注检测开关",
+    "category": "review_global",
+    "is_enabled": true,
+    "created_at": "2026-03-22T03:02:15.668Z",
+    "updated_at": "2026-03-22T03:23:13.608Z"
+  },
+  {
+    "key": "review_global_check_like",
+    "value": "true",
+    "type": "boolean",
+    "description": "点赞检测开关",
+    "category": "review_global",
+    "is_enabled": true,
+    "created_at": "2026-03-22T03:02:15.668Z",
+    "updated_at": "2026-03-22T03:23:13.608Z"
+  },
+  {
+    "key": "review_global_comment_max_length",
+    "value": "500",
+    "type": "number",
+    "description": "评论最多字数",
+    "category": "review_global",
+    "is_enabled": true,
+    "created_at": "2026-03-22T03:02:30.578Z",
+    "updated_at": "2026-03-22T03:02:30.000Z"
+  },
+  {
+    "key": "review_global_comment_min_length",
+    "value": "8",
+    "type": "number",
+    "description": "评论最少字数",
+    "category": "review_global",
+    "is_enabled": true,
+    "created_at": "2026-03-22T03:02:30.578Z",
+    "updated_at": "2026-03-26T10:20:40.191Z"
+  },
+  {
+    "key": "review_global_flow_auto_trigger_image",
+    "value": "true",
+    "type": "boolean",
+    "description": "自动触发图片审核",
+    "category": "review_global",
+    "is_enabled": true,
+    "created_at": "2026-03-22T03:02:43.993Z",
+    "updated_at": "2026-03-22T03:02:43.000Z"
+  },
+  {
+    "key": "review_global_flow_auto_trigger_link",
+    "value": "true",
+    "type": "boolean",
+    "description": "自动触发链接审核",
+    "category": "review_global",
+    "is_enabled": true,
+    "created_at": "2026-03-22T03:02:43.993Z",
+    "updated_at": "2026-03-22T03:02:43.000Z"
+  },
+  {
+    "key": "review_global_flow_blocked_detection",
+    "value": "true",
+    "type": "boolean",
+    "description": "封控检测",
+    "category": "review_global",
+    "is_enabled": true,
+    "created_at": "2026-03-22T03:02:43.993Z",
+    "updated_at": "2026-03-22T03:02:43.000Z"
+  },
+  {
+    "key": "review_global_flow_notify_admin",
+    "value": "true",
+    "type": "boolean",
+    "description": "管理员通知",
+    "category": "review_global",
+    "is_enabled": true,
+    "created_at": "2026-03-22T03:02:43.993Z",
+    "updated_at": "2026-03-22T03:02:43.000Z"
+  },
+  {
+    "key": "review_global_flow_notify_user",
+    "value": "true",
+    "type": "boolean",
+    "description": "用户通知",
+    "category": "review_global",
+    "is_enabled": true,
+    "created_at": "2026-03-22T03:02:43.993Z",
+    "updated_at": "2026-03-22T03:02:43.000Z"
+  },
+  {
+    "key": "review_global_pass_mode",
+    "value": "all",
+    "type": "text",
+    "description": "通过标准：all/majority",
+    "category": "review_global",
+    "is_enabled": true,
+    "created_at": "2026-03-22T03:02:43.993Z",
+    "updated_at": "2026-03-22T03:02:43.000Z"
+  },
+  {
+    "key": "review_global_semantic_enabled",
+    "value": "true",
+    "type": "boolean",
+    "description": "语意识别开关",
+    "category": "review_global",
+    "is_enabled": true,
+    "created_at": "2026-03-22T03:02:30.578Z",
+    "updated_at": "2026-03-26T10:20:40.191Z"
+  },
+  {
+    "key": "review_global_semantic_min_effectiveness",
+    "value": "0.5",
+    "type": "number",
+    "description": "最低有效性",
+    "category": "review_global",
+    "is_enabled": true,
+    "created_at": "2026-03-22T03:02:30.578Z",
+    "updated_at": "2026-03-22T03:02:30.000Z"
+  },
+  {
+    "key": "review_global_semantic_min_positivity",
+    "value": "0.3",
+    "type": "number",
+    "description": "最低正面性",
+    "category": "review_global",
+    "is_enabled": true,
+    "created_at": "2026-03-22T03:02:30.578Z",
+    "updated_at": "2026-03-22T03:02:30.000Z"
+  },
+  {
+    "key": "review_global_semantic_min_relevance",
+    "value": "0.5",
+    "type": "number",
+    "description": "最低相关性",
+    "category": "review_global",
+    "is_enabled": true,
+    "created_at": "2026-03-22T03:02:30.578Z",
+    "updated_at": "2026-03-22T03:02:30.000Z"
+  },
+  {
+    "key": "review_global_semantic_mode",
+    "value": "default_pass",
+    "type": "text",
+    "description": "语意识别模式：rule_and_ai/ai_only/rule_only",
+    "category": "review_global",
+    "is_enabled": true,
+    "created_at": "2026-03-22T03:02:30.578Z",
+    "updated_at": "2026-03-26T10:20:40.191Z"
+  },
+  {
+    "key": "semantic_ai_api_key",
+    "value": "sk-92b0cec5b87c4c739794c2b767685cc1",
+    "type": "text",
+    "description": null,
+    "category": "semantic",
+    "is_enabled": true,
+    "created_at": "2026-03-26T11:41:24.618Z",
+    "updated_at": "2026-03-26T11:41:24.618Z"
+  },
+  {
+    "key": "semantic_ai_max_tokens",
+    "value": "2000",
+    "type": "text",
+    "description": null,
+    "category": "semantic",
+    "is_enabled": true,
+    "created_at": "2026-03-26T11:41:24.703Z",
+    "updated_at": "2026-03-26T11:41:24.703Z"
+  },
+  {
+    "key": "semantic_ai_model",
+    "value": "qwen-plus",
+    "type": "text",
+    "description": null,
+    "category": "semantic",
+    "is_enabled": true,
+    "created_at": "2026-03-26T11:41:24.576Z",
+    "updated_at": "2026-03-26T11:41:24.576Z"
+  },
+  {
+    "key": "semantic_ai_provider",
+    "value": "bailian",
+    "type": "text",
+    "description": null,
+    "category": "semantic",
+    "is_enabled": true,
+    "created_at": "2026-03-26T11:41:24.532Z",
+    "updated_at": "2026-03-26T11:41:24.532Z"
+  },
+  {
+    "key": "semantic_ai_temperature",
+    "value": "0.5",
+    "type": "text",
+    "description": null,
+    "category": "semantic",
+    "is_enabled": true,
+    "created_at": "2026-03-26T11:41:24.660Z",
+    "updated_at": "2026-03-26T11:41:24.660Z"
+  },
+  {
+    "key": "verify_rule_comment",
+    "value": "{\"enabled\": true, \"minMatchLength\": 5, \"matchKeywords\": true, \"ignoreEmoji\": true, \"ignoreCase\": true}",
+    "type": "text",
+    "description": null,
+    "category": "general",
+    "is_enabled": true,
+    "created_at": "2026-03-22T02:28:25.835Z",
+    "updated_at": "2026-03-22T02:28:25.000Z"
+  },
+  {
+    "key": "verify_rule_nickname",
+    "value": "{\"enabled\": true, \"matchMode\": \"contains\", \"minSimilarity\": 0.7}",
+    "type": "text",
+    "description": null,
+    "category": "general",
+    "is_enabled": true,
+    "created_at": "2026-03-22T02:28:25.835Z",
+    "updated_at": "2026-03-22T02:28:25.000Z"
+  },
+  {
+    "key": "verify_rule_semantic",
+    "value": "{\"enabled\": true, \"mode\": \"rule_and_ai\", \"minRelevance\": 0.5, \"minPositivity\": 0.3, \"minEffectiveness\": 0.5}",
+    "type": "text",
+    "description": null,
+    "category": "general",
+    "is_enabled": true,
+    "created_at": "2026-03-22T02:28:25.835Z",
+    "updated_at": "2026-03-22T02:28:25.000Z"
+  }
+]

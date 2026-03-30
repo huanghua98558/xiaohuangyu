@@ -1,0 +1,630 @@
+'use client'
+
+import { type ReactNode, useState, useCallback, useRef, useEffect, useMemo } from 'react'
+import { useDashboardStats, useTrendData, useTodayRealtimeTrend } from '@/lib/swr-hooks'
+import { TrendDataPoint } from '@/lib/api'
+import { mutate } from 'swr'
+import { RealtimeClock } from '@/components/data-center/DataCenterCard'
+import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart'
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, Legend, Line, LineChart, XAxis, YAxis } from 'recharts'
+import { 
+  Activity,
+  Maximize2,
+  Minimize2,
+  Wifi,
+  WifiOff,
+  Signal,
+  Server,
+} from 'lucide-react'
+import { cn } from '@/lib/utils'
+
+interface DataCenterProps {
+  onFullscreenChange?: (isFullscreen: boolean) => void
+}
+
+// WebSocket 连接状态类型
+type WSStatus = 'connected' | 'disconnected' | 'connecting'
+
+// 网络状态类型
+type NetworkStatus = 'idle' | 'low' | 'medium' | 'high' | 'busy'
+
+type TrendRangeTab = 'today' | 3 | 7 | 30
+
+type ChartSeriesPoint = {
+  label: string
+  publishedTasks: number
+  claims: number
+  completions: number
+  pointsIssued: number
+  signIns: number
+}
+
+const chartConfig = {
+  publishedTasks: { label: '发布任务', color: '#60a5fa' },
+  claims: { label: '领取次数', color: '#22d3ee' },
+  completions: { label: '完成次数', color: '#34d399' },
+  pointsIssued: { label: '积分发放', color: '#fb923c' },
+  signIns: { label: '签到次数', color: '#c084fc' },
+  current: { label: '当前值', color: '#38bdf8' },
+} as const
+
+function TrendChartCard({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string
+  subtitle: string
+  children: ReactNode
+}) {
+  return (
+    <div className="bg-slate-900/60 rounded-xl border border-slate-800 p-4">
+      <div className="mb-4">
+        <h3 className="text-sm font-medium text-white">{title}</h3>
+        <p className="text-xs text-slate-400 mt-1">{subtitle}</p>
+      </div>
+      <div className="h-72">{children}</div>
+    </div>
+  )
+}
+
+export function DataCenter({ onFullscreenChange }: DataCenterProps) {
+  const { stats, isLoading, refresh } = useDashboardStats()
+  const [trendTab, setTrendTab] = useState<TrendRangeTab>(7)
+  const { trendData } = useTrendData(trendTab === 'today' ? null : trendTab)
+  const { todayTrend } = useTodayRealtimeTrend(10)
+  const [lastUpdate, setLastUpdate] = useState<Date>(new Date())
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  const [todayRealtimeData, setTodayRealtimeData] = useState<any[]>([])
+  
+  // WebSocket 状态
+  const [wsStatus, setWsStatus] = useState<WSStatus>('disconnected')
+  const [networkStatus, setNetworkStatus] = useState<NetworkStatus>('idle')
+  
+  // AI Token消耗统计
+  const [aiTokenStats, setAiTokenStats] = useState<{totalTokens: number; requests: number}>({totalTokens: 0, requests: 0})
+  const wsRef = useRef<WebSocket | null>(null)
+  const reconnectCountRef = useRef(0)
+  const reconnectTimerRef = useRef<NodeJS.Timeout | null>(null)
+  
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  // 使用 ref 存储 refresh 函数，避免 WebSocket 重复连接
+  const refreshRef = useRef(refresh)
+  refreshRef.current = refresh
+
+  // WebSocket 连接
+  const connectWebSocket = useCallback(() => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) return
+    
+    setWsStatus('connecting')
+    
+    try {
+      // 获取 token
+      const token = typeof window !== 'undefined' ? localStorage.getItem('admin_token') : null
+      
+      if (!token) {
+        console.warn('[DataCenter] 未找到admin_token，延迟重试')
+        setWsStatus('disconnected')
+        // 延迟重试，等待登录状态初始化
+        if (reconnectTimerRef.current) {
+          clearTimeout(reconnectTimerRef.current)
+        }
+        reconnectTimerRef.current = setTimeout(() => {
+          connectWebSocket()
+        }, 2000)
+        return
+      }
+      
+      // 构建 WebSocket URL
+      // 沙盒环境：管理后台在 5001，后端 WebSocket 在 5000
+      // 生产环境：通过 Nginx 代理，使用相同域名
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      let wsHost = window.location.host
+      
+      // 沙盒环境检测：如果当前是 5001 端口，WebSocket 应连接到 5000 端口
+      if (wsHost.includes(':5001')) {
+        wsHost = wsHost.replace(':5001', ':5000')
+      }
+      
+      const wsUrl = `${wsProtocol}//${wsHost}/ws?token=${encodeURIComponent(token)}`
+      
+      console.log('[DataCenter] WebSocket 连接:', wsUrl.substring(0, 50) + '...')
+      
+      const ws = new WebSocket(wsUrl)
+      wsRef.current = ws
+      
+      ws.onopen = () => {
+        setWsStatus('connected')
+        console.log('[DataCenter] WebSocket 已连接')
+      }
+      
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          
+          // 处理不同类型的消息
+          if (data.type === 'stats_update') {
+            // 直接使用广播数据中的在线用户数（实时更新）
+            if (data.data && typeof data.data.onlineUsers === 'number') {
+              mutate('/api/admin-v2/stats', (prev) => ({...prev, onlineUsers: data.data.onlineUsers}), false)
+            }
+            refreshRef.current()
+            setLastUpdate(new Date())
+          } else if (data.type === 'today_realtime_trend') {
+            // 处理今日实时趋势数据
+            if (data.data && data.data.data) {
+              setTodayRealtimeData(data.data.data)
+              setLastUpdate(new Date(data.data.lastUpdated))
+            }
+          } else if (data.type === 'realtime_stats') {
+            // 处理实时统计数据
+            if (data.data) {
+              mutate('/api/admin-v2/stats', (prev) => ({
+                ...prev,
+                onlineUsers: data.data.onlineUsers || prev?.onlineUsers
+              }), false)
+            }
+            setLastUpdate(new Date())
+          } else if (data.type === 'heartbeat_ack') {
+            // 心跳响应，更新网络状态
+            const latency = Date.now() - data.data.timestamp
+            if (latency < 100) setNetworkStatus('idle')
+            else if (latency < 300) setNetworkStatus('low')
+            else if (latency < 500) setNetworkStatus('medium')
+            else if (latency < 1000) setNetworkStatus('high')
+            else setNetworkStatus('busy')
+          }
+        } catch (e) {
+          console.error('[DataCenter] 解析消息失败:', e)
+        }
+      }
+      
+      ws.onclose = () => {
+        setWsStatus('disconnected')
+        console.log('[DataCenter] WebSocket 已断开')
+        
+        // 5秒后重连
+        if (reconnectTimerRef.current) {
+          clearTimeout(reconnectTimerRef.current)
+        }
+        reconnectTimerRef.current = setTimeout(() => {
+          connectWebSocket()
+        }, 5000)
+      }
+      
+      ws.onerror = (event) => {
+        console.warn('[DataCenter] WebSocket 连接异常，将自动重连...', event.type)
+        setWsStatus('disconnected')
+        // 清理连接
+        reconnectCountRef.current++
+        if (reconnectCountRef.current >= 3) {
+          console.log('[DataCenter] WebSocket 连接失败3次，停止重连，使用轮询模式')
+          return
+        }
+        ws.close()
+      }
+      
+    } catch (error) {
+      console.error('[DataCenter] WebSocket 连接失败:', error)
+      setWsStatus('disconnected')
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // 空依赖数组，只在组件挂载时创建一次
+
+  // 获取AI Token消耗统计
+  useEffect(() => {
+    const fetchTokenStats = async () => {
+      try {
+        const token = localStorage.getItem('admin_token')
+        const res = await fetch('/api/ai/admin/usage-stats', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        })
+        const data = await res.json()
+        if (data.code === 200) {
+          setAiTokenStats({
+            totalTokens: data.data?.summary?.totalTokens || 0,
+            requests: data.data?.summary?.requests || 0
+          })
+        }
+      } catch (e) {
+        console.error('获取Token统计失败:', e)
+      }
+    }
+    fetchTokenStats()
+    // 每5分钟刷新一次
+    const interval = setInterval(fetchTokenStats, 5 * 60 * 1000)
+    return () => clearInterval(interval)
+  }, [])
+  
+  // 初始化 WebSocket 连接
+  useEffect(() => {
+    connectWebSocket()
+    
+    // 定时发送心跳以检测网络状态
+    const heartbeatInterval = setInterval(() => {
+      // WebSocket断开时使用更短的轮询间隔
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'ping', data: { timestamp: Date.now() } }))
+      }
+    }, 5000)
+    
+    // 定时刷新数据（WebSocket断开时10秒，连接时60秒）
+    const refreshInterval = setInterval(() => {
+      // WebSocket断开时使用更短的轮询间隔
+      refreshRef.current()
+      setLastUpdate(new Date())
+    }, 60000)
+    
+    return () => {
+      clearInterval(heartbeatInterval)
+      clearInterval(refreshInterval)
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current)
+      }
+      wsRef.current?.close()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // 空依赖数组，只在组件挂载时执行一次
+
+  const effectiveTodaySeries = useMemo(() => {
+    if (todayRealtimeData.length > 0) return todayRealtimeData
+    return todayTrend?.data ?? []
+  }, [todayRealtimeData, todayTrend?.data])
+
+  const chartSeries = useMemo<ChartSeriesPoint[]>(() => {
+    if (trendTab === 'today') {
+      return effectiveTodaySeries.map((item) => ({
+        label: item.time || '--:--',
+        publishedTasks: Number(item.publishedTasks || 0),
+        claims: Number(item.claims || 0),
+        completions: Number(item.completions || 0),
+        pointsIssued: Number(item.pointsIssued || 0),
+        signIns: Number(item.signIns || 0),
+      }))
+    }
+
+    return trendData.map((item: TrendDataPoint) => ({
+      label: new Date(item.date).toLocaleDateString('zh-CN', {
+        month: 'numeric',
+        day: 'numeric',
+      }),
+      publishedTasks: Number(item.publishedTasks || 0),
+      claims: Number(item.claims || 0),
+      completions: Number(item.completions || 0),
+      pointsIssued: Number(item.pointsIssued || 0),
+      signIns: Number(item.signIns || 0),
+    }))
+  }, [trendTab, effectiveTodaySeries, trendData])
+
+  const loadShapeData = useMemo(
+    () => [
+      { label: '在线用户', current: Number(stats?.onlineUsers || 0) },
+      { label: '待审核', current: Number(stats?.pendingClaims || 0) },
+      { label: '封控账号', current: Number(stats?.blockedAccounts || 0) },
+      { label: 'AI 消耗', current: Number(aiTokenStats.totalTokens || 0) },
+    ],
+    [aiTokenStats.totalTokens, stats?.blockedAccounts, stats?.onlineUsers, stats?.pendingClaims]
+  )
+
+  const pointsDistributionData = useMemo(
+    () => [
+      { label: '签到', current: Number(stats?.todayPointsByType?.sign_in || 0) },
+      { label: '任务', current: Number(stats?.todayPointsByType?.task || 0) },
+      { label: '推广', current: Number(stats?.todayPointsByType?.promotion_c || 0) },
+      { label: '排行/奖励', current: Number(stats?.todayPointsByType?.reward || 0) },
+      { label: '活动', current: Number(stats?.todayPointsByType?.bonus || 0) },
+      { label: '成就', current: Number(stats?.todayPointsByType?.achievement || 0) },
+    ],
+    [stats?.todayPointsByType]
+  )
+
+  // 全屏切换
+  const toggleFullscreen = useCallback(() => {
+    if (!document.fullscreenElement) {
+      containerRef.current?.requestFullscreen()
+      setIsFullscreen(true)
+      onFullscreenChange?.(true)
+    } else {
+      document.exitFullscreen()
+      setIsFullscreen(false)
+      onFullscreenChange?.(false)
+    }
+  }, [onFullscreenChange])
+
+  // 获取网络状态显示
+  const getNetworkStatusDisplay = () => {
+    const statusMap = {
+      idle: { text: '空闲', color: 'text-green-400', icon: Signal },
+      low: { text: '良好', color: 'text-green-400', icon: Signal },
+      medium: { text: '一般', color: 'text-yellow-400', icon: Signal },
+      high: { text: '繁忙', color: 'text-orange-400', icon: Signal },
+      busy: { text: '拥挤', color: 'text-red-400', icon: Signal },
+    }
+    const status = statusMap[networkStatus]
+    const Icon = status.icon
+    return (
+      <div className={cn('flex items-center gap-1.5', status.color)}>
+        <Icon className="w-4 h-4" />
+        <span className="text-sm">{status.text}</span>
+      </div>
+    )
+  }
+
+  // 获取 WebSocket 状态显示
+  const getWsStatusDisplay = () => {
+    if (wsStatus === 'connected') {
+      return (
+        <div className="flex items-center gap-1.5 text-green-400">
+          <Wifi className="w-4 h-4" />
+          <span className="text-sm">已连接</span>
+        </div>
+      )
+    } else if (wsStatus === 'connecting') {
+      return (
+        <div className="flex items-center gap-1.5 text-yellow-400">
+          <Wifi className="w-4 h-4 animate-pulse" />
+          <span className="text-sm">连接中...</span>
+        </div>
+      )
+    } else {
+      return (
+        <div className="flex items-center gap-1.5 text-red-400">
+          <WifiOff className="w-4 h-4" />
+          <span className="text-sm">已断开</span>
+        </div>
+      )
+    }
+  }
+
+  if (isLoading && !stats) {
+    return (
+      <div className="flex items-center justify-center h-full min-h-[600px] bg-slate-950">
+        <div className="flex flex-col items-center gap-4">
+          <Activity className="w-8 h-8 text-blue-500 animate-pulse" />
+          <span className="text-slate-400">加载数据中...</span>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div 
+      ref={containerRef}
+      className={cn(
+        "relative min-h-full bg-slate-950 overflow-hidden",
+        isFullscreen && "fixed inset-0 z-50"
+      )}
+    >
+      {/* 背景网格 */}
+      <div className="absolute inset-0 opacity-20">
+        <div 
+          className="absolute inset-0"
+          style={{
+            backgroundImage: `
+              linear-gradient(rgba(59, 130, 246, 0.1) 1px, transparent 1px),
+              linear-gradient(90deg, rgba(59, 130, 246, 0.1) 1px, transparent 1px)
+            `,
+            backgroundSize: '50px 50px'
+          }}
+        />
+      </div>
+
+      {/* 主内容区 */}
+      <div className="relative z-10 p-6">
+        {/* 顶部栏 */}
+        <header className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
+                <Activity className="w-6 h-6 text-white" />
+              </div>
+              <div>
+                <h1 className="text-xl font-bold text-white">小黄鱼数据中心</h1>
+                <p className="text-xs text-slate-400">实时数据监控大屏</p>
+              </div>
+            </div>
+            
+            {/* 系统状态 - 文字显示 */}
+            <div className="flex items-center gap-4 ml-6">
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700">
+                <Server className="w-4 h-4 text-slate-400" />
+                <span className="text-sm text-slate-300">系统状态:</span>
+                <span className={cn(
+                  'text-sm font-medium',
+                  wsStatus === 'connected' ? 'text-green-400' : 
+                  wsStatus === 'connecting' ? 'text-yellow-400' : 'text-red-400'
+                )}>
+                  {wsStatus === 'connected' ? '正常运行' : wsStatus === 'connecting' ? '连接中' : '异常'}
+                </span>
+              </div>
+              
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700">
+                <span className="text-sm text-slate-300">WebSocket:</span>
+                {getWsStatusDisplay()}
+              </div>
+              
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700">
+                <span className="text-sm text-slate-300">网络情况:</span>
+                {getNetworkStatusDisplay()}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-2 text-sm text-slate-400">
+              <span>最后更新: {lastUpdate.toLocaleTimeString('zh-CN')}</span>
+            </div>
+            <RealtimeClock />
+            <button
+              onClick={toggleFullscreen}
+              className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 transition-colors"
+              title={isFullscreen ? '退出全屏 (F11)' : '全屏显示 (F11)'}
+            >
+              {isFullscreen ? (
+                <Minimize2 className="w-5 h-5 text-slate-300" />
+              ) : (
+                <Maximize2 className="w-5 h-5 text-slate-300" />
+              )}
+            </button>
+          </div>
+        </header>
+
+        {stats && (
+          <div className="space-y-4">
+            <div className="bg-slate-900/60 rounded-xl border border-slate-800 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-medium text-white">数据趋势面板</h3>
+                  <p className="text-xs text-slate-400 mt-1">
+                    已取消数字主卡片，当前全部以多维图表展示业务趋势。
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setTrendTab('today')}
+                    className={cn(
+                      'px-3 py-1 text-xs rounded-lg transition-colors',
+                      trendTab === 'today'
+                        ? 'bg-blue-500 text-white'
+                        : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                    )}
+                  >
+                    今日实时
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTrendTab(3)}
+                    className={cn(
+                      'px-3 py-1 text-xs rounded-lg transition-colors',
+                      trendTab === 3
+                        ? 'bg-blue-500 text-white'
+                        : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                    )}
+                  >
+                    近3天
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTrendTab(7)}
+                    className={cn(
+                      'px-3 py-1 text-xs rounded-lg transition-colors',
+                      trendTab === 7
+                        ? 'bg-blue-500 text-white'
+                        : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                    )}
+                  >
+                    近7天
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTrendTab(30)}
+                    className={cn(
+                      'px-3 py-1 text-xs rounded-lg transition-colors',
+                      trendTab === 30
+                        ? 'bg-blue-500 text-white'
+                        : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                    )}
+                  >
+                    近30天
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              <TrendChartCard
+                title="任务流转趋势"
+                subtitle={trendTab === 'today' ? '按 10 分钟观察发布、领取、完成联动' : '按日期观察发布、领取、完成联动'}
+              >
+                {chartSeries.length > 0 ? (
+                  <ChartContainer className="h-full w-full" config={chartConfig}>
+                    <LineChart data={chartSeries} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                      <XAxis dataKey="label" tickLine={false} axisLine={false} />
+                      <YAxis tickLine={false} axisLine={false} />
+                      <ChartTooltip content={<ChartTooltipContent labelKey="label" />} />
+                      <Legend />
+                      <Line type="monotone" dataKey="publishedTasks" name="发布任务" stroke="var(--color-publishedTasks)" strokeWidth={2.5} dot={false} />
+                      <Line type="monotone" dataKey="claims" name="领取次数" stroke="var(--color-claims)" strokeWidth={2.5} dot={false} />
+                      <Line type="monotone" dataKey="completions" name="完成次数" stroke="var(--color-completions)" strokeWidth={2.5} dot={false} />
+                    </LineChart>
+                  </ChartContainer>
+                ) : (
+                  <div className="h-full flex items-center justify-center text-sm text-slate-500">暂无趋势数据</div>
+                )}
+              </TrendChartCard>
+
+              <TrendChartCard
+                title="激励活跃趋势"
+                subtitle={trendTab === 'today' ? '实时观察积分发放与签到波动' : '按周期观察积分发放与签到参与'}
+              >
+                {chartSeries.length > 0 ? (
+                  <ChartContainer className="h-full w-full" config={chartConfig}>
+                    <AreaChart data={chartSeries} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
+                      <defs>
+                        <linearGradient id="fill-points" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="var(--color-pointsIssued)" stopOpacity={0.45} />
+                          <stop offset="95%" stopColor="var(--color-pointsIssued)" stopOpacity={0.02} />
+                        </linearGradient>
+                        <linearGradient id="fill-signins" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="var(--color-signIns)" stopOpacity={0.35} />
+                          <stop offset="95%" stopColor="var(--color-signIns)" stopOpacity={0.02} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                      <XAxis dataKey="label" tickLine={false} axisLine={false} />
+                      <YAxis tickLine={false} axisLine={false} />
+                      <ChartTooltip content={<ChartTooltipContent labelKey="label" />} />
+                      <Legend />
+                      <Area type="monotone" dataKey="pointsIssued" name="积分发放" stroke="var(--color-pointsIssued)" fill="url(#fill-points)" strokeWidth={2.5} />
+                      <Area type="monotone" dataKey="signIns" name="签到次数" stroke="var(--color-signIns)" fill="url(#fill-signins)" strokeWidth={2.5} />
+                    </AreaChart>
+                  </ChartContainer>
+                ) : (
+                  <div className="h-full flex items-center justify-center text-sm text-slate-500">暂无趋势数据</div>
+                )}
+              </TrendChartCard>
+
+              <TrendChartCard
+                title="系统负载分布"
+                subtitle="当前在线、待审核、封控账号与 AI 消耗统一用图展示，不再用数字块堆叠"
+              >
+                <ChartContainer className="h-full w-full" config={chartConfig}>
+                  <BarChart data={loadShapeData} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="label" tickLine={false} axisLine={false} />
+                    <YAxis tickLine={false} axisLine={false} />
+                    <ChartTooltip content={<ChartTooltipContent labelKey="label" />} />
+                    <Bar dataKey="current" name="当前值" fill="var(--color-current)" radius={[8, 8, 0, 0]} />
+                  </BarChart>
+                </ChartContainer>
+              </TrendChartCard>
+
+              <TrendChartCard
+                title="积分构成分布"
+                subtitle="今日积分来源全部以分布图展示，奖励类前端展示以后直接跟随后台配置"
+              >
+                <ChartContainer className="h-full w-full" config={chartConfig}>
+                  <BarChart data={pointsDistributionData} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="label" tickLine={false} axisLine={false} />
+                    <YAxis tickLine={false} axisLine={false} />
+                    <ChartTooltip content={<ChartTooltipContent labelKey="label" />} />
+                    <Bar dataKey="current" name="当前值" fill="var(--color-current)" radius={[8, 8, 0, 0]} />
+                  </BarChart>
+                </ChartContainer>
+              </TrendChartCard>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* 底部版权 */}
+      <footer className="relative z-10 text-center py-4 text-xs text-slate-600">
+        小黄鱼任务管理平台 · 数据中心 · 实时数据推送
+      </footer>
+    </div>
+  )
+}
