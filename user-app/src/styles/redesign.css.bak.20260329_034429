@@ -1,0 +1,1456 @@
+:root {
+  --yx-bg: linear-gradient(180deg, #f8f1e7 0%, #f3efe9 38%, #eef3fb 100%);
+  --yx-paper: rgba(255, 252, 246, 0.94);
+  --yx-card: rgba(255, 255, 255, 0.92);
+  --yx-card-strong: #ffffff;
+  --yx-line: rgba(31, 42, 65, 0.08);
+  --yx-line-strong: rgba(31, 42, 65, 0.13);
+  --yx-ink: #1e2940;
+  --yx-muted: #6e788c;
+  --yx-deep: #223351;
+  --yx-coral: #f26a4d;
+  --yx-coral-strong: #e55436;
+  --yx-coral-soft: #ffe4da;
+  --yx-gold: #f1a423;
+  --yx-gold-soft: #fff2cf;
+  --yx-navy-soft: #e8f0ff;
+  --yx-mint: #2d9a7b;
+  --yx-mint-soft: #ddf8ee;
+  --yx-shadow: 0 18px 42px rgba(29, 39, 58, 0.1);
+  --yx-shadow-soft: 0 10px 24px rgba(29, 39, 58, 0.06);
+  --yx-radius-xl: 30px;
+  --yx-radius-lg: 24px;
+  --yx-radius-md: 18px;
+  --yx-radius-sm: 14px;
+}
+
+html,
+body,
+#app {
+  background: var(--yx-bg);
+}
+
+body {
+  color: var(--yx-ink);
+}
+
+.yx-page {
+  min-height: 100vh;
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 18px 14px 102px;
+  background:
+    radial-gradient(circle at top right, rgba(241, 164, 35, 0.14), transparent 25%),
+    radial-gradient(circle at top left, rgba(242, 106, 77, 0.12), transparent 22%);
+}
+
+.yx-page.no-tabbar {
+  padding-bottom: 34px;
+}
+
+.yx-backdrop {
+  position: relative;
+}
+
+.yx-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.yx-header.center {
+  align-items: center;
+}
+
+.yx-header-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.yx-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 11px;
+  border-radius: 999px;
+  background: var(--yx-gold-soft);
+  color: #9b5c00;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+}
+
+.yx-title {
+  margin: 0;
+  font-size: 26px;
+  line-height: 1.06;
+  letter-spacing: -0.04em;
+  color: #1a2332;
+  font-weight: 800;
+}
+
+.yx-title.sm {
+  font-size: 21px;
+}
+
+.yx-subtitle {
+  margin: 4px 0 0;
+  color: #8b95a5;
+  font-size: 12px;
+  line-height: 1.45;
+  font-weight: 500;
+}
+
+.yx-icon-btn,
+.yx-back-btn {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--yx-line);
+  border-radius: 15px;
+  background: rgba(255, 255, 255, 0.86);
+  color: var(--yx-deep);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--yx-shadow-soft);
+  font-size: 17px;
+}
+
+.yx-card,
+.yx-soft-card,
+.yx-panel-card,
+.yx-hero-card {
+  border-radius: var(--yx-radius-lg);
+  border: 1px solid var(--yx-line);
+  background: var(--yx-card);
+  box-shadow: var(--yx-shadow-soft);
+}
+
+.yx-card,
+.yx-soft-card,
+.yx-panel-card {
+  padding: 12px;
+}
+
+.yx-hero-card {
+  padding: 14px;
+  background:
+    radial-gradient(circle at top right, rgba(255,255,255,0.18), transparent 28%),
+    linear-gradient(135deg, rgba(241,164,35,0.18), rgba(242,106,77,0.1)),
+    rgba(255,255,255,0.94);
+}
+
+.yx-card + .yx-card,
+.yx-card + .yx-soft-card,
+.yx-card + .yx-panel-card,
+.yx-soft-card + .yx-card,
+.yx-soft-card + .yx-soft-card,
+.yx-panel-card + .yx-card,
+.yx-hero-card + .yx-card,
+.yx-hero-card + .yx-soft-card,
+.yx-hero-card + .yx-panel-card {
+  margin-top: 8px;
+}
+
+.yx-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.yx-card-head > div {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+}
+
+.yx-card-head h3,
+.yx-card-head h4,
+.yx-card > h3:first-child,
+.yx-soft-card > h3:first-child,
+.yx-panel-card > h3:first-child {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(33, 51, 81, 0.1), rgba(242, 106, 77, 0.08));
+  border: 1px solid rgba(31, 42, 65, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55);
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--yx-deep);
+}
+
+.yx-card-head h3::before,
+.yx-card-head h4::before,
+.yx-card > h3:first-child::before,
+.yx-soft-card > h3:first-child::before,
+.yx-panel-card > h3:first-child::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--yx-coral), var(--yx-gold));
+  box-shadow: 0 0 0 4px rgba(242, 106, 77, 0.12);
+}
+
+.yx-card-note {
+  color: var(--yx-muted);
+  font-size: 10px;
+  font-weight: 700;
+  padding-left: 2px;
+  line-height: 1.35;
+}
+
+.yx-chip-row,
+.yx-tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.yx-chip,
+.yx-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.yx-chip.coral,
+.yx-tag.coral {
+  background: var(--yx-coral-soft);
+  color: #b54830;
+}
+
+.yx-chip.gold,
+.yx-tag.gold {
+  background: var(--yx-gold-soft);
+  color: #986000;
+}
+
+.yx-chip.navy,
+.yx-tag.navy {
+  background: var(--yx-navy-soft);
+  color: #38507e;
+}
+
+.yx-chip.mint,
+.yx-tag.mint {
+  background: var(--yx-mint-soft);
+  color: #216f59;
+}
+
+.yx-summary-grid,
+.yx-stats-grid,
+.yx-shortcut-grid,
+.yx-promo-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.yx-summary-grid.two,
+.yx-stats-grid.two,
+.yx-shortcut-grid.two,
+.yx-promo-grid.two {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.yx-summary-grid.three,
+.yx-stats-grid.three {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.yx-stat-card,
+.yx-metric-card,
+.yx-shortcut-card,
+.yx-promo-card {
+  display: block;
+  padding: 10px;
+  border-radius: 16px;
+  border: 1px solid var(--yx-line);
+  background: rgba(255,255,255,0.82);
+  color: inherit;
+}
+
+.yx-stat-card strong,
+.yx-metric-card strong {
+  display: block;
+  font-size: 22px;
+  line-height: 1;
+  letter-spacing: -0.05em;
+  margin-bottom: 4px;
+}
+
+.yx-stat-card span,
+.yx-metric-card span,
+.yx-shortcut-card small,
+.yx-promo-card small {
+  color: var(--yx-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.yx-shortcut-card b,
+.yx-promo-card b {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 15px;
+}
+
+.yx-ribbon {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 22px;
+  background: linear-gradient(135deg, rgba(242,106,77,0.96), rgba(255,151,92,0.96));
+  color: #fff8f2;
+  box-shadow: 0 12px 26px rgba(242,106,77,0.18);
+}
+
+.yx-ribbon b {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 17px;
+  letter-spacing: -0.03em;
+}
+
+.yx-ribbon small {
+  color: rgba(255,248,242,0.88);
+  line-height: 1.55;
+}
+
+.yx-segment {
+  display: inline-flex;
+  padding: 4px;
+  gap: 4px;
+  border-radius: 999px;
+  background: rgba(33,48,75,0.06);
+}
+
+.yx-segment button,
+.yx-segment span {
+  border: none;
+  background: transparent;
+  color: var(--yx-muted);
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.yx-segment .active {
+  background: #fff;
+  color: var(--yx-deep);
+  box-shadow: 0 8px 18px rgba(29,39,58,0.08);
+}
+
+.yx-rank-list,
+.yx-list,
+.yx-menu-list {
+  display: grid;
+  gap: 10px;
+}
+
+.yx-rank-item,
+.yx-list-item,
+.yx-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  background: rgba(255,255,255,0.82);
+  border: 1px solid var(--yx-line);
+}
+
+.yx-rank-badge,
+.yx-avatar,
+.yx-square-icon {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(33,48,75,0.07);
+  color: var(--yx-deep);
+  font-weight: 800;
+}
+
+.yx-rank-badge.gold {
+  background: linear-gradient(180deg, #ffd88a, #f1a423);
+  color: #6c4100;
+}
+
+.yx-list-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.yx-list-main b {
+  display: block;
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+
+.yx-list-main small {
+  display: block;
+  color: var(--yx-muted);
+  line-height: 1.55;
+}
+
+.yx-list-side {
+  color: var(--yx-muted);
+  font-size: 12px;
+  text-align: right;
+}
+
+.yx-task-card {
+  padding: 16px;
+  border-radius: 24px;
+  border: 1px solid var(--yx-line);
+  background: rgba(255,255,255,0.92);
+  box-shadow: var(--yx-shadow-soft);
+}
+
+.yx-task-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.yx-task-title {
+  margin: 0 0 6px;
+  font-size: 18px;
+  line-height: 1.4;
+  letter-spacing: -0.03em;
+  font-weight: 800;
+}
+
+.yx-task-sub {
+  color: var(--yx-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.yx-reward-box {
+  min-width: 88px;
+  padding: 10px 12px;
+  border-radius: 18px;
+  text-align: center;
+  background: linear-gradient(180deg, #ffd47a 0%, #f1a423 100%);
+  color: #6c4100;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.45);
+}
+
+.yx-reward-box b {
+  display: block;
+  font-size: 24px;
+  line-height: 1;
+  margin-bottom: 4px;
+  letter-spacing: -0.05em;
+}
+
+.yx-reward-box small {
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.yx-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.yx-btn,
+.yx-btn-ghost {
+  border: none;
+  border-radius: 16px;
+  padding: 14px 16px;
+  font-size: 14px;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.yx-btn {
+  background: linear-gradient(180deg, var(--yx-coral) 0%, var(--yx-coral-strong) 100%);
+  color: #fff;
+  box-shadow: 0 14px 28px rgba(229,84,54,0.2);
+}
+
+.yx-btn.full,
+.yx-btn-ghost.full {
+  width: 100%;
+}
+
+.yx-btn-ghost {
+  background: rgba(33,48,75,0.06);
+  color: var(--yx-deep);
+}
+
+.yx-empty {
+  padding: 28px 18px;
+  text-align: center;
+  color: var(--yx-muted);
+  border-radius: 22px;
+  border: 1px dashed var(--yx-line-strong);
+  background: rgba(255,255,255,0.7);
+}
+
+.yx-empty strong {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--yx-ink);
+}
+
+.yx-form-block {
+  display: grid;
+  gap: 12px;
+}
+
+.yx-field-label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--yx-deep);
+}
+
+.yx-note {
+  font-size: 12px;
+  color: var(--yx-muted);
+  line-height: 1.7;
+}
+
+.yx-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(33,48,75,0.1), transparent);
+  margin: 10px 0;
+}
+
+.yx-floating-action {
+  position: sticky;
+  bottom: 90px;
+  z-index: 4;
+  margin-top: 16px;
+}
+
+.yx-modal-preview {
+  position: fixed;
+  inset: 0;
+  background: rgba(18, 24, 36, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  z-index: 10000;
+}
+
+.yx-modal-card {
+  width: min(100%, 360px);
+  max-height: 78vh;
+  overflow: auto;
+  border-radius: 24px;
+  background: #fff;
+  padding: 14px;
+  box-shadow: 0 28px 60px rgba(11, 16, 28, 0.32);
+}
+
+.yx-modal-card img {
+  display: block;
+  width: 100%;
+  max-height: 60vh;
+  object-fit: contain;
+  border-radius: 18px;
+}
+
+.yx-modal-close {
+  margin-top: 12px;
+  width: 100%;
+}
+
+@media (max-width: 360px) {
+  .yx-page {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  .yx-summary-grid.two,
+  .yx-stats-grid.two,
+  .yx-shortcut-grid.two,
+  .yx-promo-grid.two {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ============================================
+   统一暖色系品牌色
+   ============================================ */
+
+/* 功能色 - 暖色系 */
+:root {
+  --yx-success: #22c55e;
+  --yx-success-soft: #dcfce7;
+  --yx-warning: #f59e0b;
+  --yx-warning-soft: #fef3c7;
+  --yx-danger: #ef4444;
+  --yx-danger-soft: #fee2e2;
+  --yx-info: #3b82f6;
+  --yx-info-soft: #dbeafe;
+  --yx-night: #8b5cf6;
+  --yx-night-soft: #ede9fe;
+}
+
+/* ============================================
+   卡片横向标题栏 - 背景横向铺满
+   ============================================ */
+
+/* 深色标题栏 */
+.yx-card-head-bar {
+  margin: -12px -12px 12px;
+  padding: 8px 12px;
+  background: linear-gradient(135deg, rgba(242,106,77,0.22), rgba(241,164,35,0.15));
+  border-bottom: 1px solid rgba(242,106,77,0.25);
+  border-radius: var(--yx-radius-lg) var(--yx-radius-lg) 0 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.yx-card-head-bar h3,
+.yx-card-head-bar h4 {
+  margin: 0;
+  color: #1a2332;
+  font-size: 14px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.yx-card-head-bar h3::before,
+.yx-card-head-bar h4::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f26a4d;
+  box-shadow: 0 0 0 3px rgba(242, 106, 77, 0.35);
+}
+
+.yx-card-head-bar .yx-card-note {
+  color: #8b95a5;
+  font-size: 11px;
+  font-weight: 500;
+  margin-left: 6px;
+}
+
+.yx-card-head-bar .yx-card-note::before {
+  content: '·';
+  margin-right: 6px;
+}
+
+.yx-card-head-bar .yx-btn-ghost {
+  background: rgba(242,106,77,0.1);
+  color: var(--yx-coral);
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.yx-card-head-bar .yx-btn-ghost:hover {
+  background: rgba(242,106,77,0.2);
+}
+
+/* 浅色标题栏（备选） */
+.yx-card-head-light {
+  margin: -12px -12px 12px;
+  padding: 10px 14px;
+  background: linear-gradient(135deg, rgba(31,42,65,0.06), rgba(242,106,77,0.04));
+  border-bottom: 1px solid var(--yx-line);
+  border-radius: var(--yx-radius-lg) var(--yx-radius-lg) 0 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.yx-card-head-light h3,
+.yx-card-head-light h4 {
+  margin: 0;
+  color: var(--yx-deep);
+  font-size: 14px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.yx-card-head-light h3::before,
+.yx-card-head-light h4::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--yx-coral), var(--yx-gold));
+  box-shadow: 0 0 0 3px rgba(242, 106, 77, 0.15);
+}
+
+.yx-card-head-light .yx-card-note {
+  color: var(--yx-muted);
+  font-size: 12px;
+  font-weight: 500;
+  margin-left: 6px;
+}
+
+.yx-card-head-light .yx-card-note::before {
+  content: '·';
+  margin-right: 6px;
+}
+
+/* ============================================
+   简化定位卡片
+   ============================================ */
+
+.location-compact {
+  padding: 12px 14px;
+}
+
+.location-compact .location-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.location-compact .location-pin {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--yx-coral), var(--yx-coral-strong));
+  box-shadow: 0 4px 12px rgba(242, 106, 77, 0.25);
+  position: relative;
+}
+
+.location-compact .location-pin::before {
+  content: '📍';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+}
+
+.location-compact .location-pin.loading {
+  animation: locationPulse 1.2s ease-in-out infinite;
+}
+
+.location-compact .location-pin.error {
+  background: linear-gradient(135deg, #f87171, #ef4444);
+}
+
+.location-compact .location-value {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--yx-ink);
+}
+
+.location-compact .location-value.error-text {
+  color: var(--yx-danger);
+}
+
+/* ============================================
+   夜间加成卡片 - 深色背景
+   ============================================ */
+
+.night-banner-dark {
+  background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%);
+  border-color: rgba(139, 92, 246, 0.3);
+  color: #fff;
+}
+
+.night-banner-dark .yx-card-head-bar {
+  background: transparent;
+  margin: 0;
+  padding: 0 0 8px;
+  border-radius: 0;
+}
+
+.night-banner-dark h3 {
+  color: #fff;
+}
+
+.night-banner-dark h3::before {
+  content: '🌙';
+  background: transparent;
+  box-shadow: none;
+  width: auto;
+  height: auto;
+  font-size: 16px;
+}
+
+.night-banner-dark .yx-card-note {
+  color: rgba(255,255,255,0.6);
+}
+
+.night-banner-dark .yx-tag {
+  background: rgba(139, 92, 246, 0.3);
+  color: #c4b5fd;
+  border: 1px solid rgba(139, 92, 246, 0.4);
+}
+
+.night-banner-dark .night-copy {
+  color: rgba(255,255,255,0.7);
+}
+
+/* ============================================
+   功能状态卡片
+   ============================================ */
+
+.yx-card.success {
+  background: linear-gradient(135deg, #059669 0%, #10b981 100%);
+  border-color: rgba(34, 197, 94, 0.3);
+  color: #fff;
+}
+
+.yx-card.success h3,
+.yx-card.success .yx-card-note {
+  color: #fff;
+}
+
+.yx-card.warning {
+  background: linear-gradient(135deg, #d97706 0%, #f59e0b 100%);
+  border-color: rgba(245, 158, 11, 0.3);
+  color: #fff;
+}
+
+.yx-card.warning h3,
+.yx-card.warning .yx-card-note {
+  color: #fff;
+}
+
+.yx-card.danger {
+  background: linear-gradient(135deg, #dc2626 0%, #ef4444 100%);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: #fff;
+}
+
+.yx-card.danger h3,
+.yx-card.danger .yx-card-note {
+  color: #fff;
+}
+
+.yx-card.info {
+  background: linear-gradient(135deg, #2563eb 0%, #3b82f6 100%);
+  border-color: rgba(59, 130, 246, 0.3);
+  color: #fff;
+}
+
+.yx-card.info h3,
+.yx-card.info .yx-card-note {
+  color: #fff;
+}
+
+/* ============================================
+   积分奖励强调
+   ============================================ */
+
+.yx-reward-box.has-bonus {
+  background: linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%);
+  border: none;
+  color: #fff;
+}
+
+.yx-reward-box.has-bonus .reward-base {
+  color: #fff;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.yx-reward-box.has-bonus .reward-bonus {
+  color: rgba(255,255,255,0.85);
+  font-size: 11px;
+}
+
+/* ============================================
+   登录/注册页暖色背景
+   ============================================ */
+
+.auth-warm-bg {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: linear-gradient(180deg, #f8f1e7 0%, #f3efe9 38%, #eef3fb 100%);
+}
+
+/* ============================================
+   暖色按钮
+   ============================================ */
+
+.btn-warm {
+  background: linear-gradient(135deg, var(--yx-coral) 0%, var(--yx-coral-strong) 100%);
+  color: #fff;
+  box-shadow: 0 8px 20px rgba(242, 106, 77, 0.25);
+}
+
+.btn-warm:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px rgba(242, 106, 77, 0.35);
+}
+
+.btn-warm:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+
+/* ============================================
+   全面优化 - 高级质感设计
+   ============================================ */
+
+/* 导航栏优化 */
+.home-top-header {
+  padding: 0 0 12px;
+  margin-bottom: 14px;
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.home-top-header .yx-icon-btn {
+  background: linear-gradient(135deg, var(--yx-coral) 0%, var(--yx-coral-strong) 100%);
+  color: #fff;
+  border: none;
+  box-shadow: 0 4px 12px rgba(242,106,77,0.25);
+  min-width: 36px;
+  height: 36px;
+  border-radius: 12px;
+}
+
+.home-top-header .home-main-title {
+  color: var(--yx-deep);
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.home-top-header .home-main-subtitle {
+  color: var(--yx-muted);
+  font-size: 13px;
+  margin-top: 4px;
+  font-weight: 500;
+}
+
+/* 排行榜卡片 - 深色标题栏 */
+.home-summary-card {
+  position: relative;
+  overflow: hidden;
+}
+
+/* 排行榜标题行 - 简洁单行 */
+.home-summary-card .rank-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.home-summary-card .rank-title-row h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: #1a2332;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.home-summary-card .rank-emoji {
+  font-size: 16px;
+}
+
+.home-summary-card .yx-card-head-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  margin: -12px -12px 12px;
+  background: linear-gradient(135deg, #1e2940 0%, #2a3a5c 100%);
+  border-radius: var(--yx-radius-lg) var(--yx-radius-lg) 0 0;
+}
+
+.home-summary-card .rank-header-left h3 {
+  color: #fff;
+  font-size: 15px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.home-summary-card .rank-header-left h3::before {
+  content: '🏆 ';
+}
+
+.home-summary-card .rank-header-left .yx-card-note {
+  color: rgba(255,255,255,0.7);
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.home-summary-card .summary-top-row {
+  position: relative;
+  z-index: 1;
+  padding: 12px 0;
+  margin-bottom: 0;
+}
+
+.home-summary-card .summary-top-row h3 {
+  color: #fff;
+  font-size: 15px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.home-summary-card .summary-top-row h3::before {
+  content: '🏆';
+  margin-right: 8px;
+  font-size: 14px;
+}
+
+.home-summary-card .summary-top-row .yx-card-note {
+  color: rgba(255,255,255,0.7);
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.home-summary-card .summary-rank-pill {
+  background: rgba(255,255,255,0.15);
+  border: 1px solid rgba(255,255,255,0.2);
+  color: #fff;
+  padding: 6px 12px;
+  border-radius: 12px;
+}
+
+.home-summary-card .summary-rank-pill b {
+  color: #ffd700;
+}
+
+.home-summary-card .summary-rank-pill small {
+  color: rgba(255,255,255,0.8);
+}
+
+.home-summary-card .yx-segment {
+  background: rgba(30,41,64,0.06);
+  margin-top: 8px;
+}
+
+/* 账号概览卡片 - 高级质感 */
+.account-overview-section {
+  margin-top: 8px;
+}
+
+.account-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+
+.account-card {
+  position: relative;
+  padding: 16px;
+  border-radius: 20px;
+  border: none;
+  overflow: hidden;
+}
+
+.account-card.points-card {
+  background: linear-gradient(135deg, #f26a4d 0%, #ff8a65 50%, #ffab91 100%);
+  box-shadow: 0 8px 24px rgba(242,106,77,0.25);
+}
+
+.account-card.balance-card {
+  background: linear-gradient(135deg, #f1a423 0%, #fbbf24 50%, #fcd34d 100%);
+  box-shadow: 0 8px 24px rgba(241,164,35,0.25);
+}
+
+.account-card-label {
+  display: inline-flex;
+  padding: 4px 10px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.25);
+  font-size: 11px;
+  font-weight: 700;
+  color: rgba(255,255,255,0.95);
+  margin-bottom: 14px;
+}
+
+.account-card strong {
+  display: block;
+  font-size: 28px;
+  line-height: 1;
+  letter-spacing: -0.04em;
+  color: #fff;
+  text-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.account-card small {
+  display: block;
+  margin-top: 6px;
+  font-size: 11px;
+  color: rgba(255,255,255,0.85);
+  font-weight: 600;
+}
+
+/* 奖励广告位 - 更有吸引力 */
+.home-reward-banner {
+  margin-top: 12px;
+  padding: 18px 16px;
+  border-radius: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  text-decoration: none;
+  color: #fff;
+  background: linear-gradient(135deg, #ff6b35 0%, #f7931e 40%, #ffcc02 100%);
+  box-shadow: 
+    0 8px 32px rgba(255,107,53,0.3),
+    inset 0 1px 0 rgba(255,255,255,0.3);
+  position: relative;
+  overflow: hidden;
+}
+
+.home-reward-banner::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  right: -20%;
+  width: 200px;
+  height: 200px;
+  background: radial-gradient(circle, rgba(255,255,255,0.3) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.home-reward-banner::after {
+  content: '🎁';
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  font-size: 48px;
+  opacity: 0.3;
+}
+
+.reward-banner-left {
+  flex: 1;
+  min-width: 0;
+}
+
+.reward-banner-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.reward-banner-tag {
+  display: inline-flex;
+  padding: 4px 10px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.2);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+
+.reward-number-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.reward-number-line strong {
+  font-size: 36px;
+  line-height: 1;
+  letter-spacing: -0.04em;
+  font-weight: 900;
+  text-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+.reward-number-line span {
+  font-size: 15px;
+  font-weight: 700;
+  opacity: 0.95;
+}
+
+.home-reward-banner p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(255,255,255,0.9);
+  font-weight: 600;
+}
+
+.reward-banner-right {
+  display: flex;
+  align-items: flex-end;
+}
+
+.reward-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 18px;
+  border-radius: 14px;
+  background: rgba(255,255,255,0.95);
+  color: #ff6b35;
+  font-size: 13px;
+  font-weight: 800;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+/* 夜间积分标签 - 加深背景提高对比度 */
+.yx-tag.night {
+  background: linear-gradient(135deg, #7c3aed 0%, #8b5cf6 100%);
+  color: #fff;
+  border: none;
+  box-shadow: 0 4px 12px rgba(139,92,246,0.3);
+}
+
+.yx-tag.gold-night {
+  background: linear-gradient(135deg, #b45309 0%, #d97706 100%);
+  color: #fff;
+  border: none;
+  box-shadow: 0 4px 12px rgba(217,119,6,0.3);
+}
+
+/* 夜间加成卡片修复 - 深色背景 */
+.night-banner-dark {
+  background: linear-gradient(135deg, #1e1b4b 0%, #312e81 50%, #4338ca 100%);
+  border: none;
+  box-shadow: 0 8px 24px rgba(139,92,246,0.3);
+}
+
+.night-banner-dark .yx-card-head-bar {
+  background: transparent;
+  margin: -12px -12px 8px;
+  padding: 12px;
+  border-radius: var(--yx-radius-lg) var(--yx-radius-lg) 0 0;
+}
+
+.night-banner-dark h3 {
+  color: #fff;
+}
+
+.night-banner-dark h3::before {
+  content: '🌙';
+  background: transparent;
+  box-shadow: none;
+  width: auto;
+  height: auto;
+  font-size: 16px;
+}
+
+.night-banner-dark .yx-card-note {
+  color: rgba(255,255,255,0.7);
+}
+
+.night-banner-dark .yx-tag {
+  background: rgba(139,92,246,0.4);
+  color: #e0e7ff;
+  border: 1px solid rgba(139,92,246,0.5);
+  font-weight: 700;
+}
+
+.night-banner-dark .night-copy {
+  color: rgba(255,255,255,0.8);
+  font-size: 12px;
+}
+
+/* 快捷入口卡片 - 更有层次 */
+.yx-shortcut-card {
+  position: relative;
+  padding: 16px;
+  border-radius: 20px;
+  border: none;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.yx-shortcut-card:active {
+  transform: scale(0.98);
+}
+
+.shortcut-tone-peach {
+  background: linear-gradient(180deg, #fff5f2 0%, #fff 100%);
+  box-shadow: 0 4px 16px rgba(242,106,77,0.12);
+}
+
+.shortcut-tone-peach .shortcut-icon {
+  background: linear-gradient(135deg, #f26a4d 0%, #ff8a65 100%);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(242,106,77,0.3);
+}
+
+.shortcut-tone-blue {
+  background: linear-gradient(180deg, #f0f5ff 0%, #fff 100%);
+  box-shadow: 0 4px 16px rgba(59,130,246,0.12);
+}
+
+.shortcut-tone-blue .shortcut-icon {
+  background: linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(59,130,246,0.3);
+}
+
+.shortcut-tone-gold {
+  background: linear-gradient(180deg, #fffbf0 0%, #fff 100%);
+  box-shadow: 0 4px 16px rgba(241,164,35,0.12);
+}
+
+.shortcut-tone-gold .shortcut-icon {
+  background: linear-gradient(135deg, #f1a423 0%, #fbbf24 100%);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(241,164,35,0.3);
+}
+
+.shortcut-tone-mint {
+  background: linear-gradient(180deg, #f0fdf9 0%, #fff 100%);
+  box-shadow: 0 4px 16px rgba(45,154,123,0.12);
+}
+
+.shortcut-tone-mint .shortcut-icon {
+  background: linear-gradient(135deg, #2d9a7b 0%, #34d399 100%);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(45,154,123,0.3);
+}
+
+.shortcut-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  margin-bottom: 14px;
+}
+
+.yx-shortcut-card b {
+  font-size: 14px;
+  color: var(--yx-ink);
+  font-weight: 700;
+}
+
+.yx-shortcut-card small {
+  font-size: 11px;
+  color: var(--yx-muted);
+  font-weight: 500;
+}
+
+/* 排名徽章优化 */
+.yx-rank-badge {
+  width: 28px;
+  height: 28px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #e2e8f0 0%, #f1f5f9 100%);
+  color: #64748b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.yx-rank-badge.gold {
+  background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(251,191,36,0.4);
+}
+
+.yx-rank-badge.silver {
+  background: linear-gradient(135deg, #94a3b8 0%, #64748b 100%);
+  color: #fff;
+}
+
+.yx-rank-badge.bronze {
+  background: linear-gradient(135deg, #fb923c 0%, #ea580c 100%);
+  color: #fff;
+}
+
+/* 数据统计卡片优化 */
+.yx-metric-card.compact {
+  background: linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(248,250,252,0.95) 100%);
+  border: 1px solid rgba(242,106,77,0.1);
+  transition: transform 0.15s;
+}
+
+.yx-metric-card.compact:active {
+  transform: scale(0.97);
+}
+
+.yx-metric-card.compact strong {
+  background: linear-gradient(135deg, var(--yx-coral) 0%, var(--yx-gold) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* 整体卡片阴影优化 */
+.yx-card {
+  box-shadow: 
+    0 1px 3px rgba(0,0,0,0.04),
+    0 4px 12px rgba(0,0,0,0.06);
+}
+
+.yx-card:hover {
+  box-shadow: 
+    0 2px 6px rgba(0,0,0,0.06),
+    0 8px 24px rgba(0,0,0,0.08);
+}
+
+/* 按钮优化 */
+.yx-btn {
+  background: linear-gradient(135deg, var(--yx-coral) 0%, var(--yx-coral-strong) 100%);
+  box-shadow: 0 6px 20px rgba(242,106,77,0.3);
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.yx-btn:active {
+  transform: scale(0.97);
+}
+
+.yx-btn-ghost {
+  background: rgba(242,106,77,0.08);
+  color: var(--yx-coral);
+  font-weight: 700;
+  transition: background 0.15s;
+}
+
+.yx-btn-ghost:hover {
+  background: rgba(242,106,77,0.15);
+}
+

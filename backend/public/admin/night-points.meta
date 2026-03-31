@@ -1,0 +1,16 @@
+{
+  "headers": {
+    "x-nextjs-stale-time": "300",
+    "x-nextjs-prerender": "1",
+    "x-next-cache-tags": "_N_T_/layout,_N_T_/(admin)/layout,_N_T_/(admin)/night-points/layout,_N_T_/(admin)/night-points/page,_N_T_/night-points"
+  },
+  "segmentPaths": [
+    "/_tree",
+    "/_full",
+    "/!KGFkbWluKQ/night-points/__PAGE__",
+    "/!KGFkbWluKQ/night-points",
+    "/!KGFkbWluKQ",
+    "/_index",
+    "/_head"
+  ]
+}

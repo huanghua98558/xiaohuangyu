@@ -1,0 +1,615 @@
+/**
+ * 链接验证 Worker - 支持多 IP 重试版本
+ * 
+ * 关键改进:
+ * 1. 审核开始时判断是否跳过直连（全局状态）
+ * 2. 直连失败后立即获取代理 IP（实时获取）
+ * 3. 每个 IP 只测试一次，失败后立即获取下一个
+ * 4. 最多尝试 3 个不同 IP
+ * 5. 成功后报告直连成功（如果是直连）
+ */
+
+import { Worker } from 'bullmq';
+import axios from 'axios';
+import dotenv from 'dotenv';
+import redisConnection from '../config/queue.js';
+import db from '../config/database.js';
+import { verifyComment, compareComments } from '../services/commentVerifyService.js';
+
+dotenv.config();
+
+const BROWSER_PORTS = [8000, 8001, 8002];
+const BACKEND_URL = process.env.BACKEND_URL || 'http://127.0.0.1:3000';
+const MAX_IP_RETRIES = 3; // 最多尝试 3 个不同 IP
+
+let currentIndex = 0;
+
+function getNextBrowserUrl() {
+  const port = BROWSER_PORTS[currentIndex];
+  currentIndex = (currentIndex + 1) % BROWSER_PORTS.length;
+  return `http://127.0.0.1:${port}`;
+}
+
+async function checkAllServicesHealth() {
+  const results = [];
+  for (const port of BROWSER_PORTS) {
+    try {
+      const res = await axios.get(`http://127.0.0.1:${port}/`, { timeout: 3000 });
+      results.push({ port, healthy: res.data.status === 'ok', version: res.data.version });
+    } catch (e) {
+      results.push({ port, healthy: false, error: e.message });
+    }
+  }
+  return results;
+}
+
+async function getHealthyBrowserUrl() {
+  for (let i = 0; i < BROWSER_PORTS.length; i++) {
+    const url = getNextBrowserUrl();
+    try {
+      const res = await axios.get(`${url}/`, { timeout: 2000 });
+      if (res.data.status === 'ok') return url;
+    } catch (e) {}
+  }
+  return null;
+}
+
+/**
+ * 检查是否应该跳过直连
+ */
+async function shouldSkipDirect() {
+  try {
+    const res = await axios.get(`${BACKEND_URL}/api/internal/ip/should-skip-direct`, { timeout: 5000 });
+    return res.data?.data === true;
+  } catch (e) {
+    console.log('[LinkWorker] 检查跳过直连失败，默认不跳过:', e.message);
+    return false;
+  }
+}
+
+/**
+ * 实时获取新鲜代理 IP
+ */
+async function acquireFreshIP() {
+  try {
+    const res = await axios.post(`${BACKEND_URL}/api/internal/ip/acquire-fresh`, {}, { timeout: 15000 });
+    if (res.data?.code === 200 && res.data?.data) {
+      return res.data.data;
+    }
+    return null;
+  } catch (e) {
+    console.log('[LinkWorker] 获取代理 IP 失败:', e.message);
+    return null;
+  }
+}
+
+/**
+ * 报告直连成功
+ */
+async function reportDirectSuccess() {
+  try {
+    await axios.post(`${BACKEND_URL}/api/internal/ip/direct-success`, {}, { timeout: 5000 });
+  } catch (e) {
+    console.log('[LinkWorker] 报告直连成功失败:', e.message);
+  }
+}
+
+/**
+ * 报告直连失败
+ */
+async function reportDirectFailure() {
+  try {
+    await axios.post(`${BACKEND_URL}/api/internal/ip/direct-failure`, {}, { timeout: 5000 });
+  } catch (e) {
+    console.log('[LinkWorker] 报告直连失败失败:', e.message);
+  }
+}
+
+/**
+ * 报告 IP 失效
+ */
+async function reportIPInvalid(ip) {
+  try {
+    await axios.post(`${BACKEND_URL}/api/internal/ip/invalidate`, { ip }, { timeout: 5000 });
+  } catch (e) {
+    console.log('[LinkWorker] 报告 IP 失效失败:', e.message);
+  }
+}
+
+/**
+ * 验证链接 - 支持传入代理 URL
+ */
+async function verifyLink(link, taskAuthor, platform, targetComment, proxyUrl = null) {
+  const browserUrl = await getHealthyBrowserUrl();
+  if (!browserUrl) {
+    console.error('[LinkWorker] 所有 Browser Service 不可用');
+    return { success: false, error: 'Browser Service unavailable' };
+  }
+
+  try {
+    const requestData = {
+      url: link,
+      check_comment: true,
+      target_comment: targetComment || null,
+      max_comments: 50
+    };
+    
+    // 如果有代理 URL，传递给 Browser Service
+    if (proxyUrl) {
+      requestData.proxy_url = proxyUrl;
+    }
+
+    console.log(`[LinkWorker] 验证链接: ${link} ${proxyUrl ? `(代理: ${proxyUrl.split('@')[1] || proxyUrl})` : '(直连)'}`);
+    
+    console.log("[LinkWorker] 📤 发送请求:", JSON.stringify(requestData));
+    const res = await axios.post(`${browserUrl}/browser/visit`, requestData, { timeout: 120000 });
+    
+    const data = res.data;
+    
+    return {
+      success: data.success,
+      page_title: data.page_title,
+      author_name: data.author_name,
+      comments: data.comments || [],
+      has_comment: data.has_comment,
+      comment_text: data.comment_text,
+      blocked_account: data.blocked_account,
+      suspicious_behavior: data.suspicious_behavior,
+      error: data.error,
+      used_proxy: !!proxyUrl
+    };
+  } catch (e) {
+    console.error(`[LinkWorker] 验证失败: ${e.message}`);
+    return { success: false, error: e.message, used_proxy: !!proxyUrl };
+  }
+}
+
+/**
+ * 带多 IP 重试的链接验证
+ * 1. 先检查是否跳过直连
+ * 2. 尝试直连（如果允许）
+ * 3. 直连失败后获取代理 IP，每个 IP 只测试一次
+ * 4. 最多尝试 3 个不同 IP
+ */
+async function verifyLinkWithRetry(link, taskAuthor, platform, targetComment) {
+  const attemptLog = [];
+  
+  // Step 1: 检查是否跳过直连
+  const skipDirect = await shouldSkipDirect();
+  
+  if (skipDirect) {
+    console.log('[LinkWorker] 全局直连状态不佳，跳过直连，直接使用代理');
+    attemptLog.push({ type: 'skip_direct', reason: '全局连续失败>=5次且10分钟无成功' });
+  }
+  
+  // Step 2: 尝试直连（如果允许）
+  if (!skipDirect) {
+    console.log('[LinkWorker] 尝试直连访问...');
+    const directResult = await verifyLink(link, taskAuthor, platform, targetComment, null);
+    
+    if (directResult.success) {
+      // 直连成功，报告成功并返回
+      await reportDirectSuccess();
+      console.log('[LinkWorker] ✅ 直连成功');
+      return { ...directResult, attemptLog: [{ type: 'direct', success: true }] };
+    }
+    
+    // 直连失败
+    await reportDirectFailure();
+    console.log('[LinkWorker] ❌ 直连失败:', directResult.error);
+    attemptLog.push({ type: 'direct', success: false, error: directResult.error });
+  }
+  
+  // Step 3: 尝试代理 IP（最多 MAX_IP_RETRIES 个）
+  let proxyAttempts = 0;
+  
+  while (proxyAttempts < MAX_IP_RETRIES) {
+    proxyAttempts++;
+    
+    // 实时获取新鲜代理 IP
+    console.log(`[LinkWorker] 获取第 ${proxyAttempts} 个代理 IP...`);
+    const ipInfo = await acquireFreshIP();
+    
+    if (!ipInfo) {
+      console.log(`[LinkWorker] 无法获取代理 IP (第 ${proxyAttempts} 次)`);
+      attemptLog.push({ type: 'proxy_acquire_failed', attempt: proxyAttempts });
+      
+      // 如果连续 2 次获取 IP 失败，放弃重试
+      if (proxyAttempts >= 2) {
+        console.log('[LinkWorker] 连续获取 IP 失败，放弃重试');
+        break;
+      }
+      continue;
+    }
+    
+    console.log(`[LinkWorker] 获取到代理 IP: ${ipInfo.ip}:${ipInfo.port}, 有效期 ${ipInfo.ttlSeconds || '未知'}秒`);
+    
+    // 使用该 IP 尝试验证
+    const proxyResult = await verifyLink(link, taskAuthor, platform, targetComment, ipInfo.proxyUrl);
+    
+    if (proxyResult.success) {
+      console.log(`[LinkWorker] ✅ 代理 IP ${ipInfo.ip} 验证成功`);
+      return { 
+        ...proxyResult, 
+        attemptLog: [...attemptLog, { 
+          type: 'proxy', 
+          success: true, 
+          ip: ipInfo.ip, 
+          attempt: proxyAttempts 
+        }] 
+      };
+    }
+    
+    // 该 IP 失败，报告失效并继续尝试下一个
+    console.log(`[LinkWorker] ❌ 代理 IP ${ipInfo.ip} 失败:`, proxyResult.error);
+    await reportIPInvalid(ipInfo.ip);
+    attemptLog.push({ 
+      type: 'proxy', 
+      success: false, 
+      ip: ipInfo.ip, 
+      attempt: proxyAttempts, 
+      error: proxyResult.error 
+    });
+    
+    // 不重试同一个 IP，继续获取下一个
+  }
+  
+  // 所有尝试都失败
+  console.log(`[LinkWorker] 所有 ${proxyAttempts} 次 IP 尝试均失败`);
+  return { 
+    success: false, 
+    error: `尝试了 ${proxyAttempts} 个 IP 均失败`, 
+    attemptLog 
+  };
+}
+
+function threeWayCommentVerification(userComment, ocrComment, extractedComments) {
+  const result = {
+    passed: false,
+    reasons: [],
+    details: { userComment, ocrComment, extractedCount: extractedComments?.length || 0, matches: [] }
+  };
+
+  if (userComment) {
+    const userVerify = verifyComment(userComment);
+    if (!userVerify.valid) {
+      result.reasons.push(`用户评论无效: ${userVerify.reasons.join(', ')}`);
+    }
+  }
+
+  if (ocrComment) {
+    const ocrVerify = verifyComment(ocrComment);
+    if (!ocrVerify.valid) {
+      console.log(`[LinkWorker] OCR评论验证: ${ocrVerify.reasons.join(', ')}`);
+    }
+  }
+
+  if (!extractedComments || extractedComments.length === 0) {
+    if (ocrComment) {
+      const ocrVerify = verifyComment(ocrComment);
+      if (ocrVerify.valid) {
+        result.passed = true;
+        result.reasons.push('无法从页面提取评论，但OCR评论有效');
+        console.log('[LinkWorker] ✅ OCR评论有效，审核通过');
+        return result;
+      }
+    }
+    result.reasons.push('无法从页面提取评论');
+    return result;
+  }
+  
+  const validComments = extractedComments.map(c => typeof c === 'object' ? (c.content || c.nickname || '') : c).filter(c => {
+    const text = c?.trim() || '';
+    if (text.length < 4) return false;
+    if (/^(浙江|河南|湖南|广东|北京|上海|深圳|杭州|\d+)$/.test(text)) return false;
+    return true;
+  });
+  
+  if (validComments.length === 0) {
+    if (ocrComment) {
+      const ocrVerify = verifyComment(ocrComment);
+      if (ocrVerify.valid) {
+        result.passed = true;
+        result.reasons.push('页面评论无效，但OCR评论有效');
+        console.log('[LinkWorker] ✅ 页面评论无效，OCR评论有效，审核通过');
+        return result;
+      }
+    }
+    result.reasons.push('页面评论无效');
+    return result;
+  }
+
+  let bestMatch = null;
+  let bestSimilarity = 0;
+
+  for (const extracted of validComments) {
+    const extractedText = typeof extracted === 'string' ? extracted : (extracted.content || extracted.text || extracted);
+    
+    if (userComment) {
+      const userCompare = compareComments(userComment, extractedText);
+      if (userCompare.match && userCompare.similarity > bestSimilarity) {
+        bestSimilarity = userCompare.similarity;
+        bestMatch = { type: 'user_vs_extracted', extracted: extractedText, similarity: userCompare.similarity };
+      }
+    }
+
+    if (ocrComment) {
+      const ocrCompare = compareComments(ocrComment, extractedText);
+      if (ocrCompare.match && ocrCompare.similarity > bestSimilarity) {
+        bestSimilarity = ocrCompare.similarity;
+        bestMatch = { type: 'ocr_vs_extracted', extracted: extractedText, similarity: ocrCompare.similarity };
+      }
+    }
+  }
+
+  if (bestMatch) {
+    result.passed = true;
+    result.details.matches.push(bestMatch);
+    console.log(`[LinkWorker] ✅ 评论匹配成功: ${bestMatch.type}, 相似度=${(bestMatch.similarity * 100).toFixed(1)}%`);
+  } else {
+    result.reasons.push('评论未在页面中找到匹配');
+  }
+
+  return result;
+}
+
+async function rewardPoints(userId, taskId, claimId, points, reason) {
+  try {
+    const existing = await db.queryOne(
+      'SELECT id FROM records WHERE user_id = $1 AND task_id = $2 AND type = $3 AND description LIKE $4',
+      [userId, taskId, 'task', `%claim:${claimId}%`]
+    );
+
+    if (existing) {
+      console.log('[LinkWorker] 积分已发放，跳过');
+      return { success: true, skipped: true };
+    }
+
+    await db.transaction(async (client) => {
+      await client.query(
+        'INSERT INTO records (user_id, type, points, task_id, description, created_at) VALUES ($1, $2, $3, $4, NOW())',
+        [userId, 'task', points, taskId, `任务奖励 - ${reason} (claim:${claimId})`]
+      );
+      await client.query('UPDATE users SET points = points + $1, updated_at = NOW() WHERE id = $2', [points, userId]);
+    });
+
+    console.log(`[LinkWorker] ✅ 积分发放成功: 用户${userId} +${points}积分`);
+    return { success: true, points };
+  } catch (e) {
+    console.error(`[LinkWorker] 积分发放失败: ${e.message}`);
+    return { success: false, error: e.message };
+  }
+}
+
+async function updateReviewStatus(claimId, status, result) {
+  const linkStatus = status === 'approved' ? 'approved' : (status === 'manual' ? 'pending' : 'rejected');
+  await db.query(
+    'UPDATE claims SET status = $1, link_review_status = $2, link_review_reason = $3, link_reviewed_at = NOW(), reviewed_at = NOW() WHERE id = $4',
+    [status, linkStatus, JSON.stringify(result), claimId]
+  );
+}
+
+
+// 更新拒绝次数并返回是否需要释放
+async function updateRejectCount(claimId) {
+  try {
+    const result = await db.query(
+      "UPDATE claims SET reject_count = COALESCE(reject_count, 0) + 1 WHERE id = $1 RETURNING reject_count",
+      [claimId]
+    );
+    const count = result.rows?.[0]?.reject_count || 1;
+    console.log(`[LinkWorker] 拒绝次数更新: claimId=${claimId}, count=${count}`);
+    return { count, shouldRelease: count >= 3 };
+  } catch (e) {
+    console.error(`[LinkWorker] 更新拒绝次数失败: ${e.message}`);
+    return { count: 1, shouldRelease: false };
+  }
+}
+
+// 添加审核历史记录
+async function addReviewHistory(claimId, action, data) {
+  try {
+    // 获取现有历史
+    const existing = await db.queryOne(
+      "SELECT review_history FROM claims WHERE id = $1",
+      [claimId]
+    );
+    
+    let history = [];
+    if (existing?.review_history) {
+      history = typeof existing.review_history === 'string' 
+        ? JSON.parse(existing.review_history) 
+        : existing.review_history;
+    }
+    
+    // 添加新记录
+    history.push({
+      action,
+      data,
+      timestamp: new Date().toISOString()
+    });
+    
+    // 更新数据库
+    await db.query(
+      "UPDATE claims SET review_history = $1 WHERE id = $2",
+      [JSON.stringify(history), claimId]
+    );
+    console.log(`[LinkWorker] 已添加审核历史: claimId=${claimId}, action=${action}`);
+  } catch (e) {
+    console.error(`[LinkWorker] 添加审核历史失败: ${e.message}`);
+  }
+}
+
+async function addToHighlightQueue(claimId, userId, reason, details) {
+  try {
+    const user = await db.queryOne('SELECT username, phone FROM users WHERE id = $1', [userId]);
+    const claim = await db.queryOne(
+      'SELECT t.title, c.screenshots, c.link_url FROM claims c JOIN tasks t ON c.task_id = t.id WHERE c.id = $1',
+      [claimId]
+    );
+    
+    await db.query(
+      `INSERT INTO highlight_queue 
+       (claim_id, user_id, user_nickname, user_phone, task_title, screenshot_url, link_url, reason, details, status, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', NOW())`,
+      [claimId, userId, user?.username || '未知', user?.phone || '', claim?.title || '', 
+       claim?.screenshots || '', claim?.link_url || '', reason, JSON.stringify(details)]
+    );
+    console.log(`[LinkWorker] 已加入高亮队列: claimId=${claimId}, reason=${reason}`);
+  } catch (e) {
+    console.error(`[LinkWorker] 加入高亮队列失败: ${e.message}`);
+  }
+}
+
+const linkVerifyWorker = new Worker('link_verify_queue', async (job) => {
+  const { claimId, userId, taskId, links, platform, taskContext } = job.data;
+  const linkUrl = links?.[0];
+  const taskAuthor = taskContext?.author;
+  const userComment = null; // 暂无用户评论
+  const ocrComment = null; // 暂无 OCR 评论
+  
+  console.log(`\n[LinkWorker] ========== 开始处理 claimId=${claimId} ==========`);
+  console.log(`[LinkWorker] 链接: ${linkUrl}`);
+  console.log(`[LinkWorker] OCR评论: ${ocrComment}`);
+  console.log(`[LinkWorker] 用户评论: ${userComment}`);
+  
+  try {
+    // 使用带重试的链接验证
+    const linkResult = await verifyLinkWithRetry(linkUrl, taskAuthor, platform, userComment || ocrComment);
+    
+    console.log(`[LinkWorker] 链接验证完成: ${linkResult.success ? '✅ 成功' : '❌ 失败'}`);
+    if (linkResult.attemptLog) {
+      console.log('[LinkWorker] 尝试记录:', JSON.stringify(linkResult.attemptLog));
+    }
+    
+    const extractedComments = linkResult.comments || [];
+    console.log(`[LinkWorker] 提取到 ${extractedComments.length} 条评论`);
+
+    const commentResult = threeWayCommentVerification(userComment, ocrComment, extractedComments);
+
+    console.log(`[LinkWorker] 评论验证: ${commentResult.passed ? '✅ 通过' : '❌ 失败'}`);
+    if (!commentResult.passed) {
+      console.log(`[LinkWorker] 失败原因: ${commentResult.reasons.join('; ')}`);
+    }
+
+    const passed = linkResult.success && commentResult.passed;
+    
+    // 判断是否为系统问题
+    const isSystemError = !linkResult.success && (
+      linkResult.error?.includes('IP 均失败') ||
+      linkResult.error?.includes('Browser Service') ||
+      linkResult.error?.includes('timeout') ||
+      linkResult.error?.includes('ECONNREFUSED') ||
+      linkResult.error?.includes('unavailable') ||
+      linkResult.attemptLog?.every(log => !log.success)
+    );
+    
+    // 判断是否为评论问题（链接正常但评论不匹配）
+    const isCommentMismatch = linkResult.success && !commentResult.passed;
+
+    const blockReasons = [];
+    if (linkResult.blocked_account) blockReasons.push('账号被封禁');
+    if (linkResult.suspicious_behavior) blockReasons.push('检测到可疑行为');
+    if (isCommentMismatch && extractedComments.length > 0) blockReasons.push('评论不匹配');
+
+    if (blockReasons.length > 0) {
+      await addToHighlightQueue(claimId, userId, blockReasons.join('; '), { linkResult, commentResult, extractedComments });
+    }
+
+    if (passed) {
+      const task = await db.queryOne('SELECT reward, base_reward FROM tasks WHERE id = $1', [taskId]);
+      const points = task?.reward || task?.base_reward || 30;
+
+      await updateReviewStatus(claimId, 'approved', {
+        passed: true,
+        linkResult: { valid: linkResult.success, pageTitle: linkResult.page_title, authorName: linkResult.author_name },
+        commentResult: { passed: commentResult.passed, matches: commentResult.details.matches },
+        attemptLog: linkResult.attemptLog
+      });
+
+      await rewardPoints(userId, taskId, claimId, points, '任务审核通过');
+      console.log(`[LinkWorker] ✅ 完成: claimId=${claimId}, 结果=通过`);
+    } else if (isSystemError) {
+      // 系统问题 - 转人工处理
+      await updateReviewStatus(claimId, 'manual', {
+        passed: false,
+        linkResult: { valid: linkResult.success, error: linkResult.error },
+        commentResult: { passed: commentResult.passed, reasons: commentResult.reasons },
+        attemptLog: linkResult.attemptLog,
+        manualReason: '系统问题: ' + (linkResult.error || '链接验证失败')
+      });
+      console.log(`[LinkWorker] ⚠️ 完成: claimId=${claimId}, 结果=转人工(系统问题)`);
+    } else {
+      // 用户问题 - 拒绝并退回进行中
+      // 1. 更新审核状态
+      await updateReviewStatus(claimId, 'link_rejected', {
+        passed: false,
+        linkResult: { valid: linkResult.success, error: linkResult.error },
+        commentResult: { passed: commentResult.passed, reasons: commentResult.reasons },
+        attemptLog: linkResult.attemptLog
+      });
+      
+      // 2. 添加审核历史记录
+      await addReviewHistory(claimId, 'link_rejected', {
+        reason: '评论验证失败',
+        details: commentResult.reasons,
+        linkResult: linkResult,
+        commentResult: commentResult
+      });
+      
+      // 3. 更新拒绝次数并检查是否需要释放
+      const rejectResult = await updateRejectCount(claimId);
+      
+      if (rejectResult.shouldRelease) {
+        // 3次拒绝，自动释放任务
+        await db.query(
+          "UPDATE claims SET status = 'released', released_at = NOW() WHERE id = $1",
+          [claimId]
+        );
+        console.log(`[LinkWorker] 🔓 任务已释放: claimId=${claimId}, 拒绝次数=3`);
+      } else {
+        // 退回进行中，用户可重新提交
+        await db.query(
+          "UPDATE claims SET status = 'doing', submitted_at = NULL WHERE id = $1",
+          [claimId]
+        );
+        
+        // 4. 加入高亮队列（提示用户换账号）
+        await addToHighlightQueue(claimId, userId, '评论验证失败，建议更换账号重新提交', {
+          type: 'account_blocked',
+          suggestion: '您的评论账号可能被限制，建议更换抖音账号重新完成任务'
+        });
+        
+        console.log(`[LinkWorker] ❌ 已退回: claimId=${claimId}, 拒绝次数=${rejectResult.count}/3`);
+      }
+    }
+
+    return { claimId, passed, linkValid: linkResult.success, commentValid: commentResult.passed, reasons: commentResult.reasons, attemptLog: linkResult.attemptLog };
+
+  } catch (error) {
+    console.error(`[LinkWorker] ❌ 处理失败: ${error.message}`);
+    await updateReviewStatus(claimId, 'link_failed', { passed: false, error: error.message });
+    throw error;
+  }
+}, {
+  connection: redisConnection,
+  concurrency: 3,
+  limiter: { max: 5, duration: 1000 }
+});
+
+linkVerifyWorker.on('completed', (job) => console.log(`[LinkWorker] ✅ Job 完成: ${job.id}`));
+linkVerifyWorker.on('failed', (job, err) => console.error(`[LinkWorker] ❌ Job 失败: ${job?.id}`, err.message));
+linkVerifyWorker.on('error', (err) => console.error('[LinkWorker] Worker 错误:', err.message));
+
+checkAllServicesHealth().then(results => {
+  const healthyCount = results.filter(r => r.healthy).length;
+  if (healthyCount > 0) {
+    console.log(`[LinkWorker] ✅ 已启动，可用服务: ${healthyCount}/${BROWSER_PORTS.length}`);
+    console.log(`[LinkWorker] 多 IP 重试机制: 最多尝试 ${MAX_IP_RETRIES} 个不同 IP`);
+    results.forEach(r => console.log(`  - 端口 ${r.port}: ${r.healthy ? '✅' : '❌'} ${r.version || r.error || ''}`));
+  } else {
+    console.warn('[LinkWorker] ⚠️ 所有 Browser Service 不可用');
+  }
+});
+
+export default linkVerifyWorker;

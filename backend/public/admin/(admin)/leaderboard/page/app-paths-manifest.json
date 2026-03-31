@@ -1,0 +1,3 @@
+{
+  "/(admin)/leaderboard/page": "app/(admin)/leaderboard/page.js"
+}

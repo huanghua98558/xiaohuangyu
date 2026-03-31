@@ -1,0 +1,265 @@
+{
+  "generatedAt": "2026-03-27T01:03:06.349Z",
+  "options": {
+    "durationSec": 120,
+    "concurrency": 12,
+    "thinkTimeMs": 100,
+    "timeoutMs": 2500,
+    "output": "",
+    "pretty": true
+  },
+  "before": {
+    "label": "before",
+    "capturedAt": "2026-03-27T01:01:05.771Z",
+    "healthScore": 100,
+    "databaseLatencyMs": 408,
+    "redisLatencyMs": 0,
+    "queueTotals": {
+      "waiting": 0,
+      "active": 0,
+      "delayed": 0,
+      "completed": 37,
+      "failed": 0
+    },
+    "browserSummary": {
+      "healthyCount": 3,
+      "totalInstances": 3,
+      "totalPages": 15,
+      "availablePages": 15,
+      "targetPages": 15,
+      "busyPages": 0
+    },
+    "capacityAssessment": {
+      "status": "healthy",
+      "issues": [],
+      "queueSoftLimit": 12
+    },
+    "business": {
+      "timestamp": "2026-03-27T01:01:05.754Z",
+      "queue": {
+        "pending": 0,
+        "processing": 0,
+        "delayed": 0,
+        "total": 0
+      },
+      "claims": {
+        "total": 0,
+        "approved": 0,
+        "approvalRate": 0
+      },
+      "points": {
+        "granted": 0,
+        "consumed": 0,
+        "net": 0
+      },
+      "alerts": {
+        "unhandled": 44,
+        "critical": 0
+      }
+    }
+  },
+  "loadSummary": {
+    "startedAt": "2026-03-27T01:01:05.771Z",
+    "finishedAt": "2026-03-27T01:03:05.942Z",
+    "durationMs": 120171,
+    "totalRequests": 10875,
+    "totalSuccess": 10875,
+    "totalFailed": 0,
+    "totalTimeouts": 0,
+    "successRate": 100,
+    "rps": 90.5,
+    "latencyMs": {
+      "avg": 32.46,
+      "p50": 37,
+      "p95": 76,
+      "p99": 80,
+      "max": 424
+    },
+    "targets": {
+      "backend_health": {
+        "total": 1815,
+        "success": 1815,
+        "failed": 0,
+        "timeouts": 0,
+        "successRate": 100,
+        "latencyMs": {
+          "avg": 74.78,
+          "p50": 74,
+          "p95": 79,
+          "p99": 82,
+          "max": 376
+        },
+        "statusCodes": {
+          "200": 1815
+        }
+      },
+      "backend_api_health": {
+        "total": 1812,
+        "success": 1812,
+        "failed": 0,
+        "timeouts": 0,
+        "successRate": 100,
+        "latencyMs": {
+          "avg": 74.77,
+          "p50": 74,
+          "p95": 79,
+          "p99": 82,
+          "max": 424
+        },
+        "statusCodes": {
+          "200": 1812
+        }
+      },
+      "internal_queue_status": {
+        "total": 1811,
+        "success": 1811,
+        "failed": 0,
+        "timeouts": 0,
+        "successRate": 100,
+        "latencyMs": {
+          "avg": 39.8,
+          "p50": 39,
+          "p95": 42,
+          "p99": 45,
+          "max": 341
+        },
+        "statusCodes": {
+          "200": 1811
+        }
+      },
+      "browser_status_8000": {
+        "total": 1811,
+        "success": 1811,
+        "failed": 0,
+        "timeouts": 0,
+        "successRate": 100,
+        "latencyMs": {
+          "avg": 1.76,
+          "p50": 2,
+          "p95": 3,
+          "p99": 6,
+          "max": 31
+        },
+        "statusCodes": {
+          "200": 1811
+        }
+      },
+      "browser_status_8001": {
+        "total": 1813,
+        "success": 1813,
+        "failed": 0,
+        "timeouts": 0,
+        "successRate": 100,
+        "latencyMs": {
+          "avg": 1.83,
+          "p50": 2,
+          "p95": 3,
+          "p99": 6,
+          "max": 42
+        },
+        "statusCodes": {
+          "200": 1813
+        }
+      },
+      "browser_status_8002": {
+        "total": 1813,
+        "success": 1813,
+        "failed": 0,
+        "timeouts": 0,
+        "successRate": 100,
+        "latencyMs": {
+          "avg": 1.76,
+          "p50": 2,
+          "p95": 3,
+          "p99": 6,
+          "max": 46
+        },
+        "statusCodes": {
+          "200": 1813
+        }
+      }
+    }
+  },
+  "after": {
+    "label": "after",
+    "capturedAt": "2026-03-27T01:03:06.342Z",
+    "healthScore": 100,
+    "databaseLatencyMs": 324,
+    "redisLatencyMs": 0,
+    "queueTotals": {
+      "waiting": 0,
+      "active": 0,
+      "delayed": 0,
+      "completed": 37,
+      "failed": 0
+    },
+    "browserSummary": {
+      "healthyCount": 3,
+      "totalInstances": 3,
+      "totalPages": 15,
+      "availablePages": 15,
+      "targetPages": 15,
+      "busyPages": 0
+    },
+    "capacityAssessment": {
+      "status": "healthy",
+      "issues": [],
+      "queueSoftLimit": 12
+    },
+    "business": {
+      "timestamp": "2026-03-27T01:03:06.317Z",
+      "queue": {
+        "pending": 0,
+        "processing": 0,
+        "delayed": 0,
+        "total": 0
+      },
+      "claims": {
+        "total": 0,
+        "approved": 0,
+        "approvalRate": 0
+      },
+      "points": {
+        "granted": 0,
+        "consumed": 0,
+        "net": 0
+      },
+      "alerts": {
+        "unhandled": 44,
+        "critical": 0
+      }
+    }
+  },
+  "delta": {
+    "healthScore": {
+      "before": 100,
+      "after": 100,
+      "delta": 0
+    },
+    "databaseLatencyMs": {
+      "before": 408,
+      "after": 324,
+      "delta": -84
+    },
+    "redisLatencyMs": {
+      "before": 0,
+      "after": 0,
+      "delta": 0
+    },
+    "queueWaiting": {
+      "before": 0,
+      "after": 0,
+      "delta": 0
+    },
+    "queueDelayed": {
+      "before": 0,
+      "after": 0,
+      "delta": 0
+    },
+    "browserAvailablePages": {
+      "before": 15,
+      "after": 15,
+      "delta": 0
+    }
+  }
+}

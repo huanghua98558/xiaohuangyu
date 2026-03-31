@@ -1,0 +1,850 @@
+/**
+ * 审核指令系统
+ * 
+ * 支持的自然语言指令：
+ * 
+ * 查询类：
+ * - 查看待审核列表 / 待审核
+ * - 查看用户xxx的历史
+ * - 查看统计 / 今日审核
+ * - 查看可疑用户
+ * - 查看报告 / 待处理报告
+ * 
+ * 操作类：
+ * - 通过 #123 / 审核通过 123
+ * - 拒绝 #456 原因：截图模糊
+ * - 批量通过 / 批量处理
+ * - 标记欺诈 #123
+ * 
+ * 分析类：
+ * - 分析截图 #123
+ * - 验证链接 #123
+ * - 抽查 10 条
+ * - 查看详情 #123
+ * 
+ * 导出类：
+ * - 导出报告
+ * - 导出可疑用户
+ */
+import { invokeLLM, streamLLM } from './llmService.js'
+import { comprehensiveReview, batchComprehensiveReview } from './reviewEngine.js'
+import { manualApprove, manualReject, getReviewQueue, getReviewStats } from './imageReviewService.js'
+import supabase from '../../utils/supabaseToPrismaAdapter.js'
+import logger from '../../utils/logger.js'
+
+// 指令类型
+const COMMAND_TYPES = {
+  QUERY: 'query',      // 查询
+  ACTION: 'action',    // 操作
+  ANALYZE: 'analyze',  // 分析
+  EXPORT: 'export',    // 导出
+  CHAT: 'chat'         // 普通对话
+}
+
+// 指令模板
+const COMMAND_PATTERNS = {
+  // 查询类
+  query_pending: {
+    patterns: ['待审核', '查看待审核', '审核列表', 'pending'],
+    action: 'getPendingList',
+    description: '查看待审核列表'
+  },
+  query_report: {
+    patterns: ['待处理报告', '审核报告', '需要人工', '报告列表'],
+    action: 'getReportList',
+    description: '查看待处理报告'
+  },
+  query_stats: {
+    patterns: ['统计', '审核统计', '今日审核', '审核数据'],
+    action: 'getStats',
+    description: '查看审核统计'
+  },
+  query_user: {
+    patterns: ['用户(\\d+)', '查看用户(\\d+)', '用户历史(\\d+)', '查看用户(.+)的历史'],
+    action: 'getUserHistory',
+    description: '查看用户历史'
+  },
+  query_suspicious: {
+    patterns: ['可疑用户', '风险用户', '异常用户'],
+    action: 'getSuspiciousUsers',
+    description: '查看可疑用户列表'
+  },
+  query_detail: {
+    patterns: ['详情(#?\\d+)', '查看(#?\\d+)', '审核详情(#?\\d+)', '查看详情(#?\\d+)'],
+    action: 'getClaimDetail',
+    description: '查看审核项详情'
+  },
+  
+  // 操作类
+  action_approve: {
+    patterns: ['通过(#?\\d+)', '审核通过(#?\\d+)', '批准(#?\\d+)', '通过(\\d+)'],
+    action: 'approve',
+    description: '审核通过'
+  },
+  action_reject: {
+    patterns: ['拒绝(#?\\d+)', '审核拒绝(#?\\d+)', '驳回(#?\\d+)'],
+    action: 'reject',
+    description: '审核拒绝'
+  },
+  action_batch: {
+    patterns: ['批量通过', '批量处理', '全部通过', '处理全部'],
+    action: 'batchApprove',
+    description: '批量审核'
+  },
+  action_fraud: {
+    patterns: ['标记欺诈(#?\\d+)', '欺诈(#?\\d+)', '作弊(#?\\d+)'],
+    action: 'markFraud',
+    description: '标记欺诈'
+  },
+  
+  // 分析类
+  analyze_screenshot: {
+    patterns: ['分析截图(#?\\d+)', '截图分析(#?\\d+)'],
+    action: 'analyzeScreenshots',
+    description: '分析截图'
+  },
+  analyze_link: {
+    patterns: ['验证链接(#?\\d+)', '链接验证(#?\\d+)', '验证评论(#?\\d+)'],
+    action: 'verifyLink',
+    description: '验证链接'
+  },
+  analyze_random: {
+    patterns: ['抽查(\\d+)条', '随机抽查(\\d+)', '抽检(\\d+)'],
+    action: 'randomAudit',
+    description: '随机抽查'
+  },
+  
+  // 导出类
+  export_report: {
+    patterns: ['导出报告', '导出审核报告'],
+    action: 'exportReport',
+    description: '导出审核报告'
+  },
+  export_suspicious: {
+    patterns: ['导出可疑用户', '导出风险用户'],
+    action: 'exportSuspicious',
+    description: '导出可疑用户'
+  }
+}
+
+/**
+ * 解析用户指令
+ */
+export async function parseCommand(userMessage, headers = {}) {
+  const message = userMessage.trim()
+  
+  // 使用AI辅助解析复杂指令
+  const parsePrompt = `分析以下审核指令，提取意图和参数。
+
+用户消息: "${message}"
+
+支持的指令类型：
+- query: 查询类（待审核、统计、用户历史、可疑用户、详情）
+- action: 操作类（通过、拒绝、批量处理、标记欺诈）
+- analyze: 分析类（分析截图、验证链接、抽查）
+- export: 导出类
+
+请以JSON格式返回：
+{
+  "type": "query/action/analyze/export/chat",
+  "action": "具体操作",
+  "params": {"id": 123, "reason": "..."},
+  "confidence": 0.0-1.0
+}
+
+如果是普通对话或无法识别的指令，type返回"chat"。`
+
+  try {
+    const response = await invokeLLM([{ role: 'user', content: parsePrompt }], {
+      model: 'doubao-seed-1-8-251228',
+      temperature: 0.1
+    }, headers)
+    
+    // 提取JSON
+    const jsonMatch = response.match(/\{[\s\S]*\}/)
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0])
+      return {
+        ...parsed,
+        originalMessage: message
+      }
+    }
+  } catch (error) {
+    logger.warn('AI解析指令失败，使用规则匹配:', error)
+  }
+  
+  // 回退到规则匹配
+  return ruleBasedParse(message)
+}
+
+/**
+ * 基于规则的指令解析
+ */
+function ruleBasedParse(message) {
+  for (const [commandKey, command] of Object.entries(COMMAND_PATTERNS)) {
+    for (const pattern of command.patterns) {
+      const regex = new RegExp(pattern, 'i')
+      const match = message.match(regex)
+      
+      if (match) {
+        const params = {}
+        
+        // 提取参数
+        if (match[1]) {
+          const num = parseInt(match[1].replace('#', ''))
+          if (!isNaN(num)) {
+            params.id = num
+          } else {
+            params.keyword = match[1]
+          }
+        }
+        
+        // 检查是否有原因说明
+        const reasonMatch = message.match(/原因[：:]\s*(.+)/)
+        if (reasonMatch) {
+          params.reason = reasonMatch[1].trim()
+        }
+        
+        return {
+          type: commandKey.split('_')[0],
+          action: command.action,
+          params,
+          confidence: 0.9,
+          originalMessage: message
+        }
+      }
+    }
+  }
+  
+  // 未识别的指令
+  return {
+    type: COMMAND_TYPES.CHAT,
+    action: 'chat',
+    params: { message },
+    confidence: 0.5,
+    originalMessage: message
+  }
+}
+
+/**
+ * 执行指令
+ */
+export async function executeCommand(parsedCommand, userId, headers = {}) {
+  const { type, action, params } = parsedCommand
+  
+  try {
+    switch (action) {
+      // 查询类
+      case 'getPendingList':
+        return await executeGetPendingList(params)
+      case 'getReportList':
+        return await executeGetReportList(params)
+      case 'getStats':
+        return await executeGetStats(params)
+      case 'getUserHistory':
+        return await executeGetUserHistory(params)
+      case 'getSuspiciousUsers':
+        return await executeGetSuspiciousUsers(params)
+      case 'getClaimDetail':
+        return await executeGetClaimDetail(params)
+      
+      // 操作类
+      case 'approve':
+        return await executeApprove(params, userId)
+      case 'reject':
+        return await executeReject(params, userId)
+      case 'batchApprove':
+        return await executeBatchApprove(params, userId, headers)
+      case 'markFraud':
+        return await executeMarkFraud(params, userId)
+      
+      // 分析类
+      case 'analyzeScreenshots':
+        return await executeAnalyzeScreenshots(params, headers)
+      case 'verifyLink':
+        return await executeVerifyLink(params, headers)
+      case 'randomAudit':
+        return await executeRandomAudit(params, headers)
+      
+      // 导出类
+      case 'exportReport':
+        return await executeExportReport(params)
+      case 'exportSuspicious':
+        return await executeExportSuspicious(params)
+      
+      // 对话
+      case 'chat':
+      default:
+        return {
+          success: true,
+          type: 'chat',
+          message: '我理解了您的需求，请问具体需要什么帮助？'
+        }
+    }
+  } catch (error) {
+    logger.error(`执行指令失败 [${action}]:`, error)
+    return {
+      success: false,
+      error: error.message,
+      action
+    }
+  }
+}
+
+// ============ 查询类执行函数 ============
+
+async function executeGetPendingList(params) {
+  const { data: queue, error } = await supabase
+    .from('ai_review_queue')
+    .select(`
+      id, claim_id, status, ai_confidence, ai_reason, created_at
+    `)
+    .in('status', ['pending', 'manual'])
+    .order('created_at', { ascending: true })
+    .limit(20)
+  
+  if (error) throw error
+  
+  // 手动获取关联数据
+  const claimIds = (queue || []).map(item => item.claim_id).filter(Boolean)
+  const userIds = (queue || []).map(item => item.user_id).filter(Boolean)
+  
+  const { data: claims } = await supabase
+    .from('claims')
+    .select('id, title, platform, action, screenshots, user_id')
+    .in('id', claimIds)
+  
+  const userIdsFromClaims = (claims || []).map(c => c.user_id).filter(Boolean)
+  const { data: users } = await supabase
+    .from('users')
+    .select('id, username, level')
+    .in('id', [...new Set(userIdsFromClaims)])
+  
+  const claimMap = Object.fromEntries((claims || []).map(c => [c.id, c]))
+  const userMap = Object.fromEntries((users || []).map(u => [u.id, u]))
+  
+  const list = (queue || []).map(item => {
+    const claim = claimMap[item.claim_id]
+    const user = claim ? userMap[claim.user_id] : null
+    return {
+      id: item.id,
+      claimId: item.claim_id,
+      title: claim?.title,
+      platform: claim?.platform,
+      action: claim?.action,
+      status: item.status,
+      confidence: item.ai_confidence,
+      reason: item.ai_reason,
+      user: user?.username,
+      userLevel: user?.level,
+      createdAt: item.created_at
+    }
+  })
+  
+  return {
+    success: true,
+    type: 'query',
+    action: 'getPendingList',
+    data: {
+      total: list.length,
+      list
+    },
+    message: `📋 待审核列表 (共${list.length}项)`
+  }
+}
+
+async function executeGetReportList(params) {
+  const { data: reports, error } = await supabase
+    .from('review_reports')
+    .select(`
+      id, claim_id, report_type, difficulty_reasons, priority, created_at
+    `)
+    .eq('status', 'pending')
+    .order('priority', { ascending: false })
+    .order('created_at', { ascending: true })
+    .limit(20)
+  
+  if (error) throw error
+  
+  // 手动获取关联数据
+  const claimIds = (reports || []).map(r => r.claim_id).filter(Boolean)
+  const { data: claims } = await supabase
+    .from('claims')
+    .select('id, title, platform, action, user_id')
+    .in('id', claimIds)
+  
+  const userIds = (claims || []).map(c => c.user_id).filter(Boolean)
+  const { data: users } = await supabase
+    .from('users')
+    .select('id, username')
+    .in('id', [...new Set(userIds)])
+  
+  const claimMap = Object.fromEntries((claims || []).map(c => [c.id, c]))
+  const userMap = Object.fromEntries((users || []).map(u => [u.id, u]))
+  
+  const list = (reports || []).map(r => {
+    const claim = claimMap[r.claim_id]
+    const user = claim ? userMap[claim.user_id] : null
+    return {
+      ...r,
+      claims: claim ? { ...claim, users: user } : null
+    }
+  })
+  
+  return {
+    success: true,
+    type: 'query',
+    action: 'getReportList',
+    data: {
+      total: list.length,
+      list
+    },
+    message: `📄 待处理报告 (共${list.length}项)`
+  }
+}
+
+async function executeGetStats(params) {
+  const stats = await getReviewStats()
+  
+  return {
+    success: true,
+    type: 'query',
+    action: 'getStats',
+    data: stats,
+    message: `📊 审核统计\n待审核: ${stats.pending}\n今日通过: ${stats.todayApproved}\n今日拒绝: ${stats.todayRejected}`
+  }
+}
+
+async function executeGetUserHistory(params) {
+  let userId = params.id
+  let username = params.keyword
+  
+  // 如果传的是用户名，先查找用户ID
+  if (!userId && username) {
+    const { data: user } = await supabase
+      .from('users')
+      .select('id, username, level')
+      .ilike('username', `%${username}%`)
+      .maybeSingle()
+    
+    if (user) {
+      userId = user.id
+    }
+  }
+  
+  if (!userId) {
+    return { success: false, error: '未找到用户' }
+  }
+  
+  const { data: claims, error } = await supabase
+    .from('claims')
+    .select('id, title, platform, action, status, ai_confidence, created_at')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(20)
+  
+  if (error) throw error
+  
+  return {
+    success: true,
+    type: 'query',
+    action: 'getUserHistory',
+    data: {
+      userId,
+      claims: claims || []
+    },
+    message: `👤 用户${userId}历史记录 (共${claims?.length || 0}条)`
+  }
+}
+
+async function executeGetSuspiciousUsers(params) {
+  const { data: users, error } = await supabase
+    .from('suspicious_users')
+    .select(`
+      id, user_id, suspicion_type, suspicion_score, evidence, status, created_at,
+      users (id, username, level)
+    `)
+    .neq('status', 'cleared')
+    .order('suspicion_score', { ascending: false })
+    .limit(20)
+  
+  if (error) throw error
+  
+  return {
+    success: true,
+    type: 'query',
+    action: 'getSuspiciousUsers',
+    data: {
+      total: users?.length || 0,
+      list: users || []
+    },
+    message: `⚠️ 可疑用户列表 (共${users?.length || 0}人)`
+  }
+}
+
+async function executeGetClaimDetail(params) {
+  const claimId = params.id
+  
+  if (!claimId) {
+    return { success: false, error: '请指定审核项ID' }
+  }
+  
+  const { data: claim, error } = await supabase
+    .from('claims')
+    .select(`
+      *,
+      tasks (*),
+      users (id, username, level, total_points)
+    `)
+    .eq('id', claimId)
+    .single()
+  
+  if (error) throw error
+  
+  // 获取AI审核结果
+  const { data: queueItem } = await supabase
+    .from('ai_review_queue')
+    .select('*')
+    .eq('claim_id', claimId)
+    .maybeSingle()
+  
+  // 获取审核报告（如果有）
+  const { data: report } = await supabase
+    .from('review_reports')
+    .select('*')
+    .eq('claim_id', claimId)
+    .maybeSingle()
+  
+  return {
+    success: true,
+    type: 'query',
+    action: 'getClaimDetail',
+    data: {
+      claim,
+      queueItem,
+      report,
+      screenshots: JSON.parse(claim?.screenshots || '[]')
+    },
+    message: `📋 审核详情 #${claimId}`
+  }
+}
+
+// ============ 操作类执行函数 ============
+
+async function executeApprove(params, userId) {
+  const claimId = params.id
+  
+  if (!claimId) {
+    return { success: false, error: '请指定要通过的审核项ID' }
+  }
+  
+  const result = await manualApprove(claimId, userId, params.reason || '')
+  
+  return {
+    success: true,
+    type: 'action',
+    action: 'approve',
+    data: result,
+    message: `✅ 审核通过 #${claimId}`
+  }
+}
+
+async function executeReject(params, userId) {
+  const claimId = params.id
+  
+  if (!claimId) {
+    return { success: false, error: '请指定要拒绝的审核项ID' }
+  }
+  
+  const result = await manualReject(claimId, userId, params.reason || '')
+  
+  return {
+    success: true,
+    type: 'action',
+    action: 'reject',
+    data: result,
+    message: `❌ 审核拒绝 #${claimId}`
+  }
+}
+
+async function executeBatchApprove(params, userId, headers) {
+  // 获取高置信度待审核项
+  const { data: pendingItems, error } = await supabase
+    .from('ai_review_queue')
+    .select('claim_id')
+    .eq('status', 'pending')
+    .gte('ai_confidence', 0.85)
+    .limit(50)
+  
+  if (error) throw error
+  
+  if (!pendingItems || pendingItems.length === 0) {
+    return {
+      success: true,
+      type: 'action',
+      action: 'batchApprove',
+      data: { processed: 0 },
+      message: '没有符合条件的高置信度审核项'
+    }
+  }
+  
+  // 执行批量审核
+  const claimIds = pendingItems.map(item => item.claim_id)
+  const results = []
+  
+  for (const claimId of claimIds) {
+    try {
+      const result = await manualApprove(claimId, userId, '批量自动通过')
+      results.push({ claimId, success: true })
+    } catch (e) {
+      results.push({ claimId, success: false, error: e.message })
+    }
+  }
+  
+  const successCount = results.filter(r => r.success).length
+  
+  return {
+    success: true,
+    type: 'action',
+    action: 'batchApprove',
+    data: {
+      total: claimIds.length,
+      processed: successCount,
+      failed: claimIds.length - successCount
+    },
+    message: `✅ 批量审核完成：处理${successCount}项`
+  }
+}
+
+async function executeMarkFraud(params, userId) {
+  const claimId = params.id
+  
+  if (!claimId) {
+    return { success: false, error: '请指定审核项ID' }
+  }
+  
+  // 获取Claim信息
+  const { data: claim } = await supabase
+    .from('claims')
+    .select('user_id')
+    .eq('id', claimId)
+    .single()
+  
+  if (!claim) {
+    return { success: false, error: '审核项不存在' }
+  }
+  
+  // 拒绝该Claim
+  await manualReject(claimId, userId, '标记为欺诈')
+  
+  // 添加到可疑用户
+  const { error } = await supabase
+    .from('suspicious_users')
+    .upsert({
+      user_id: claim.user_id,
+      suspicion_type: 'fraud',
+      suspicion_score: 0.8,
+      trigger_claim_id: claimId,
+      flagged_by: 'human',
+      status: 'flagged'
+    }, { onConflict: 'user_id' })
+  
+  return {
+    success: true,
+    type: 'action',
+    action: 'markFraud',
+    data: { claimId, userId: claim.user_id },
+    message: `🚫 已标记为欺诈 #${claimId}`
+  }
+}
+
+// ============ 分析类执行函数 ============
+
+async function executeAnalyzeScreenshots(params, headers) {
+  const claimId = params.id
+  
+  if (!claimId) {
+    return { success: false, error: '请指定审核项ID' }
+  }
+  
+  const result = await comprehensiveReview(claimId, { headers })
+  
+  return {
+    success: true,
+    type: 'analyze',
+    action: 'analyzeScreenshots',
+    data: result,
+    message: `🔍 分析完成 #${claimId}，置信度：${(result.confidence * 100).toFixed(1)}%`
+  }
+}
+
+async function executeVerifyLink(params, headers) {
+  const claimId = params.id
+  
+  if (!claimId) {
+    return { success: false, error: '请指定审核项ID' }
+  }
+  
+  // 获取Claim和Task信息
+  const { data: claim } = await supabase
+    .from('claims')
+    .select('*, tasks(video_url)')
+    .eq('id', claimId)
+    .single()
+  
+  if (!claim || !claim.tasks?.video_url) {
+    return { success: false, error: '未找到视频链接' }
+  }
+  
+  // 执行链接验证
+  const result = await comprehensiveReview(claimId, { headers })
+  
+  return {
+    success: true,
+    type: 'analyze',
+    action: 'verifyLink',
+    data: result.dimensions?.linkVerify,
+    message: `🔗 链接验证完成 #${claimId}`
+  }
+}
+
+async function executeRandomAudit(params, headers) {
+  const count = parseInt(params.id) || 10
+  
+  // 获取已通过的审核项
+  const { data: approvedClaims, error } = await supabase
+    .from('claims')
+    .select('id')
+    .in('status', ['approved', 'done'])
+    .order('reviewed_at', { ascending: false })
+    .limit(count)
+  
+  if (error) throw error
+  
+  // 重新审核
+  const results = []
+  for (const claim of (approvedClaims || [])) {
+    const result = await comprehensiveReview(claim.id, { headers })
+    results.push({
+      claimId: claim.id,
+      confidence: result.confidence,
+      decision: result.decision
+    })
+  }
+  
+  const issues = results.filter(r => r.decision !== 'approved')
+  
+  return {
+    success: true,
+    type: 'analyze',
+    action: 'randomAudit',
+    data: {
+      total: results.length,
+      issues: issues.length,
+      results
+    },
+    message: `🎲 抽查完成：${results.length}项中发现${issues.length}项问题`
+  }
+}
+
+// ============ 导出类执行函数 ============
+
+async function executeExportReport(params) {
+  const { data: reports, error } = await supabase
+    .from('review_reports')
+    .select(`
+      id, claim_id, report_type, difficulty_reasons, priority, created_at, resolved_at
+    `)
+    .order('created_at', { ascending: false })
+    .limit(100)
+  
+  if (error) throw error
+  
+  // 手动获取关联数据
+  const claimIds = (reports || []).map(r => r.claim_id).filter(Boolean)
+  const { data: claims } = await supabase
+    .from('claims')
+    .select('id, title, platform, action, user_id')
+    .in('id', claimIds)
+  
+  const userIds = (claims || []).map(c => c.user_id).filter(Boolean)
+  const { data: users } = await supabase
+    .from('users')
+    .select('id, username')
+    .in('id', [...new Set(userIds)])
+  
+  const claimMap = Object.fromEntries((claims || []).map(c => [c.id, c]))
+  const userMap = Object.fromEntries((users || []).map(u => [u.id, u]))
+  
+  const list = (reports || []).map(r => {
+    const claim = claimMap[r.claim_id]
+    const user = claim ? userMap[claim.user_id] : null
+    return {
+      ...r,
+      claims: claim ? { ...claim, users: user } : null
+    }
+  })
+  
+  return {
+    success: true,
+    type: 'export',
+    action: 'exportReport',
+    data: list,
+    message: `📤 报告已导出：${list.length}条记录`
+  }
+}
+
+async function executeExportSuspicious(params) {
+  const { data: users, error } = await supabase
+    .from('suspicious_users')
+    .select(`
+      id, user_id, suspicion_type, suspicion_score, evidence, status, created_at,
+      users (username, level, total_points)
+    `)
+    .order('suspicion_score', { ascending: false })
+  
+  if (error) throw error
+  
+  return {
+    success: true,
+    type: 'export',
+    action: 'exportSuspicious',
+    data: users,
+    message: `📤 可疑用户已导出：${users?.length || 0}人`
+  }
+}
+
+/**
+ * 格式化审核列表输出
+ */
+export function formatReviewList(list) {
+  if (!list || list.length === 0) {
+    return '暂无数据'
+  }
+  
+  const lines = ['┌─────┬─────────┬─────────┬──────────┬──────────┐']
+  lines.push('│ ID  │ 用户    │ 任务    │ 置信度   │ 状态     │')
+  lines.push('├─────┼─────────┼─────────┼──────────┼──────────┤')
+  
+  for (const item of list.slice(0, 10)) {
+    const id = String(item.claimId || item.id).padEnd(5)
+    const user = (item.user || '-').padEnd(9).slice(0, 9)
+    const title = (item.title || '-').padEnd(9).slice(0, 9)
+    const conf = ((item.confidence || 0) * 100).toFixed(0) + '%'
+    const status = item.status === 'pending' ? '⏳待审核' : 
+                   item.status === 'manual' ? '⚠️需人工' : '✅已处理'
+    
+    lines.push(`│ ${id}│ ${user}│ ${title}│ ${conf.padEnd(8)}│ ${status.padEnd(8)}│`)
+  }
+  
+  lines.push('└─────┴─────────┴─────────┴──────────┴──────────┘')
+  
+  return lines.join('\n')
+}
+
+export default {
+  parseCommand,
+  executeCommand,
+  formatReviewList,
+  COMMAND_TYPES
+}

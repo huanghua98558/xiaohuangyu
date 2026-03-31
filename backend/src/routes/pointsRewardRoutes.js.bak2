@@ -1,0 +1,41 @@
+import { Router } from 'express'
+import pointsRewardController from '../controllers/pointsRewardController.js'
+import { authMiddleware, adminOnly } from '../middlewares/auth.js'
+
+const router = Router()
+
+// 所有接口需要管理员权限
+router.use(authMiddleware)
+router.use(adminOnly)
+
+// 统计概览
+router.get('/overview', pointsRewardController.getOverview)
+router.get('/today', pointsRewardController.getTodayStats)
+router.get('/trend', pointsRewardController.getTrend)
+
+// 奖励明细
+router.get('/list', pointsRewardController.getRewardList)
+router.get('/export', pointsRewardController.exportRewards)
+router.get('/user/:userId', pointsRewardController.getUserRewardSummary)
+
+// 配置管理
+router.get('/configs', pointsRewardController.getConfigs)
+router.put('/config', pointsRewardController.updateConfig)
+router.put('/configs', pointsRewardController.updateConfigs)
+
+// 异常检测
+router.get('/anomaly', pointsRewardController.detectAnomaly)
+
+
+// 兼容前端路径
+router.get('/stats', (req, res, next) => {
+  req.url = '/overview'
+  return router.handle(req, res, next)
+})
+
+router.get('/history', (req, res, next) => {
+  req.url = '/list'
+  return router.handle(req, res, next)
+})
+
+export default router

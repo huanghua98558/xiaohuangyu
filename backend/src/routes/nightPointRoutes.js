@@ -1,0 +1,150 @@
+import { Router } from 'express'
+import nightPointService from '../services/nightPointService.js'
+import onlineUserService from '../services/onlineUserService.js'
+import { authMiddleware, adminOnly } from '../middlewares/auth.js'
+import { success } from '../utils/response.js'
+
+const router = Router()
+
+/**
+ * 获取当前夜间积分系数（公开接口，前端展示用）
+ */
+router.get('/current-coefficient', async (req, res, next) => {
+  try {
+    const onlineUsers = await onlineUserService.getOnlineCount()
+    const basePoints = Number(req.query.basePoints) || 100
+    
+    const result = await nightPointService.getCurrentCoefficient(onlineUsers, basePoints)
+    success(res, result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+/**
+ * 获取在线用户统计（公开接口）
+ */
+router.get('/online-stats', async (req, res, next) => {
+  try {
+    const stats = await onlineUserService.getFullStats()
+    success(res, stats)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 别名路由，兼容前端
+router.get('/online-count', async (req, res, next) => {
+  try {
+    const count = await onlineUserService.getOnlineCount()
+    success(res, { count })
+  } catch (err) {
+    next(err)
+  }
+})
+
+/**
+ * 以下为管理接口
+ */
+
+// 获取夜间积分配置
+router.get('/config', authMiddleware, adminOnly, async (req, res, next) => {
+  try {
+    const config = await nightPointService.getConfig()
+    success(res, config)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 更新夜间积分配置
+router.put('/config', authMiddleware, adminOnly, async (req, res, next) => {
+  try {
+    const result = await nightPointService.updateConfig(req.body)
+    success(res, result, '配置更新成功')
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST 方法别名
+router.post('/config', authMiddleware, adminOnly, async (req, res, next) => {
+  try {
+    const result = await nightPointService.updateConfig(req.body)
+    success(res, result, '配置更新成功')
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 获取在线用户-系数映射
+router.get('/coefficient-map', authMiddleware, adminOnly, async (req, res, next) => {
+  try {
+    const map = await nightPointService.getCoefficientMap()
+    success(res, map)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 更新系数映射
+router.put('/coefficient-map/:id', authMiddleware, adminOnly, async (req, res, next) => {
+  try {
+    const { id } = req.params
+    const {
+      coefficient,
+      online_users_max,
+      description,
+      sort_order,
+    } = req.body || {}
+
+    if (coefficient !== undefined && (Number(coefficient) < 1 || Number(coefficient) > 2)) {
+      return res.status(400).json({
+        code: 400,
+        message: '系数必须在 1-2 之间'
+      })
+    }
+
+    if (online_users_max !== undefined && Number(online_users_max) < 0) {
+      return res.status(400).json({
+        code: 400,
+        message: '在线用户上限不能小于 0'
+      })
+    }
+
+    const result = await nightPointService.updateCoefficientMap(parseInt(id, 10), {
+      ...(coefficient !== undefined ? { coefficient: Number(coefficient) } : {}),
+      ...(online_users_max !== undefined ? { online_users_max: Number(online_users_max) } : {}),
+      ...(description !== undefined ? { description: String(description) } : {}),
+      ...(sort_order !== undefined ? { sort_order: Number(sort_order) } : {}),
+    })
+    success(res, result, '更新成功')
+  } catch (err) {
+    next(err)
+  }
+})
+
+// 获取夜间积分统计
+router.get('/stats', authMiddleware, adminOnly, async (req, res, next) => {
+  try {
+    const supabaseModule = await import('../utils/supabaseToPrismaAdapter.js')
+    const sb = supabaseModule.default
+    const { data: configs } = await sb.from('night_point_config').select('*').catch(() => ({ data: [] }))
+    const stats = { configs: configs || [], totalDistributed: 0, activeUsers: 0 }
+    res.json({ code: 0, data: stats })
+  } catch (err) {
+    res.json({ code: 0, data: { totalDistributed: 0, activeUsers: 0, averageCoefficient: 1.0 } })
+  }
+})
+
+// 初始化夜间积分表
+router.post('/init-tables', authMiddleware, adminOnly, async (req, res, next) => {
+  try {
+    const result = await nightPointService.initTables()
+    success(res, { initialized: result }, '初始化完成')
+  } catch (err) {
+    next(err)
+  }
+})
+
+export default router

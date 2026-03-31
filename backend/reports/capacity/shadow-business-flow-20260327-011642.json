@@ -1,0 +1,368 @@
+{
+  "generatedAt": "2026-03-27T01:16:42.523Z",
+  "options": {
+    "sampleManifest": "/tmp/xhy_shadow_samples.json",
+    "stages": "4x60,8x90,12x120",
+    "thinkTimeMs": 150,
+    "timeoutMs": 45000,
+    "output": "",
+    "pretty": true
+  },
+  "stages": [
+    {
+      "name": "stage_1",
+      "concurrency": 4,
+      "durationSec": 60
+    },
+    {
+      "name": "stage_2",
+      "concurrency": 8,
+      "durationSec": 90
+    },
+    {
+      "name": "stage_3",
+      "concurrency": 12,
+      "durationSec": 120
+    }
+  ],
+  "before": {
+    "label": "before",
+    "capturedAt": "2026-03-27T01:11:11.944Z",
+    "healthScore": 100,
+    "databaseLatencyMs": 437,
+    "redisLatencyMs": 0,
+    "queueTotals": {
+      "waiting": 0,
+      "active": 0,
+      "delayed": 0,
+      "completed": 37,
+      "failed": 0
+    },
+    "browserSummary": {
+      "healthyCount": 3,
+      "totalInstances": 3,
+      "totalPages": 15,
+      "availablePages": 15,
+      "targetPages": 15,
+      "busyPages": 0
+    },
+    "capacityAssessment": {
+      "status": "healthy",
+      "issues": [],
+      "queueSoftLimit": 12
+    },
+    "business": {
+      "timestamp": "2026-03-27T01:11:11.943Z",
+      "queue": {
+        "pending": 0,
+        "processing": 0,
+        "delayed": 0,
+        "total": 0
+      },
+      "claims": {
+        "total": 0,
+        "approved": 0,
+        "approvalRate": 0
+      },
+      "points": {
+        "granted": 0,
+        "consumed": 0,
+        "net": 0
+      },
+      "alerts": {
+        "unhandled": 46,
+        "critical": 0
+      }
+    }
+  },
+  "stageResults": [
+    {
+      "stage": "stage_1",
+      "concurrency": 4,
+      "durationSec": 60,
+      "claims": {
+        "total": 16,
+        "success": 16,
+        "failed": 0,
+        "successRate": 100,
+        "latencyMs": {
+          "avg": 16186.5,
+          "p50": 16608,
+          "p95": 19951,
+          "p99": 19951,
+          "max": 19951
+        }
+      },
+      "steps": {
+        "ocr_homepage": {
+          "total": 16,
+          "success": 16,
+          "failed": 0,
+          "successRate": 100,
+          "latencyMs": {
+            "avg": 6658.81,
+            "p50": 6708,
+            "p95": 9947,
+            "p99": 9947,
+            "max": 9947
+          }
+        },
+        "ocr_comment": {
+          "total": 16,
+          "success": 16,
+          "failed": 0,
+          "successRate": 100,
+          "latencyMs": {
+            "avg": 8293,
+            "p50": 8535,
+            "p95": 10335,
+            "p99": 10335,
+            "max": 10335
+          }
+        },
+        "yolo_comment": {
+          "total": 16,
+          "success": 16,
+          "failed": 0,
+          "successRate": 100,
+          "latencyMs": {
+            "avg": 1135,
+            "p50": 1174,
+            "p95": 1455,
+            "p99": 1455,
+            "max": 1455
+          }
+        },
+        "browser_visit": {
+          "total": 16,
+          "success": 16,
+          "failed": 0,
+          "successRate": 100,
+          "latencyMs": {
+            "avg": 99.69,
+            "p50": 103,
+            "p95": 164,
+            "p99": 164,
+            "max": 164
+          }
+        }
+      }
+    },
+    {
+      "stage": "stage_2",
+      "concurrency": 8,
+      "durationSec": 90,
+      "claims": {
+        "total": 29,
+        "success": 29,
+        "failed": 0,
+        "successRate": 100,
+        "latencyMs": {
+          "avg": 28513.55,
+          "p50": 29523,
+          "p95": 35497,
+          "p99": 38555,
+          "max": 38555
+        }
+      },
+      "steps": {
+        "ocr_homepage": {
+          "total": 29,
+          "success": 29,
+          "failed": 0,
+          "successRate": 100,
+          "latencyMs": {
+            "avg": 12725.62,
+            "p50": 13467,
+            "p95": 16384,
+            "p99": 22162,
+            "max": 22162
+          }
+        },
+        "ocr_comment": {
+          "total": 29,
+          "success": 29,
+          "failed": 0,
+          "successRate": 100,
+          "latencyMs": {
+            "avg": 14548.93,
+            "p50": 14878,
+            "p95": 21104,
+            "p99": 21166,
+            "max": 21166
+          }
+        },
+        "yolo_comment": {
+          "total": 29,
+          "success": 29,
+          "failed": 0,
+          "successRate": 100,
+          "latencyMs": {
+            "avg": 1159.34,
+            "p50": 1198,
+            "p95": 1386,
+            "p99": 1433,
+            "max": 1433
+          }
+        },
+        "browser_visit": {
+          "total": 29,
+          "success": 29,
+          "failed": 0,
+          "successRate": 100,
+          "latencyMs": {
+            "avg": 79.55,
+            "p50": 70,
+            "p95": 123,
+            "p99": 139,
+            "max": 139
+          }
+        }
+      }
+    },
+    {
+      "stage": "stage_3",
+      "concurrency": 12,
+      "durationSec": 120,
+      "claims": {
+        "total": 38,
+        "success": 38,
+        "failed": 0,
+        "successRate": 100,
+        "latencyMs": {
+          "avg": 42344.05,
+          "p50": 44504,
+          "p95": 54070,
+          "p99": 57844,
+          "max": 57844
+        }
+      },
+      "steps": {
+        "ocr_homepage": {
+          "total": 38,
+          "success": 38,
+          "failed": 0,
+          "successRate": 100,
+          "latencyMs": {
+            "avg": 18852.39,
+            "p50": 21217,
+            "p95": 26011,
+            "p99": 32986,
+            "max": 32986
+          }
+        },
+        "ocr_comment": {
+          "total": 38,
+          "success": 38,
+          "failed": 0,
+          "successRate": 100,
+          "latencyMs": {
+            "avg": 22234.21,
+            "p50": 22298,
+            "p95": 30744,
+            "p99": 30998,
+            "max": 30998
+          }
+        },
+        "yolo_comment": {
+          "total": 38,
+          "success": 38,
+          "failed": 0,
+          "successRate": 100,
+          "latencyMs": {
+            "avg": 1171.08,
+            "p50": 1220,
+            "p95": 1359,
+            "p99": 1501,
+            "max": 1501
+          }
+        },
+        "browser_visit": {
+          "total": 38,
+          "success": 38,
+          "failed": 0,
+          "successRate": 100,
+          "latencyMs": {
+            "avg": 86.29,
+            "p50": 89,
+            "p95": 126,
+            "p99": 195,
+            "max": 195
+          }
+        }
+      }
+    }
+  ],
+  "after": {
+    "label": "after",
+    "capturedAt": "2026-03-27T01:16:42.523Z",
+    "healthScore": 80,
+    "databaseLatencyMs": 344,
+    "redisLatencyMs": 0,
+    "queueTotals": {
+      "waiting": 0,
+      "active": 0,
+      "delayed": 0,
+      "completed": 37,
+      "failed": 0
+    },
+    "browserSummary": {
+      "healthyCount": 3,
+      "totalInstances": 3,
+      "totalPages": 15,
+      "availablePages": 15,
+      "targetPages": 15,
+      "busyPages": 0
+    },
+    "capacityAssessment": {
+      "status": "healthy",
+      "issues": [],
+      "queueSoftLimit": 12
+    },
+    "business": {
+      "timestamp": "2026-03-27T01:16:42.469Z",
+      "queue": {
+        "pending": 0,
+        "processing": 0,
+        "delayed": 0,
+        "total": 0
+      },
+      "claims": {
+        "total": 0,
+        "approved": 0,
+        "approvalRate": 0
+      },
+      "points": {
+        "granted": 0,
+        "consumed": 0,
+        "net": 0
+      },
+      "alerts": {
+        "unhandled": 47,
+        "critical": 0
+      }
+    }
+  },
+  "delta": {
+    "healthScore": {
+      "before": 100,
+      "after": 80,
+      "delta": -20
+    },
+    "databaseLatencyMs": {
+      "before": 437,
+      "after": 344,
+      "delta": -93
+    },
+    "queueWaiting": {
+      "before": 0,
+      "after": 0,
+      "delta": 0
+    },
+    "browserAvailablePages": {
+      "before": 15,
+      "after": 15,
+      "delta": 0
+    }
+  }
+}

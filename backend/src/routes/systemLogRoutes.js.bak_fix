@@ -1,0 +1,191 @@
+import { Router } from 'express'
+import systemLogService from '../services/systemLogService.js'
+import { authMiddleware, adminOnly } from '../middlewares/auth.js'
+import { success, error } from '../utils/response.js'
+import logger from '../utils/logger.js'
+
+const router = Router()
+
+// 所有接口都需要管理员权限
+router.use(authMiddleware)
+router.use(adminOnly)
+
+/**
+ * 获取统计概览
+ * GET /api/admin-v2/logs/overview
+ */
+router.get('/overview', async (req, res, next) => {
+  try {
+    const stats = await systemLogService.getStatsOverview()
+    success(res, stats)
+  } catch (err) {
+    next(err)
+  }
+})
+
+/**
+ * 获取操作日志
+ * GET /api/admin-v2/logs/operation
+ */
+router.get('/operation', async (req, res, next) => {
+  try {
+    const { page, size, startDate, endDate, keyword, action, targetType, operatorRole } = req.query
+    const result = await systemLogService.getOperationLogs({
+      page: parseInt(page) || 1,
+      size: parseInt(size) || 20,
+      startDate,
+      endDate,
+      keyword,
+      action,
+      targetType,
+      operatorRole
+    })
+    success(res, result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+/**
+ * 获取登录日志
+ * GET /api/admin-v2/logs/login
+ */
+router.get('/login', async (req, res, next) => {
+  try {
+    const { page, size, startDate, endDate, keyword, loginStatus, isAnomaly } = req.query
+    const result = await systemLogService.getLoginLogs({
+      page: parseInt(page) || 1,
+      size: parseInt(size) || 20,
+      startDate,
+      endDate,
+      keyword,
+      loginStatus,
+      isAnomaly
+    })
+    success(res, result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+/**
+ * 获取审核日志
+ * GET /api/admin-v2/logs/review
+ */
+router.get('/review', async (req, res, next) => {
+  try {
+    const { page, size, startDate, endDate, status, reviewerId } = req.query
+    const result = await systemLogService.getReviewLogs({
+      page: parseInt(page) || 1,
+      size: parseInt(size) || 20,
+      startDate,
+      endDate,
+      status,
+      reviewerId
+    })
+    success(res, result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+/**
+ * 获取系统错误日志
+ * GET /api/admin-v2/logs/error
+ */
+router.get('/error', async (req, res, next) => {
+  try {
+    const { page, size, startDate, endDate, level, keyword } = req.query
+    const result = await systemLogService.getErrorLogs({
+      page: parseInt(page) || 1,
+      size: parseInt(size) || 20,
+      startDate,
+      endDate,
+      level,
+      keyword
+    })
+    success(res, result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+/**
+ * 获取日志保留配置
+ * GET /api/admin-v2/logs/retention-config
+ */
+router.get('/retention-config', (req, res) => {
+  success(res, systemLogService.RETENTION_CONFIG)
+})
+
+/**
+ * 清理过期日志
+ * POST /api/admin-v2/logs/clean
+ */
+router.post('/clean', async (req, res, next) => {
+  try {
+    const { logType } = req.body
+    
+    if (logType) {
+      // 清理指定类型
+      const result = await systemLogService.cleanExpiredLogs(logType)
+      logger.info(`管理员 ${req.userId} 清理日志: ${logType}, 删除 ${result.deleted} 条`)
+      success(res, result)
+    } else {
+      // 清理所有类型
+      const results = await systemLogService.cleanAllExpiredLogs()
+      logger.info(`管理员 ${req.userId} 清理所有日志`)
+      success(res, results)
+    }
+  } catch (err) {
+    next(err)
+  }
+})
+
+/**
+ * 导出日志
+ * GET /api/admin-v2/logs/export/:type
+ */
+router.get('/export/:type', async (req, res, next) => {
+  try {
+    const { type } = req.params
+    const { startDate, endDate } = req.query
+    
+    const data = await systemLogService.exportLogs(type, { startDate, endDate })
+    
+    // 记录导出操作
+    logger.info(`管理员 ${req.userId} 导出 ${type} 日志，共 ${data.length} 条`)
+    
+    success(res, data)
+  } catch (err) {
+    next(err)
+  }
+})
+
+/**
+ * 获取操作类型统计
+ * GET /api/admin-v2/logs/action-stats
+ */
+router.get('/action-stats', async (req, res, next) => {
+  try {
+    const { days = 7 } = req.query
+    const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
+
+    const { data } = await supabase
+      .from('operation_logs')
+      .select('action')
+      .gte('created_at', startDate)
+
+    const stats = {}
+    ;(data || []).forEach(item => {
+      stats[item.action] = (stats[item.action] || 0) + 1
+    })
+
+    success(res, stats)
+  } catch (err) {
+    next(err)
+  }
+})
+
+
+export default router

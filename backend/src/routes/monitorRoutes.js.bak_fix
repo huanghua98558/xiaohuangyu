@@ -1,0 +1,196 @@
+import { Router } from 'express'
+import monitorService from '../services/monitorService.js'
+import businessMonitorService from '../services/businessMonitorService.js'
+import { success, error } from '../utils/response.js'
+import { authMiddleware, adminOnly } from '../middlewares/auth.js'
+import logger from '../utils/logger.js'
+
+const router = Router()
+
+/**
+ * 获取完整监控数据
+ * GET /api/monitor/metrics
+ */
+router.get('/metrics', authMiddleware, adminOnly, async (req, res, next) => {
+  try {
+    const metrics = await monitorService.getFullMetrics()
+    success(res, metrics)
+  } catch (err) {
+    logger.error('获取监控数据失败:', err)
+    next(err)
+  }
+})
+
+/**
+ * 获取系统基础信息
+ * GET /api/monitor/system
+ */
+router.get('/system', authMiddleware, adminOnly, async (req, res, next) => {
+  try {
+    const systemInfo = monitorService.getSystemInfo()
+    const diskUsage = await monitorService.getDiskUsage()
+    const networkStats = await monitorService.getNetworkStats()
+    
+    success(res, {
+      system: systemInfo,
+      disk: diskUsage,
+      network: networkStats
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+/**
+ * 获取服务状态
+ * GET /api/monitor/services
+ */
+router.get('/services', authMiddleware, adminOnly, async (req, res, next) => {
+  try {
+    const [pm2Status, nginxStatus, redisStatus, dbStatus] = await Promise.all([
+      monitorService.getPM2Status(),
+      monitorService.getNginxStatus(),
+      monitorService.getRedisStatus(),
+      monitorService.getDatabaseStatus()
+    ])
+
+    success(res, {
+      pm2: pm2Status,
+      nginx: nginxStatus,
+      redis: redisStatus,
+      database: dbStatus
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+/**
+ * 获取实时状态（轻量级，用于轮询）
+ * GET /api/monitor/realtime
+ */
+router.get('/realtime', authMiddleware, adminOnly, async (req, res, next) => {
+  try {
+    const systemInfo = monitorService.getSystemInfo()
+    const [redisStatus, wsStats, alertStats] = await Promise.all([
+      monitorService.getRedisStatus(),
+      monitorService.getWebSocketStats(),
+      monitorService.getAlertStats()
+    ])
+
+    success(res, {
+      timestamp: new Date().toISOString(),
+      cpu: {
+        usage: Math.round(systemInfo.loadAverage['1m'] / systemInfo.cpus * 100),
+        loadAverage: systemInfo.loadAverage
+      },
+      memory: {
+        total: systemInfo.totalMemory,
+        used: systemInfo.usedMemory,
+        free: systemInfo.freeMemory,
+        percent: systemInfo.memoryUsagePercent
+      },
+      redis: {
+        connected: redisStatus.connected,
+        latency: redisStatus.latency
+      },
+      websocket: wsStats,
+      alerts: alertStats
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+/**
+ * 获取历史趋势
+ * GET /api/monitor/history
+ */
+router.get('/history', authMiddleware, adminOnly, async (req, res, next) => {
+  try {
+    const history = monitorService.getHistory()
+    success(res, history)
+  } catch (err) {
+    next(err)
+  }
+})
+
+/**
+ * 获取健康度评分
+ * GET /api/monitor/health
+ */
+router.get('/health', authMiddleware, adminOnly, async (req, res, next) => {
+  try {
+    const metrics = await monitorService.getFullMetrics()
+    success(res, metrics.health)
+  } catch (err) {
+    next(err)
+  }
+})
+
+
+/**
+ * 获取业务监控摘要
+ * GET /api/monitor/business/summary
+ */
+router.get('/business/summary', authMiddleware, adminOnly, async (req, res, next) => {
+  try {
+    const summary = await businessMonitorService.getSummary()
+    success(res, summary)
+  } catch (err) {
+    logger.error('获取业务监控摘要失败:', err)
+    next(err)
+  }
+})
+
+/**
+ * 执行业务监控检查
+ * POST /api/monitor/business/check
+ */
+router.post('/business/check', authMiddleware, adminOnly, async (req, res, next) => {
+  try {
+    const result = await businessMonitorService.runAllChecks()
+    success(res, result)
+  } catch (err) {
+    logger.error('业务监控检查失败:', err)
+    next(err)
+  }
+})
+
+/**
+ * 获取业务监控历史数据
+ * GET /api/monitor/business/history
+ */
+router.get('/business/history', authMiddleware, adminOnly, async (req, res, next) => {
+  try {
+    const history = businessMonitorService.getHistory()
+    success(res, history)
+  } catch (err) {
+    next(err)
+  }
+})
+
+/**
+ * 获取/更新业务监控阈值配置
+ * GET/PUT /api/monitor/business/thresholds
+ */
+router.get('/business/thresholds', authMiddleware, adminOnly, async (req, res, next) => {
+  try {
+    const thresholds = businessMonitorService.getThresholds()
+    success(res, thresholds)
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.put('/business/thresholds', authMiddleware, adminOnly, async (req, res, next) => {
+  try {
+    const newThresholds = req.body
+    const updated = businessMonitorService.updateThresholds(newThresholds)
+    success(res, updated)
+  } catch (err) {
+    next(err)
+  }
+})
+
+export default router

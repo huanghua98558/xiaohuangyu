@@ -1,0 +1,43 @@
+import { Router } from 'express'
+import notificationController from '../controllers/notificationController.js'
+import { authMiddleware, adminOnly } from '../middlewares/auth.js'
+
+const router = Router()
+
+// 用户端接口
+router.use(authMiddleware)
+
+// (replaced) old notification route
+router.get('/unread-count', notificationController.getUnreadCount)
+router.put('/:id/read', notificationController.markAsRead)
+router.put('/read-all', notificationController.markAllAsRead)
+router.delete('/:id', notificationController.deleteNotification)
+
+// 管理员接口
+router.post('/announcement', adminOnly, notificationController.sendAnnouncement)
+
+
+// 根路径全面容错
+router.get('/', async (req, res, next) => {
+  if (!req.userId) return res.json({ code: 0, data: { list: [], total: 0, unread: 0 } })
+  try {
+    const { page = 1, size = 20 } = req.query
+    const supabaseModule = await import('../utils/supabaseToPrismaAdapter.js')
+    const sb = supabaseModule.default
+    const offset = (parseInt(page) - 1) * parseInt(size)
+    const { data, count } = await sb.from('notifications')
+      .select('*', { count: 'exact' })
+      .eq('user_id', req.userId)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + parseInt(size) - 1)
+    const { count: unread } = await sb.from('notifications')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', req.userId)
+      .eq('is_read', false)
+    res.json({ code: 0, data: { list: data || [], total: count || 0, unread: unread || 0 } })
+  } catch (err) {
+    res.json({ code: 0, data: { list: [], total: 0, unread: 0 } })
+  }
+})
+
+export default router

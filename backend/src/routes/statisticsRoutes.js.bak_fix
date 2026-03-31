@@ -1,0 +1,23 @@
+import express from 'express'
+import { getOverview, getReviewerStats, getPublisherStats, getTrendData } from '../controllers/statisticsController.js'
+import { authMiddleware, adminOnly } from '../middlewares/auth.js'
+
+const router = express.Router()
+
+// 所有路由都需要先认证，再检查管理员权限
+router.use(authMiddleware)
+router.use(adminOnly)
+
+// 获取概览统计
+router.get('/overview', getOverview)
+
+// 获取审核员绩效统计
+router.get('/reviewers', getReviewerStats)
+
+// 获取发布者任务质量统计
+router.get('/publishers', getPublisherStats)
+
+// 获取趋势数据
+router.get('/trend', getTrendData)
+
+export default router

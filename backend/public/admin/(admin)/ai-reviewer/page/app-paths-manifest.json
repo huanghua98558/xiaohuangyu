@@ -1,0 +1,3 @@
+{
+  "/(admin)/ai-reviewer/page": "app/(admin)/ai-reviewer/page.js"
+}

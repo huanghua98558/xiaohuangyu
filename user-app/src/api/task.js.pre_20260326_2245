@@ -1,0 +1,579 @@
+import { compressImage } from './compress.js'
+// 后端 API 地址配置
+// 开发环境使用相对路径，生产环境使用环境变量或默认值
+const BASE = (typeof window !== 'undefined' && window.__API_BASE__) 
+  || import.meta.env.VITE_API_BASE 
+  || '/api'
+const TOKEN_KEY = 'xiaohuangyu_token'
+
+async function request(url, options = {}) {
+  const headers = { 'Content-Type': 'application/json', ...options.headers }
+  const token = localStorage.getItem(TOKEN_KEY)
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  
+  let res
+  try {
+    res = await fetch(BASE + url, { ...options, headers })
+  } catch (e) {
+    const msg = (e && e.message) || String(e)
+    if (/failed to fetch|network|load/i.test(msg)) {
+      throw new Error('无法连接服务器，请确认后端已启动')
+    }
+    throw new Error(msg || '网络错误')
+  }
+  
+  const json = await res.json().catch(() => ({}))
+  
+  if (res.ok && json.code === 0) {
+    return json
+  }
+  
+  if (res.status === 401) {
+    localStorage.removeItem(TOKEN_KEY)
+    localStorage.removeItem('xiaohuangyu_user')
+  }
+  
+  const msg = json.message || (res.status >= 500 ? '服务器错误，请稍后重试' : '请求失败')
+  throw new Error(msg)
+}
+
+// ============ 用户相关 ============
+
+export async function register(username, password, phone = '', inviteCode = '', agreedToPrivacy = true, agreedToTerms = true) {
+  const body = { 
+    username, 
+    password, 
+    phone,
+    agreedToPrivacy,
+    agreedToTerms
+  }
+  if (inviteCode) body.inviteCode = inviteCode
+  const { data, message } = await request('/auth/register', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+  return { data, message }
+}
+
+export async function login(username, password) {
+  const { data, message } = await request('/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+  })
+  return { data, message }
+}
+
+// 获取注册配置（邀请码是否必填）
+export async function getRegisterConfig() {
+  const { data } = await request('/promotion/register-config')
+  return data
+}
+
+export async function getMe() {
+  const { data } = await request('/auth/me')
+  return data
+}
+
+export async function getWallet() {
+  const { data } = await request('/user/wallet')
+  return data
+}
+
+// 获取积分流水记录（分页）
+export async function getRecords(page = 1, size = 20) {
+  const { data } = await request(`/user/records?page=${page}&size=${size}`)
+  return data
+}
+
+// ============ 任务相关 ============
+
+export async function getConfig() {
+  const { data } = await request('/tasks/config')
+  return data
+}
+
+export async function getTasks(filters = {}) {
+  const params = new URLSearchParams()
+  if (filters.platform) params.append('platform', filters.platform)
+  if (filters.action) params.append('action', filters.action)
+  if (filters.city) params.append('city', filters.city)
+  if (filters.province) params.append('province', filters.province)
+  if (filters.limit) params.append('limit', filters.limit)
+  const query = params.toString() ? `?${params.toString()}` : ''
+  const { data } = await request(`/tasks${query}`)
+  return data
+}
+
+// 获取今日统计数据
+export async function getTodayStats() {
+  const { data } = await request('/tasks/today-stats')
+  return data
+}
+
+export async function getTaskDetail(id) {
+  const { data } = await request(`/tasks/${id}`)
+  return data
+}
+
+export async function getNightCoefficient(basePoints = 100) {
+  const { data } = await request(`/night-points/current-coefficient?basePoints=${encodeURIComponent(basePoints)}`)
+  return data
+}
+
+export async function claimTask(id, body = {}) {
+  const { data, message } = await request(`/tasks/${id}/claim`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+  return { data, message }
+}
+
+export async function getMyTasks() {
+  const { data } = await request('/tasks/my/all')
+  return data
+}
+
+export async function submitTask(claimId, { platformNickname, screenshots }) {
+  const { data, message } = await request(`/tasks/my/${claimId}/submit`, {
+    method: 'POST',
+    body: JSON.stringify({ platformNickname, screenshots }),
+  })
+  return { data, message }
+}
+
+export async function withdrawClaim(claimId) {
+  const { data, message } = await request(`/tasks/my/${claimId}/withdraw`, {
+    method: 'POST',
+  })
+  return { data, message }
+}
+
+// 放弃任务（释放名额）
+export async function abandonClaim(claimId) {
+  const { data, message } = await request(`/tasks/my/${claimId}/abandon`, {
+    method: 'POST',
+  })
+  return { data, message }
+}
+
+// ============ 审核相关 ============
+
+export async function getPendingReview(page = 1, size = 20) {
+  const { data } = await request(`/admin/pending?page=${page}&size=${size}`)
+  return data
+}
+
+export async function reviewClaim(claimId, action, note = '') {
+  const { data, message } = await request(`/admin/review/${claimId}`, {
+    method: 'POST',
+    body: JSON.stringify({ action, note }),
+  })
+  return { data, message }
+}
+
+// ============ 钱包相关 ============
+
+export async function convertPoints(points) {
+  const { data, message } = await request('/user/convert', {
+    method: 'POST',
+    body: JSON.stringify({ points }),
+  })
+  return { data, message }
+}
+
+export async function withdraw(amount, wechatInfo = '') {
+  const { data, message } = await request('/user/withdraw', {
+    method: 'POST',
+    body: JSON.stringify({ amount, wechatInfo }),
+  })
+  return { data, message }
+}
+
+export async function getWithdrawals(page = 1, size = 20) {
+  const { data } = await request(`/user/withdrawals?page=${page}&size=${size}`)
+  return data
+}
+
+// 获取积分兑换记录
+export async function getConvertRecords(page = 1, size = 20) {
+  const { data } = await request(`/wallet/convert-records?page=${page}&size=${size}`)
+  return data
+}
+
+// ============ 文件上传 ============
+
+/**
+ * 图片压缩函数（无感压缩）
+ * @param {File} file - 要压缩的图片文件
+ * @param {Object} options - 压缩选项
+ * @param {number} options.maxSize - 最大文件大小（字节），超过此大小才压缩，默认 500KB
+ * @param {number} options.maxWidth - 最大宽度，默认 1920
+ * @param {number} options.maxHeight - 最大高度，默认 1920
+ * @param {number} options.quality - 压缩质量（0-1），默认 0.8
+ * @returns {Promise<File>} - 压缩后的文件
+ */
+export async function uploadFile(file, timeout = 60000) {
+  console.log('[uploadFile] 开始上传, 原始大小:', (file.size / 1024 / 1024).toFixed(2) + 'MB')
+  
+  // 先压缩图片
+  const compressedFile = await compressImage(file)
+  
+  const formData = new FormData()
+  formData.append('file', compressedFile)
+  
+  const token = localStorage.getItem(TOKEN_KEY)
+  console.log('[uploadFile] token存在:', !!token)
+  
+  // 创建 AbortController 用于超时控制
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => {
+    controller.abort()
+  }, timeout)
+  
+  try {
+    const res = await fetch(BASE + '/upload/single', {
+      method: 'POST',
+      headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+      body: formData,
+      signal: controller.signal
+    })
+    
+    clearTimeout(timeoutId)
+    
+    // 检查 HTTP 状态
+    if (!res.ok) {
+      let errorMsg = '上传失败'
+      try {
+        const errorJson = await res.json()
+        errorMsg = errorJson.message || errorMsg
+      } catch (e) {
+        errorMsg = `服务器错误 (${res.status})`
+      }
+      throw new Error(errorMsg)
+    }
+    
+    const json = await res.json()
+    console.log('[上传响应]', json)
+    
+    if (json.code === 0) {
+      console.log('[上传返回数据]', json.data)
+      return json.data
+    }
+    
+    throw new Error(json.message || '上传失败')
+  } catch (e) {
+    clearTimeout(timeoutId)
+    
+    // 处理超时
+    if (e.name === 'AbortError') {
+      throw new Error('上传超时，请检查网络连接后重试')
+    }
+    
+    // 处理网络错误
+    if (e.message === 'Failed to fetch' || e.message.includes('NetworkError')) {
+      throw new Error('网络连接失败，请检查网络后重试')
+    }
+    
+    throw e
+  }
+}
+
+export async function uploadFiles(files, timeout = 120000) {
+  const formData = new FormData()
+  files.forEach(file => formData.append('files', file))
+  
+  const token = localStorage.getItem(TOKEN_KEY)
+  
+  // 创建 AbortController 用于超时控制
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => {
+    controller.abort()
+  }, timeout)
+  
+  try {
+    const res = await fetch(BASE + '/upload/multiple', {
+      method: 'POST',
+      headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+      body: formData,
+      signal: controller.signal
+    })
+    
+    clearTimeout(timeoutId)
+    
+    // 检查 HTTP 状态
+    if (!res.ok) {
+      let errorMsg = '上传失败'
+      try {
+        const errorJson = await res.json()
+        errorMsg = errorJson.message || errorMsg
+      } catch (e) {
+        errorMsg = `服务器错误 (${res.status})`
+      }
+      throw new Error(errorMsg)
+    }
+    
+    const json = await res.json()
+    
+    if (json.code === 0) {
+      return json.data
+    }
+    
+    throw new Error(json.message || '上传失败')
+  } catch (e) {
+    clearTimeout(timeoutId)
+    
+    // 处理超时
+    if (e.name === 'AbortError') {
+      throw new Error('上传超时，请检查网络连接后重试')
+    }
+    
+    // 处理网络错误
+    if (e.message === 'Failed to fetch' || e.message.includes('NetworkError')) {
+      throw new Error('网络连接失败，请检查网络后重试')
+    }
+    
+    throw e
+  }
+}
+
+// ============ 排行榜 ============
+
+export async function getPointsRank(limit = 10) {
+  const { data } = await request(`/user/rank?limit=${limit}`)
+  return data
+}
+
+export async function getDailyPointsRank(limit = 10) {
+  const { data } = await request(`/user/rank/daily?limit=${limit}`)
+  return data
+}
+
+export async function getMyRank() {
+  const { data } = await request('/user/my-rank')
+  return data
+}
+
+// ============ 任务发布（管理员/任务发布者） ============
+
+export async function createTask(taskData) {
+  const { data, message } = await request('/tasks', {
+    method: 'POST',
+    body: JSON.stringify(taskData),
+  })
+  return { data, message }
+}
+
+export async function updateTask(id, taskData) {
+  const { data, message } = await request(`/tasks/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(taskData),
+  })
+  return { data, message }
+}
+
+export async function deleteTask(id) {
+  const { data, message } = await request(`/tasks/${id}`, {
+    method: 'DELETE',
+  })
+  return { data, message }
+}
+
+// ============ 等级系统 ============
+
+export async function getLevelConfigs() {
+  const { data } = await request('/level/configs')
+  return data
+}
+
+export async function getMyLevel() {
+  const { data } = await request('/level/my')
+  return data
+}
+
+export async function getUpgradeProgress() {
+  const { data } = await request('/level/progress')
+  return data
+}
+
+// ============ 推广系统 ============
+
+export async function bindInviteCode(inviteCode) {
+  const { data, message } = await request('/promotion/bind', {
+    method: 'POST',
+    body: JSON.stringify({ inviteCode }),
+  })
+  return { data, message }
+}
+
+export async function getCPromotionStats() {
+  const { data } = await request('/promotion/c/stats')
+  return data
+}
+
+export async function getSubordinates(level = 1, page = 1) {
+  const { data } = await request(`/promotion/c/subordinates?level=${level}&page=${page}`)
+  return data
+}
+
+export async function getCEarnings(page = 1) {
+  const { data } = await request(`/promotion/c/earnings?page=${page}`)
+  return data
+}
+
+export async function getBPromotionStats() {
+  const { data } = await request('/promotion/b/stats')
+  return data
+}
+
+export async function getPartners(page = 1) {
+  const { data } = await request(`/promotion/b/partners?page=${page}`)
+  return data
+}
+
+// ============ 排行榜 V2 ============
+
+export async function getTotalRank(limit = 50) {
+  const { data } = await request(`/leaderboard/total?limit=${limit}`)
+  return data
+}
+
+export async function getWeeklyRank(limit = 50) {
+  const { data } = await request(`/leaderboard/weekly?limit=${limit}`)
+  return data
+}
+
+export async function getMonthlyRank(limit = 50) {
+  const { data } = await request(`/leaderboard/monthly?limit=${limit}`)
+  return data
+}
+
+export async function getMyLeaderboardRank() {
+  const { data } = await request('/leaderboard/my')
+  return data
+}
+
+// ============ 发布者/审核员接口 ============
+
+// 获取我发布的任务列表
+export async function getMyPublishedTasks(page = 1, size = 20, status = '') {
+  const params = new URLSearchParams()
+  params.append('page', page)
+  params.append('size', size)
+  if (status) params.append('status', status)
+  const { data } = await request(`/publisher/my-tasks?${params.toString()}`)
+  return data
+}
+
+// 获取我发布任务的领取列表
+export async function getMyTaskClaims(page = 1, size = 20, status = '', taskId = '') {
+  const params = new URLSearchParams()
+  params.append('page', page)
+  params.append('size', size)
+  if (status) params.append('status', status)
+  if (taskId) params.append('taskId', taskId)
+  const { data } = await request(`/publisher/my-claims?${params.toString()}`)
+  return data
+}
+
+// 获取待审核的领取列表（审核员专用）
+export async function getPendingReviewList(page = 1, size = 20) {
+  const { data } = await request(`/publisher/pending-review?page=${page}&size=${size}`)
+  return data
+}
+
+// 获取已审核的领取列表（审核员专用）
+export async function getReviewedList(page = 1, size = 20) {
+  const { data } = await request(`/publisher/reviewed?page=${page}&size=${size}`)
+  return data
+}
+
+// 审核任务领取（审核员专用）
+export async function reviewTaskClaim(claimId, action, note = '') {
+  const { data, message } = await request(`/publisher/review/${claimId}`, {
+    method: 'POST',
+    body: JSON.stringify({ action, note }),
+  })
+  return { data, message }
+}
+
+// 获取领取详情
+export async function getClaimDetail(claimId) {
+  const { data } = await request(`/publisher/claim/${claimId}`)
+  return data
+}
+
+// ============ 曝光管理接口 ============
+
+/**
+ * 用户心跳上报
+ * @param {Object} data - 心跳数据
+ * @param {number} data.level - 用户等级
+ * @param {string} data.city - 用户城市
+ * @param {string} data.province - 用户省份
+ * @param {string} data.currentPage - 当前页面
+ * @param {string} data.deviceId - 设备ID
+ */
+export async function exposureHeartbeat(data = {}) {
+  const { data: result } = await request('/exposure/heartbeat', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+  return result
+}
+
+/**
+ * 用户离线
+ */
+export async function exposureOffline() {
+  const { data } = await request('/exposure/offline', {
+    method: 'POST',
+  })
+  return data
+}
+
+/**
+ * 获取用户曝光额度
+ */
+export async function getExposureQuota() {
+  const { data } = await request('/exposure/quota')
+  return data
+}
+
+/**
+ * 获取用户选择分数
+ */
+export async function getSelectionScore() {
+  const { data } = await request('/exposure/selection-score')
+  return data
+}
+
+/**
+ * 获取供需统计
+ */
+export async function getSupplyDemandStats() {
+  const { data } = await request('/exposure/supply-demand')
+  return data
+}
+
+/**
+ * 获取全局在线统计
+ */
+export async function getOnlineStats() {
+  const { data } = await request('/exposure/online-stats')
+  return data
+}
+
+// 获取任务默认配置
+export async function getTaskDefaultConfig() {
+  const { data } = await request('/admin-v2/task-default-config')
+  return data
+}
+
+// 保存任务默认配置
+export async function saveTaskDefaultConfig(config) {
+  const { data, message } = await request('/admin-v2/task-default-config', {
+    method: 'POST',
+    body: JSON.stringify(config),
+  })
+  return { data, message }
+}

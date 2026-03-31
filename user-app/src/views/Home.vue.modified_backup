@@ -1,0 +1,1108 @@
+<template>
+  <div class="yx-page home-page">
+    <header class="yx-header home-top-header">
+      <div class="yx-header-main">
+        <h1 class="home-main-title">小黄鱼任务中心</h1>
+        <p class="home-main-subtitle">做任务，领积分，兑好礼</p>
+      </div>
+      <router-link v-if="!isLoggedIn" to="/login" class="yx-icon-btn">登</router-link>
+      <router-link v-else to="/notifications" class="yx-icon-btn">🔔</router-link>
+    </header>
+
+    <!-- 顶部浮动安装横幅 -->
+    <div class="pwa-install-float" v-if="showInstallBanner">
+      <div class="pwa-float-content">
+        <div class="pwa-float-icon">📱</div>
+        <div class="pwa-float-text">
+          <strong>安装小黄鱼APP</strong>
+          <span>添加到桌面，体验更流畅</span>
+        </div>
+      </div>
+      <div class="pwa-float-actions">
+        <button class="pwa-float-dismiss" @click="handleDismissInstall">✕</button>
+        <button class="pwa-float-install" @click="handleInstall">安装</button>
+      </div>
+    </div>
+
+    <!-- 微信/QQ 内置浏览器引导 -->
+    <div class="pwa-browser-guide" v-if="showBrowserGuide">
+      <div class="pwa-guide-content">
+        <span class="pwa-guide-icon">💡</span>
+        <span>点击右上角 <b>⋮</b> → 选择「浏览器打开」可安装APP</span>
+      </div>
+      <button class="pwa-guide-close" @click="showBrowserGuide = false">✕</button>
+    </div>
+
+    <section class="yx-card home-summary-card">
+      <div class="summary-top-row">
+        <div>
+          <h3>{{ activeRankTab === 'total' ? '总排行' : '今日排行' }}</h3>
+          <div class="yx-card-note">{{ activeRankTab === 'total' ? '累计积分排名' : '今日积分排名' }}</div>
+        </div>
+        <div class="summary-rank-pill compact">
+          <b>{{ currentRankLabel }}</b>
+          <small>{{ rankHint }}</small>
+        </div>
+      </div>
+
+      <div class="yx-segment summary-segment">
+        <button :class="{ active: activeRankTab === 'total' }" @click="activeRankTab = 'total'">总排行</button>
+        <button :class="{ active: activeRankTab === 'daily' }" @click="activeRankTab = 'daily'">今日排行</button>
+      </div>
+
+      <div class="summary-inline-stats">
+        <div class="inline-stat">
+          <strong>{{ activeRankTab === 'total' ? userPoints : (myRank?.daily?.points || 0) }}</strong>
+          <span>{{ activeRankTab === 'total' ? '总积分' : '今日积分' }}</span>
+        </div>
+        <div class="inline-stat">
+          <strong>{{ currentRankList.length || 0 }}</strong>
+          <span>榜单人数</span>
+        </div>
+      </div>
+
+      <div class="yx-rank-list compact" style="margin-top:10px;">
+        <div class="yx-rank-item" v-for="(item, index) in currentRankList" :key="`${activeRankTab}-${item.userId || item.id || index}`">
+          <div class="yx-rank-badge" :class="{ gold: index === 0 }">{{ index + 1 }}</div>
+          <div class="yx-list-main">
+            <b>{{ item.username }}</b>
+            <small>{{ activeRankTab === 'total' ? '累计积分' : '今日积分' }}</small>
+          </div>
+          <div class="yx-list-side">
+            <strong>{{ activeRankTab === 'total' ? item.points : item.dailyPoints }}</strong>
+          </div>
+        </div>
+        <div class="yx-empty" v-if="!currentRankList.length && !rankLoading">
+          <strong>暂无排行数据</strong>
+          <span>当前暂无 {{ activeRankTab === 'total' ? '总排行' : '今日排行' }} 数据。</span>
+        </div>
+      </div>
+
+      <router-link to="/rank" class="yx-btn-ghost full summary-more-btn">查看完整排行</router-link>
+    </section>
+
+    <router-link to="/rewards" class="home-reward-banner">
+      <div class="reward-banner-left">
+        <div class="reward-number-line">
+          <strong>2000万</strong>
+          <span>积分疯狂送</span>
+        </div>
+        <p>注册就送200积分，最高可拿20000积分</p>
+      </div>
+      <div class="reward-banner-right">
+        <span class="reward-arrow">查看奖励</span>
+      </div>
+    </router-link>
+
+    <section class="yx-card" v-if="todayStats">
+      <div class="yx-card-head">
+        <div>
+          <h3>今日数据</h3>
+          <div class="yx-card-note">{{ todayDate }}</div>
+        </div>
+      </div>
+      <div class="home-stats-inline">
+        <div class="yx-metric-card compact">
+          <strong>{{ todayStats.todayPublishedTasks }}</strong>
+          <span>今日发布任务</span>
+        </div>
+        <div class="yx-metric-card compact">
+          <strong>{{ todayStats.todayTotalAmount }}</strong>
+          <span>任务总量</span>
+        </div>
+        <div class="yx-metric-card compact">
+          <strong>{{ todayStats.todayCompleted }}</strong>
+          <span>已完成</span>
+        </div>
+        <div class="yx-metric-card compact">
+          <strong>{{ todayStats.remainTotal }}</strong>
+          <span>剩余总量</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="yx-soft-card">
+      <div class="yx-card-head">
+        <div>
+          <h3>定位</h3>
+        </div>
+        <button class="yx-btn-ghost home-mini-btn" @click="refreshLocation">刷新</button>
+      </div>
+      <div class="location-strip">
+        <span class="location-pin" :class="{ loading: locationLoading, error: !!locationError, idle: !locationLoading && !locationError && !userLocation }"></span>
+        <span class="location-value" v-if="locationLoading">定位中</span>
+        <span class="location-value" v-else-if="userLocation">{{ userLocation.province }} {{ userLocation.city }}</span>
+        <span class="location-value error-text" v-else-if="locationError">定位失败</span>
+        <span class="location-value" v-else>未定位</span>
+      </div>
+    </section>
+
+    <section class="yx-card">
+      <div class="yx-card-head">
+        <div>
+          <h3>推荐任务</h3>
+          <div class="yx-card-note">优先展示适合你的任务</div>
+        </div>
+        <router-link to="/tasks" class="yx-btn-ghost home-mini-btn">更多任务</router-link>
+      </div>
+
+      <div class="home-task-list" v-if="recommendTasks.length">
+        <article class="yx-task-card" v-for="t in recommendTasks" :key="t.id" @click="$router.push(`/task/${t.id}`)">
+          <div class="yx-task-head">
+            <div>
+              <p class="yx-task-title">{{ t.title }}</p>
+              <div class="yx-task-sub">{{ getPlatformName(t.platform) }} · {{ getActionName(t.action) }} · 剩余 {{ t.remain }} 名额</div>
+            </div>
+            <div class="yx-reward-box">
+              <b>+{{ t.reward }}</b>
+              <small>积分</small>
+            </div>
+          </div>
+          <div class="yx-tag-row">
+            <span class="yx-tag coral">{{ getPlatformName(t.platform) }}</span>
+            <span class="yx-tag navy">{{ getActionName(t.action) }}</span>
+            <span class="yx-tag mint">点击查看详情</span>
+          </div>
+        </article>
+      </div>
+
+      <div class="yx-empty" v-else-if="!locationLoading">
+        <strong>{{ userLocation ? '暂无推荐任务' : '请先获取位置' }}</strong>
+        <span>{{ userLocation ? '当前地区暂时没有可推荐任务。' : '获取位置后将优先推荐附近任务。' }}</span>
+      </div>
+    </section>
+
+    <section class="yx-card">
+      <div class="yx-card-head">
+        <div>
+          <h3>快捷入口</h3>
+          <div class="yx-card-note">常用功能入口</div>
+        </div>
+      </div>
+      <div class="yx-shortcut-grid two">
+        <router-link to="/tasks" class="yx-shortcut-card shortcut-tone-peach">
+          <span class="shortcut-icon">🗂️</span>
+          <b>任务大厅</b>
+          <small>浏览和领取任务</small>
+        </router-link>
+        <router-link to="/my/tasks" class="yx-shortcut-card shortcut-tone-blue">
+          <span class="shortcut-icon">📋</span>
+          <b>我的任务</b>
+          <small>查看处理中和审核进度</small>
+        </router-link>
+        <router-link to="/points" class="yx-shortcut-card shortcut-tone-gold">
+          <span class="shortcut-icon">💎</span>
+          <b>积分中心</b>
+          <small>查看积分、兑换和提现</small>
+        </router-link>
+        <router-link to="/invite" class="yx-shortcut-card shortcut-tone-mint">
+          <span class="shortcut-icon">🎁</span>
+          <b>推广中心</b>
+          <small>邀请好友赚积分</small>
+        </router-link>
+      </div>
+    </section>
+
+    <section class="yx-card" v-if="isLoggedIn">
+      <div class="yx-card-head">
+        <div>
+          <h3>账户概览</h3>
+          <div class="yx-card-note">积分与余额</div>
+        </div>
+      </div>
+      <div class="account-overview-grid">
+        <router-link to="/points" class="account-card points-card">
+          <span class="account-card-label">我的积分</span>
+          <strong>{{ userPoints }}</strong>
+          <small>查看积分流水和兑换记录</small>
+        </router-link>
+        <router-link to="/withdraw" class="account-card balance-card">
+          <span class="account-card-label">可提现余额</span>
+          <strong>¥{{ userBalance }}</strong>
+          <small>申请提现并查看打款进度</small>
+        </router-link>
+      </div>
+    </section>
+
+    <div class="ios-install-modal" v-if="showIOSGuide" @click="showIOSGuide = false">
+      <div class="ios-modal-content" @click.stop>
+        <div class="ios-modal-header">
+          <span class="ios-modal-icon">📲</span>
+          <h3>添加到主屏幕</h3>
+        </div>
+        <div class="ios-modal-body">
+          <div class="ios-step">
+            <span class="ios-step-num">1</span>
+            <span class="ios-step-text">点击底部工具栏的<span class="ios-share-icon">↑</span>分享按钮</span>
+          </div>
+          <div class="ios-step">
+            <span class="ios-step-num">2</span>
+            <span class="ios-step-text">在弹出的菜单中找到并点击“添加到主屏幕”</span>
+          </div>
+          <div class="ios-step">
+            <span class="ios-step-num">3</span>
+            <span class="ios-step-text">点击右上角“添加”完成安装</span>
+          </div>
+        </div>
+        <button class="ios-modal-close" @click="showIOSGuide = false">我知道了</button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { ref, computed, onMounted, onActivated } from 'vue'
+import { useAuth } from '../store/auth'
+import { getTasks, getTotalRank, getDailyPointsRank, getWallet, getMyRank, getTodayStats } from '../api/task'
+import { getLocation, getSavedLocation, refreshLocation as refreshLocationAPI } from '../utils/location'
+import { usePWAInstall, isIOS, isAndroid, isWeChat, isBuiltInBrowser } from '../utils/pwa'
+
+const { isLoggedIn, user } = useAuth()
+const { isInstallable, isInstalled, showInstallPrompt, showInstallBanner, dismissInstall, canNativeInstall } = usePWAInstall()
+
+// 内置浏览器引导显示状态
+const showBrowserGuide = ref(isBuiltInBrowser())
+
+const recommendTasks = ref([])
+const rankList = ref([])
+const dailyRankList = ref([])
+const rankLoading = ref(false)
+const userPoints = ref(0)
+const userBalance = ref('0.00')
+const myRank = ref(null)
+const activeRankTab = ref('total')
+const userLocation = ref(null)
+const locationLoading = ref(false)
+const locationError = ref('')
+const showIOSGuide = ref(false)
+const todayStats = ref(null)
+
+// 关闭安装横幅
+function handleDismissInstall() {
+  dismissInstall()
+}
+
+const showInstallButton = computed(() => {
+  // 已安装则不显示
+  if (isInstalled.value) return false
+  // 用户关闭过则不显示
+  if (!showInstallBanner.value) return false
+  // 移动设备才显示
+  return isAndroid() || isIOS()
+})
+
+const todayDate = computed(() => {
+  const now = new Date()
+  return `${now.getMonth() + 1}月${now.getDate()}日`
+})
+
+const currentRankList = computed(() => activeRankTab.value === 'total' ? rankList.value : dailyRankList.value)
+
+const currentRankLabel = computed(() => {
+  if (!myRank.value) return '未上榜'
+  const current = activeRankTab.value === 'total' ? myRank.value.total : myRank.value.daily
+  return current?.rank > 0 ? `#${current.rank}` : '未上榜'
+})
+
+const rankHint = computed(() => {
+  if (!currentRankList.value.length) return '等待开榜'
+  if (!myRank.value) return '登录后看排行'
+  const current = activeRankTab.value === 'total' ? myRank.value.total : myRank.value.daily
+  if (!current || !current.rank || current.rank <= 0) return '继续完成任务冲榜'
+  if (current.rank === 1) return '当前已领先'
+  const list = currentRankList.value
+  const prevIndex = current.rank - 2
+  const prev = list[prevIndex]
+  if (!prev) return '继续提升排名'
+  const currentPoints = activeRankTab.value === 'total' ? current.points : current.points
+  const prevPoints = activeRankTab.value === 'total' ? prev.points : prev.dailyPoints
+  const diff = Math.max(1, Number(prevPoints || 0) - Number(currentPoints || 0))
+  return `还差 ${diff} 分`
+})
+
+async function handleInstall() {
+  if (isInstallable.value) {
+    await showInstallPrompt()
+  } else if (isIOS()) {
+    showIOSGuide.value = true
+  }
+}
+
+function getPlatformClass(platform) {
+  const map = {
+    '抖音': 'douyin',
+    '快手': 'kuaishou',
+    '视频号': 'shipinhao',
+    '小红书': 'xiaohongshu',
+    'douyin': 'douyin',
+    'kuaishou': 'kuaishou',
+    'weibo': 'shipinhao',
+    'xiaohongshu': 'xiaohongshu'
+  }
+  return map[platform] || ''
+}
+
+function getPlatformName(platform) {
+  const map = {
+    'douyin': '抖音',
+    'kuaishou': '快手',
+    'weibo': '视频号',
+    'xiaohongshu': '小红书',
+    '抖音': '抖音',
+    '快手': '快手',
+    '视频号': '视频号',
+    '小红书': '小红书'
+  }
+  return map[platform] || platform
+}
+
+function getActionName() {
+  return '短视频评价官'
+}
+
+async function refreshLocation() {
+  locationLoading.value = true
+  locationError.value = ''
+  try {
+    const location = await refreshLocationAPI()
+    userLocation.value = location
+    await loadRecommendTasks()
+  } catch (e) {
+    locationError.value = e.message || '定位失败'
+  } finally {
+    locationLoading.value = false
+  }
+}
+
+async function loadRecommendTasks() {
+  try {
+    const list = await getTasks()
+    recommendTasks.value = Array.isArray(list) ? list.slice(0, 5) : []
+  } catch (e) {
+    recommendTasks.value = []
+  }
+}
+
+async function loadRanks() {
+  rankLoading.value = true
+  try {
+    const [total, daily] = await Promise.all([
+      getTotalRank(3),
+      getDailyPointsRank(3)
+    ])
+    rankList.value = total || []
+    dailyRankList.value = daily || []
+  } catch (e) {
+    rankList.value = []
+    dailyRankList.value = []
+  } finally {
+    rankLoading.value = false
+  }
+}
+
+async function loadMyRank() {
+  if (!isLoggedIn.value) {
+    myRank.value = null
+    return
+  }
+  try {
+    myRank.value = await getMyRank()
+  } catch (e) {
+    myRank.value = null
+  }
+}
+
+async function loadWallet() {
+  if (!isLoggedIn.value) return
+  try {
+    const wallet = await getWallet()
+    userPoints.value = wallet.points || 0
+    userBalance.value = String(wallet.balance ?? '0.00')
+  } catch (e) {
+    userPoints.value = 0
+    userBalance.value = '0.00'
+  }
+}
+
+async function loadTodayStats() {
+  try {
+    todayStats.value = await getTodayStats()
+  } catch (e) {
+    todayStats.value = null
+  }
+}
+
+async function loadLocationFromCache() {
+  locationLoading.value = true
+  locationError.value = ''
+  try {
+    const cached = getSavedLocation()
+    if (cached) {
+      userLocation.value = cached
+    } else {
+      userLocation.value = await getLocation()
+    }
+  } catch (e) {
+    locationError.value = e.message || '定位失败'
+  } finally {
+    locationLoading.value = false
+  }
+}
+
+async function load() {
+  await Promise.all([
+    loadWallet(),
+    loadRanks(),
+    loadMyRank(),
+    loadTodayStats(),
+    loadLocationFromCache(),
+    loadRecommendTasks()
+  ])
+}
+
+onMounted(load)
+onActivated(load)
+</script>
+
+<style scoped>
+/* 顶部浮动安装横幅样式 */
+.pwa-install-float {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+  margin-bottom: 8px;
+  animation: slideDown 0.3s ease-out;
+}
+
+@keyframes slideDown {
+  from {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.pwa-float-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.pwa-float-icon {
+  font-size: 24px;
+  line-height: 1;
+}
+
+.pwa-float-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pwa-float-text strong {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.pwa-float-text span {
+  font-size: 12px;
+  opacity: 0.9;
+}
+
+.pwa-float-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pwa-float-dismiss {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 50%;
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+}
+
+.pwa-float-dismiss:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.pwa-float-install {
+  padding: 8px 16px;
+  border: none;
+  background: #fff;
+  color: #667eea;
+  font-size: 14px;
+  font-weight: 700;
+  border-radius: 20px;
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.pwa-float-install:hover {
+  transform: scale(1.05);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+/* 微信/QQ 内置浏览器引导样式 */
+.pwa-browser-guide {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
+  margin-bottom: 8px;
+  animation: slideDown 0.3s ease-out;
+}
+
+.pwa-guide-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.pwa-guide-icon {
+  font-size: 18px;
+}
+
+.pwa-guide-close {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 50%;
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.home-page {
+  padding-top: 18px;
+}
+
+.home-top-header {
+  align-items: flex-start;
+}
+
+.home-main-title {
+  margin: 0;
+  font-size: 28px;
+  line-height: 1.08;
+  letter-spacing: -0.04em;
+  color: var(--yx-deep);
+  font-weight: 900;
+}
+
+.home-main-subtitle {
+  margin: 8px 0 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--yx-muted);
+  font-weight: 600;
+}
+
+.home-summary-card {
+  border-radius: 22px;
+  padding: 12px 12px 10px;
+  background:
+    radial-gradient(circle at top right, rgba(241,164,35,0.16), transparent 28%),
+    linear-gradient(180deg, rgba(255,252,247,0.98), rgba(255,255,255,0.94));
+}
+
+.summary-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.summary-rank-pill {
+  min-width: 86px;
+  padding: 10px 12px;
+  text-align: center;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #24344d, #31496f);
+  color: #fff;
+  box-shadow: 0 12px 26px rgba(36, 52, 77, 0.18);
+}
+
+.summary-rank-pill.compact {
+  min-width: 84px;
+  padding: 6px 8px;
+  border-radius: 14px;
+  box-shadow: 0 8px 20px rgba(36, 52, 77, 0.14);
+}
+
+.summary-rank-pill b {
+  display: block;
+  font-size: 24px;
+  line-height: 1;
+  margin-bottom: 4px;
+  letter-spacing: -0.05em;
+}
+
+.summary-rank-pill small {
+  font-size: 11px;
+  opacity: 0.78;
+  font-weight: 700;
+}
+
+.summary-rank-pill.compact b {
+  font-size: 17px;
+  margin-bottom: 2px;
+}
+
+.summary-rank-pill.compact small {
+  display: block;
+  font-size: 9px;
+  line-height: 1.1;
+}
+
+.summary-segment {
+  margin-top: 8px;
+}
+
+.summary-inline-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.inline-stat {
+  padding: 8px 10px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.74);
+  border: 1px solid rgba(217, 226, 239, 0.88);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.inline-stat strong {
+  color: var(--yx-deep);
+  font-size: 16px;
+  letter-spacing: -0.03em;
+}
+
+.inline-stat span {
+  color: var(--yx-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.yx-rank-list.compact {
+  gap: 6px;
+}
+
+.yx-rank-list.compact :deep(.yx-rank-item) {
+  min-height: 0;
+  padding: 7px 9px;
+  border-radius: 12px;
+}
+
+.yx-rank-list.compact :deep(.yx-list-main b) {
+  font-size: 13px;
+}
+
+.yx-rank-list.compact :deep(.yx-list-main small) {
+  margin-top: 1px;
+  font-size: 10px;
+}
+
+.yx-rank-list.compact :deep(.yx-list-side strong) {
+  font-size: 14px;
+}
+
+.summary-more-btn {
+  margin-top: 8px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.home-stats-inline {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.home-stats-inline .yx-metric-card.compact {
+  padding: 10px 8px;
+  border-radius: 14px;
+  text-align: center;
+}
+
+.home-stats-inline .yx-metric-card.compact strong {
+  font-size: 18px;
+  margin-bottom: 3px;
+}
+
+.home-stats-inline .yx-metric-card.compact span {
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.home-mini-btn {
+  padding: 10px 12px;
+  border-radius: 14px;
+  font-size: 12px;
+}
+
+.location-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--yx-deep);
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.location-pin {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #5e7fd5, #7ea5ff);
+  box-shadow: 0 10px 18px rgba(78, 111, 182, 0.2);
+  position: relative;
+}
+
+.location-pin::before {
+  content: '';
+  position: absolute;
+  inset: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.location-pin.loading {
+  animation: locationPulse 1.2s ease-in-out infinite;
+}
+
+.location-pin.error {
+  background: linear-gradient(135deg, #f48d63, #ef5e43);
+  box-shadow: 0 10px 18px rgba(226, 104, 69, 0.2);
+}
+
+.location-pin.idle {
+  background: linear-gradient(135deg, #8ba0bf, #6582b4);
+}
+
+.location-value {
+  font-weight: 700;
+}
+
+.error-text {
+  color: #cf4a33;
+}
+
+@keyframes locationPulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.08);
+    opacity: 0.82;
+  }
+}
+
+.home-reward-ribbon {
+  margin-top: 12px;
+}
+
+.home-reward-banner {
+  margin-top: 12px;
+  padding: 14px 14px 12px;
+  border-radius: 20px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  text-decoration: none;
+  color: #fff;
+  background:
+    radial-gradient(circle at top left, rgba(255,255,255,0.24), transparent 28%),
+    linear-gradient(135deg, #ff9458 0%, #f66e32 48%, #cf4c24 100%);
+  box-shadow: 0 14px 26px rgba(224, 104, 53, 0.24);
+}
+
+.reward-banner-left {
+  min-width: 0;
+}
+
+.reward-number-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.reward-number-line strong {
+  font-size: 30px;
+  line-height: 1;
+  letter-spacing: -0.06em;
+  font-weight: 900;
+  text-shadow: 0 8px 16px rgba(118, 31, 0, 0.18);
+}
+
+.reward-number-line span {
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.home-reward-banner p {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(255, 247, 242, 0.94);
+  font-weight: 700;
+}
+
+.reward-banner-right {
+  display: flex;
+  align-items: flex-start;
+}
+
+.reward-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 72px;
+  padding: 9px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.home-task-list {
+  display: grid;
+  gap: 12px;
+}
+
+.home-task-list :deep(.yx-task-card) {
+  padding: 14px;
+  border-radius: 20px;
+}
+
+.home-task-list :deep(.yx-task-head) {
+  margin-bottom: 10px;
+}
+
+.home-task-list :deep(.yx-task-title) {
+  font-size: 16px;
+  margin-bottom: 4px;
+}
+
+.home-task-list :deep(.yx-task-sub) {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.home-task-list :deep(.yx-reward-box) {
+  min-width: 76px;
+  padding: 8px 10px;
+  border-radius: 16px;
+}
+
+.shortcut-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,255,255,0.72);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.35);
+  font-size: 18px;
+  margin-bottom: 10px;
+}
+
+.shortcut-tone-peach {
+  background: linear-gradient(180deg, rgba(255, 239, 233, 0.92), rgba(255,255,255,0.88));
+}
+
+.shortcut-tone-blue {
+  background: linear-gradient(180deg, rgba(233, 241, 255, 0.92), rgba(255,255,255,0.88));
+}
+
+.shortcut-tone-gold {
+  background: linear-gradient(180deg, rgba(255, 246, 217, 0.92), rgba(255,255,255,0.88));
+}
+
+.shortcut-tone-mint {
+  background: linear-gradient(180deg, rgba(226, 249, 241, 0.92), rgba(255,255,255,0.88));
+}
+
+.account-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.account-card {
+  display: block;
+  padding: 14px;
+  border-radius: 20px;
+  color: inherit;
+  border: 1px solid var(--yx-line);
+  box-shadow: var(--yx-shadow-soft);
+}
+
+.points-card {
+  background: linear-gradient(180deg, rgba(232, 240, 255, 0.96), rgba(255,255,255,0.92));
+}
+
+.balance-card {
+  background: linear-gradient(180deg, rgba(255, 242, 207, 0.96), rgba(255,255,255,0.92));
+}
+
+.account-card-label {
+  display: inline-flex;
+  margin-bottom: 12px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.7);
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--yx-deep);
+}
+
+.account-card strong {
+  display: block;
+  font-size: 26px;
+  line-height: 1;
+  letter-spacing: -0.05em;
+  color: var(--yx-deep);
+}
+
+.account-card small {
+  display: block;
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--yx-muted);
+}
+
+.ios-install-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(18, 24, 36, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  z-index: 10000;
+}
+
+.ios-modal-content {
+  width: min(100%, 360px);
+  border-radius: 24px;
+  background: #fff;
+  padding: 20px;
+  box-shadow: 0 28px 60px rgba(11, 16, 28, 0.32);
+}
+
+.ios-modal-header {
+  text-align: center;
+  margin-bottom: 16px;
+}
+
+.ios-modal-header h3 {
+  margin: 8px 0 0;
+}
+
+.ios-modal-body {
+  display: grid;
+  gap: 10px;
+}
+
+.ios-step {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.ios-step-num {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--yx-coral-soft);
+  color: #be4d31;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.ios-step-text {
+  color: var(--yx-muted);
+  line-height: 1.7;
+  font-size: 13px;
+}
+
+.ios-share-icon {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  align-items: center;
+  justify-content: center;
+  background: rgba(33, 48, 75, 0.06);
+  color: var(--yx-deep);
+  margin: 0 4px;
+}
+
+.ios-modal-close {
+  margin-top: 16px;
+  width: 100%;
+  border: none;
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: var(--yx-coral);
+  color: #fff;
+  font-weight: 800;
+}
+
+@media (max-width: 480px) {
+  .reward-number-line {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .reward-number-line strong {
+    font-size: 30px;
+  }
+}
+</style>
